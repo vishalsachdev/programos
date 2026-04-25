@@ -1,8 +1,8 @@
-# ProgramClaw
+# ProgramOS
 
 A spec for turning a [NanoClaw](https://github.com/qwibitai/nanoclaw) deployment into a multi-channel **academic program coordinator**: an AI agent that fields questions from faculty, advisors, staff, and other stakeholders, operates on a structured curriculum repository, and keeps decisions auditable.
 
-> **This repo is a spec, not code.** ProgramClaw is what you get when you fork NanoClaw and apply this spec to it. Adopters clone NanoClaw, hand [`SPEC.md`](./SPEC.md) to their coding agent, and adapt the result to their program.
+> **This repo is a spec, not code.** ProgramOS is what you get when you fork NanoClaw and apply this spec to it. Adopters clone NanoClaw, hand [`SPEC.md`](./SPEC.md) to their coding agent, and adapt the result to their program.
 
 ---
 
@@ -24,7 +24,7 @@ You're already comfortable running a NanoClaw deployment (Docker, a VPS, a webho
 | File | What it gives you |
 |------|-------------------|
 | [`SPEC.md`](./SPEC.md) | The canonical spec. Feed this to your coding agent. |
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How ProgramClaw sits on top of NanoClaw — what's framework, what's adopter-supplied. |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How ProgramOS sits on top of NanoClaw — what's framework, what's adopter-supplied. |
 | [`docs/01-prerequisites.md`](./docs/01-prerequisites.md) | NanoClaw fork, Docker, secrets, channel apps. |
 | [`docs/02-curriculum-repo.md`](./docs/02-curriculum-repo.md) | Required structure of the program-side repo (`CURRICULUM.md`, `EMAIL_ALLOWLIST.md`, `discussions/`, etc.). |
 | [`docs/03-channels.md`](./docs/03-channels.md) | Per-channel contract: email webhook, Telegram, Teams, web chat. |
@@ -42,7 +42,7 @@ You're already comfortable running a NanoClaw deployment (Docker, a VPS, a webho
 2. **Create your program-side repo** following [`examples/curriculum-repo/SKELETON.md`](./examples/curriculum-repo/SKELETON.md). This is where curriculum lives and where the agent commits decisions.
 3. **Hand the spec to your agent**:
    ```
-   Read https://github.com/vishalsachdev/programclaw/blob/main/SPEC.md
+   Read https://github.com/vishalsachdev/programos/blob/main/SPEC.md
    then adapt this NanoClaw fork to that spec. My program is <name>, my channels are
    <list>, my curriculum repo is at <path>.
    ```

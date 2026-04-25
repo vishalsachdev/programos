@@ -1,4 +1,4 @@
-# ProgramClaw — Canonical Spec
+# ProgramOS — Canonical Spec
 
 > Hand this file to your coding agent along with a fresh fork of [NanoClaw](https://github.com/qwibitai/nanoclaw). The agent should produce an adaptation matching this spec.
 
@@ -104,7 +104,7 @@ Before going live, the adopter MUST replace:
 - [ ] Email domain for inbound webhook (must match outbound `From` domain in the email service)
 - [ ] Telegram bot token, Teams app credentials, web chat API key
 - [ ] HTTP port (default `3003`)
-- [ ] Channel JID prefixes if running multiple ProgramClaw instances on the same NanoClaw deployment
+- [ ] Channel JID prefixes if running multiple ProgramOS instances on the same NanoClaw deployment
 
 See [`docs/06-customization.md`](./docs/06-customization.md).
 

@@ -1,6 +1,6 @@
 # Architecture
 
-How ProgramClaw sits on top of NanoClaw, and what's adopter-supplied vs framework-supplied.
+How ProgramOS sits on top of NanoClaw, and what's adopter-supplied vs framework-supplied.
 
 ## High-level picture
 
@@ -103,7 +103,7 @@ Files are committed in batch at the end of each container run, attributed to the
 
 ## What you actually build
 
-For a brand-new ProgramClaw on a brand-new NanoClaw fork, expect roughly:
+For a brand-new ProgramOS on a brand-new NanoClaw fork, expect roughly:
 
 - **6 channel handlers** (~150 lines each) in `src/channels/`
 - **6 agent prompts** in `groups/<channel>/CLAUDE.md`

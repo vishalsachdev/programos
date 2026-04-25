@@ -10,7 +10,7 @@ Before you start, line up the following. None of this is unusual — it's the st
 ## Runtime
 
 - [ ] Docker (`docker --version` should report 20.10+).
-- [ ] A small VPS — 4 GB RAM is enough for a single ProgramClaw instance with all six channels. Provision more if you expect concurrent containers.
+- [ ] A small VPS — 4 GB RAM is enough for a single ProgramOS instance with all six channels. Provision more if you expect concurrent containers.
 - [ ] A reverse proxy (nginx or Caddy) for HTTPS termination on a public-facing subdomain.
 - [ ] A process manager — PM2 if you want pid files and `pm2 logs`, systemd if you prefer that.
 
@@ -36,6 +36,6 @@ You'll need API keys / tokens for:
 - **Email allowlist policy.** Names + roles of who can email the bot. This is markdown in your curriculum repo; it can change without redeploying.
 - **Decision-authority list.** Which sender identities are allowed to put the agent in status-update mode (vs read-only question mode). Usually a subset of the email allowlist.
 
-## Smoke test (before committing to ProgramClaw)
+## Smoke test (before committing to ProgramOS)
 
-Run vanilla NanoClaw on your VPS first. If you can talk to it on Telegram and it can spawn a container, you're ready. If you can't, debug NanoClaw before adding ProgramClaw on top — the layering will be much easier to reason about.
+Run vanilla NanoClaw on your VPS first. If you can talk to it on Telegram and it can spawn a container, you're ready. If you can't, debug NanoClaw before adding ProgramOS on top — the layering will be much easier to reason about.

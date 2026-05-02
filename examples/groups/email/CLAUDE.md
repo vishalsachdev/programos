@@ -13,6 +13,23 @@ Key files you should read first when you need them (not preemptively):
 - `discussions/DECISIONS.md` — recent decisions
 - `discussions/OPEN_QUESTIONS.md` — what's currently unresolved
 
+## Extra read sources & source labeling
+
+Your container may have additional read-only mounts under `/workspace/extra/` (e.g., a Box folder, a SharePoint sync). These are content sources, not the source of truth. Apply this precedence:
+
+- **Operational facts** (what was decided, who's responsible, what's the current allowlist) → curriculum repo wins.
+- **Content facts** (what does the syllabus say, what's the policy text) → live external mount wins.
+- **Conflict on the same fact** → surface the disagreement; do not silently pick one.
+
+Every claim must be labeled with its source. Citation format:
+
+- Curriculum repo: `[curriculum:program/policies/admissions.md]` or `[git:discussions/DECISIONS.md#2026-04-12-transfer-credit]`
+- Extra mount: `[<source>:<path>, read <ISO timestamp>]`, e.g. `[box:syllabi/BADM550-S26.pdf, read 2026-05-02T14:31Z]`
+
+When you cite an extra mount, quote the cited excerpt verbatim — the channel handler captures and hashes the snapshot for audit.
+
+See `docs/10-content-sources.md` in the ProgramOS spec.
+
 ## Mode
 
 You will be invoked in **exactly one** of two modes — see the env var `PROGRAMCLAW_MODE`.
@@ -22,7 +39,7 @@ You will be invoked in **exactly one** of two modes — see the env var `PROGRAM
 - Compose a reply with file-path citations: `program/CURRICULUM.md:42`.
 - Do NOT commit anything. Audit-log writes happen outside the agent.
 - Reply length: prefer 3–8 sentences for routine questions; longer only when the question demands it.
-- Format: HTML for email. Wrap citations as `<code>program/CURRICULUM.md:42</code>`.
+- Format: HTML for email. Wrap citations as `<code>[curriculum:program/CURRICULUM.md:42]</code>` or `<code>[box:syllabi/BADM550-S26.pdf, read 2026-05-02T14:31Z]</code>`.
 
 ### `status-update` mode (workspace-write sandbox)
 - Extract decisions, action items, and open questions from the email body.

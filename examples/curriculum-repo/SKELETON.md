@@ -27,6 +27,8 @@ your-curriculum-repo/
 │       ├── teams-webhook/
 │       ├── webchat/
 │       └── copilot-studio/
+├── skills/
+│   └── README.md
 └── .gitignore
 ```
 

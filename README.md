@@ -2,7 +2,13 @@
 
 A spec for turning a [NanoClaw](https://github.com/qwibitai/nanoclaw) deployment into a multi-channel **academic program coordinator**: an AI agent that fields questions from faculty, advisors, staff, and other stakeholders, operates on a structured curriculum repository, and keeps decisions auditable.
 
+**Runs on your laptop in an afternoon (Telegram first, email next), graduates to a VPS or cloud when you're ready.** Same spec, same curriculum repo, same audit log — only the channel transports and host runtime change as you scale up. See [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md).
+
 > **This repo is a spec, not code.** ProgramOS is what you get when you fork NanoClaw and apply this spec to it. Adopters clone NanoClaw, hand [`SPEC.md`](./SPEC.md) to their coding agent, and adapt the result to their program.
+
+## Security model in one paragraph
+
+Agent runs in a NanoClaw Docker container — it can only see what you mount, can only call out to APIs you allow. Tier 1 (laptop) has zero inbound networking: the bot polls Telegram and IMAP, nothing reaches in. Every inbound message, every outbound reply, and every commit to the curriculum repo is recorded in an append-only audit log under `discussions/audit-log/`, which lives in a private git repo you own. The agent operates in two modes per message — `read-only` for questions, `workspace-write` for explicit decision-capture — and can never modify its own runtime or auto-merge its own learning. Skill changes go through human-reviewed pull requests. Full posture by tier in [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md), learning-loop contract in [`docs/07-learning-loop.md`](./docs/07-learning-loop.md).
 
 ---
 
@@ -31,22 +37,39 @@ You're already comfortable running a NanoClaw deployment (Docker, a VPS, a webho
 | [`docs/04-agent-modes.md`](./docs/04-agent-modes.md) | Question vs Status-update modes. When to commit, when not to. |
 | [`docs/05-audit-logging.md`](./docs/05-audit-logging.md) | Inbound/outbound logging contract. |
 | [`docs/06-customization.md`](./docs/06-customization.md) | What to rename, what to keep. Branding the agent persona. |
+| [`docs/07-learning-loop.md`](./docs/07-learning-loop.md) | How the agent learns over time without breaking the audit trail (skills-as-PRs + FTS5 episodic recall). |
+| [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md) | Laptop → VPS → Cloud. What changes between tiers (channels, ingress, secrets), what stays constant (curriculum repo, audit log, skill loop). |
+| [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | UIUC-specific recipe for letting an `@illinois.edu` address talk to the bot without an M365 admin app registration (forwarding rule + external inbound). |
+| [`docs/10-content-sources.md`](./docs/10-content-sources.md) | How to relate an external content store (Box, SharePoint, network share) to ProgramOS. Three patterns; recommended default is "coexist + bot-as-frontend" — team keeps editing in Box, bot reads both stores and labels every claim. |
+| [`scripts/init.sh`](./scripts/init.sh) | One-command bootstrap for a new adopter — scaffolds a curriculum repo and seeds it with a brainstorm prompt. |
+| [`examples/BRAINSTORM.md`](./examples/BRAINSTORM.md) | Discovery prompt the bootstrap drops into the new repo; hand it to your coding agent. |
 | [`examples/groups/`](./examples/groups/) | Generic per-channel agent instruction templates. |
 | [`examples/curriculum-repo/`](./examples/curriculum-repo/) | Reference layout for the program-side repository. |
 
 ---
 
-## Quickstart (5 minutes to a runnable plan)
+## Quickstart — laptop tier (no IT involvement, ~1 afternoon)
 
-1. **Fork NanoClaw**: `gh repo fork qwibitai/nanoclaw --clone && cd nanoclaw`
-2. **Create your program-side repo** following [`examples/curriculum-repo/SKELETON.md`](./examples/curriculum-repo/SKELETON.md). This is where curriculum lives and where the agent commits decisions.
-3. **Hand the spec to your agent**:
+Goal: a working Telegram bot for your unit by end of day, with email to follow within a week.
+
+1. **Bootstrap your curriculum repo**:
+   ```
+   git clone https://github.com/vishalsachdev/programos.git
+   ./programos/scripts/init.sh <unit-slug> ~/code/<unit-slug>-curriculum
+   ```
+   Scaffolds a fresh git repo with the canonical layout (`program/`, `discussions/`, `skills/`, audit-log subdirs) and drops a `BRAINSTORM.md` in it.
+2. **Hand `BRAINSTORM.md` to your coding agent** (Claude Code, Cursor, Codex — any agent that can read markdown and edit files). It interviews you about stakeholders, channels, and content (Group C asks which deployment tier you're starting at — pick laptop), then fills in the placeholders. Agent-agnostic by design.
+3. **Fork NanoClaw and apply the spec**: `gh repo fork qwibitai/nanoclaw --clone && cd nanoclaw`, then ask your agent:
    ```
    Read https://github.com/vishalsachdev/programos/blob/main/SPEC.md
-   then adapt this NanoClaw fork to that spec. My program is <name>, my channels are
-   <list>, my curriculum repo is at <path>.
+   and https://github.com/vishalsachdev/programos/blob/main/docs/08-deployment-tiers.md
+   then adapt this NanoClaw fork to that spec at Tier 1 (laptop). My curriculum repo
+   is at <path>; the channels and persona are defined in its BRAINSTORM.md output.
+   Enable Telegram (long-poll) first; defer email until Tier 2 unless I ask for IMAP.
    ```
-4. **Iterate** with the agent on the per-channel `groups/<channel>/CLAUDE.md` files and the audit log paths, using the docs in this repo as reference.
+4. **Iterate** on per-channel `groups/<channel>/CLAUDE.md` files using the docs in this repo as reference. When you outgrow the laptop tier (24/7 uptime, web chat, team channels), graduate to Tier 2 — same spec, swap channel transports per [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md).
+
+UIUC units that want `@illinois.edu` email working without a Microsoft 365 admin app registration: see [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md).
 
 ---
 

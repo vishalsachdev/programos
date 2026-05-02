@@ -31,6 +31,8 @@ your-curriculum-repo/
 │       ├── teams-webhook/
 │       ├── webchat/
 │       └── copilot-studio/
+├── skills/                      # agent-readable skills; agent proposes new ones via PR
+│   └── README.md
 └── README.md                    # for human readers
 ```
 

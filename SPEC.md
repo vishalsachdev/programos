@@ -22,6 +22,9 @@ Turn a NanoClaw deployment into a **multi-channel AI program coordinator** that:
 | Audit log writer | Adopter-supplied in `src/audit-log.ts` |
 | Curriculum repository | Separate adopter-owned repo, mounted into containers at `/workspace/extra/<repo-name>` |
 | Email allowlist | Markdown file *inside the curriculum repo*, not in this codebase |
+| Skills directory | `skills/` *inside the curriculum repo*. Read in question mode; written by the agent only via PR in status-update mode. See [`docs/07-learning-loop.md`](./docs/07-learning-loop.md). |
+| Audit-log search index | Optional SQLite FTS5 index over `discussions/audit-log/`, exposed to the agent as a `search_audit_log(query)` tool. Derived data; rebuildable. |
+| Extra content mounts | Optional read-only bind mounts under `/workspace/extra/<source-name>/` for external content stores (Box, SharePoint, network shares, partner repos). Adopter-supplied. The curriculum repo remains the source of truth for *bot operations* (decisions, audit, skills); extra mounts hold *content* the team edits elsewhere. Precedence rule, snapshot-with-cite, and source-labeling requirements in [`docs/10-content-sources.md`](./docs/10-content-sources.md). |
 
 ## 3. Channel contract
 
@@ -66,6 +69,7 @@ The curriculum repo is mounted read-write into agent containers. It MUST contain
 | `discussions/ACTION_ITEMS.md` | Open action items extracted from messages |
 | `discussions/OPEN_QUESTIONS.md` | Unresolved questions surfaced by the agent |
 | `discussions/audit-log/` | One subdirectory per channel; one file per inbound and per outbound message |
+| `skills/` | One markdown file per skill the agent has learned. Agent reads in question mode; agent proposes new/edited skills via PR in status-update mode. Never auto-merged. Format and contract in [`docs/07-learning-loop.md`](./docs/07-learning-loop.md). |
 
 See [`docs/02-curriculum-repo.md`](./docs/02-curriculum-repo.md) and [`examples/curriculum-repo/SKELETON.md`](./examples/curriculum-repo/SKELETON.md).
 
@@ -80,6 +84,17 @@ For every outbound reply, write `discussions/audit-log/<channel>/<timestamp>-out
 The audit log is the only persistent store outside of NanoClaw's SQLite — it's what survives container destruction and what gets reviewed for accreditation.
 
 See [`docs/05-audit-logging.md`](./docs/05-audit-logging.md).
+
+## 6.5. Learning loop
+
+The agent improves over time without breaking the audit trail. Two mechanisms, both grounded in the curriculum repo:
+
+- **Skills as PRs**: in status-update mode, the agent MAY propose a new file under `skills/` (or an edit to an existing one) by writing to a feature branch and opening a pull request. A human merges. Direct commits to the default branch from the agent are forbidden. In question mode, the agent reads `skills/` but cannot write.
+- **Episodic recall via FTS5**: an optional SQLite FTS5 index over `discussions/audit-log/`, exposed as a `search_audit_log(query)` tool, lets the agent find prior conversations on the same topic. The index is derived from the audit log and is rebuildable.
+
+Autonomous self-modification of agent prompts, channel handlers, or runtime code is **out of scope** for production. A separate `skills-experimental/` overlay can host research on autonomous skill evolution; it MUST be isolated from production agent invocations.
+
+Full contract, skill file format, and grant/accreditation framing in [`docs/07-learning-loop.md`](./docs/07-learning-loop.md).
 
 ## 7. Per-channel agent prompts
 
@@ -114,6 +129,7 @@ This spec does **not** cover:
 
 - Student-facing channels (different threat model — see future spec).
 - Generative content creation (the agent reads/cites existing curriculum, doesn't invent).
+- Autonomous skill creation or self-modification of runtime code (see §6.5 — agent proposes via PR, humans merge).
 - Grade pass-back or LMS integration (separate concern; see Canvas MCP if you need that).
 - Multi-tenant deployments serving multiple programs from one container (possible but not specified here).
 

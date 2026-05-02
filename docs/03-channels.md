@@ -15,6 +15,7 @@ All channels share one process and one port. NanoClaw's router uses the JID pref
 | Channel | Path | Auth | Inbound format | Outbound format | JID prefix |
 |---------|------|------|----------------|-----------------|------------|
 | Email (webhook) | `POST /` | HMAC from email service | parsed MIME | HTML | `webhook-email-<prog>@<prog>` |
+| Email (IMAP poll) | (poll, no path) | IMAP credentials | parsed MIME | HTML via SMTP | `imap-email-<prog>@<prog>` |
 | Telegram | (long-poll, no path) | bot token | Telegram Update | Markdown V2 | `tg-<prog>@<prog>` |
 | Teams (Bot Framework) | `POST /api/messages` | JWT (BF library) | BF Activity | AdaptiveCard | `teams-<prog>@<prog>` |
 | Teams (Outgoing Webhook) | `POST /teams/webhook` | HMAC | Teams Outgoing payload | Markdown | `teams-wh-<prog>@<prog>` |
@@ -32,11 +33,22 @@ Every channel handler MUST:
 
 ## Channel-specific gotchas
 
-### Email
+### Email — webhook variant (recommended for production)
 - Inbound is webhook from your email provider. Validate HMAC.
 - The `From` address goes through allowlist; reject silently for non-allowlist senders (don't bounce — leaks bot existence).
 - Reply via the provider's outbound API. Set `In-Reply-To` and `References` headers to thread correctly.
 - The reply body is HTML — sanitize what comes back from the agent. Use a simple Markdown→HTML pipeline; no scripts.
+
+### Email — IMAP polling variant (recommended for laptop/dev)
+Use this when you don't have a public webhook URL or your email provider's webhook requires admin involvement (e.g., Microsoft 365 Graph subscriptions). Lets you run the bot from a laptop against any IMAP-accessible mailbox.
+
+- Connect to the mailbox over IMAP using app-password or OAuth2 credentials. For institutional accounts, prefer a dedicated shared mailbox / role mailbox over a personal one.
+- Poll on a fixed cadence (default: every 60 seconds). Use `IDLE` if the server supports it to lower latency.
+- Move processed messages to a `Processed/` folder (or set the `\Seen` flag) so the same message isn't dispatched twice. Idempotency is on you, not the provider.
+- The `From` address goes through allowlist; non-allowlist messages get moved to `Filtered/` silently.
+- Reply via SMTP (same provider). Set `In-Reply-To` and `References` headers to thread correctly. Same HTML-body sanitization rules as the webhook variant.
+- **Tradeoffs vs webhook**: simpler to set up (no public URL, no HMAC) and unblocks adoption when IT can't grant webhook access; slower (poll-cycle latency), more brittle (long-running IMAP connections drop), and you eat the storage of the mailbox itself.
+- **Path to webhook**: when you graduate to a VPS/cloud tier, swap the IMAP poller for the webhook handler. The agent prompts, allowlist, audit log, and JID format don't change — only the transport.
 
 ### Telegram
 - Long-poll, not webhook (simpler to deploy, no public endpoint for this channel).

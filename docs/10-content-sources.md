@@ -54,6 +54,8 @@ Every claim must be labeled with its source so users and auditors can trace it. 
 
 The read timestamp on extra-mount citations is load-bearing — it tells the reader "this is what the file said when the bot read it; it may have changed since."
 
+**Web chat exception.** The web chat channel is a public surface — internal storage details (curriculum-repo paths, Box folder names) should not appear in user-visible replies. On web chat, the source-label requirement applies to the **audit-log entry** (so internal reviewers can still trace every claim) but not to the public reply text. The web chat agent prompt enforces this; see `examples/groups/webchat/CLAUDE.md`. All other channels show source labels in both the reply and the audit log.
+
 ### Curated mounts, not whole drives
 
 Whatever you mount is visible to the agent and indexable. Mount **one curated subfolder per bot**, not the whole external store. For Box, this means a single Box folder per unit, owned by a service identity, populated with only the files the bot is allowed to cite. Don't mount someone's full `~/Library/CloudStorage/Box-Box` and hope the prompt keeps the agent in bounds.

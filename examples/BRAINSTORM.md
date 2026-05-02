@@ -59,20 +59,65 @@ Ask the user the following, in order. Stop and wait for an answer between groups
 
 Once Phase 1 answers are in, do all of the following:
 
+**This phase fills in the curriculum repo only.** The NanoClaw fork (which contains channel handlers and `groups/<channel>/CLAUDE.md` system prompts) is a separate repo and gets adapted in a later step by a different agent invocation — see "Handoff" below.
+
+In the curriculum repo:
+
 - Replace placeholders in `program/CURRICULUM.md` with the actual program structure from Group D. Cite source docs.
 - Populate `program/EMAIL_ALLOWLIST.md` from Group B answers. Mark decision authority truthfully.
 - Create one file per significant policy in `program/policies/`.
 - Create one file per significant content area (course / module / deliverable) in `program/courses/` (rename the directory if "courses" doesn't fit — e.g., `deliverables/` for a grant project, `working-groups/` for a committee).
-- Create per-channel prompt files in a parallel `groups/` directory (for the channels chosen in Group C). Use `examples/groups/<channel>/CLAUDE.md` from the ProgramOS repo as the starting template. Customize the persona, the curriculum-repo path, the question-vs-status-update decision rule, and the reply format for **this** unit.
 - Seed `skills/` with 1–3 skills extracted from concrete recurring questions the user mentioned in Group B. Use the file format in ProgramOS `docs/07-learning-loop.md`.
+- If Group D-Q15 chose pattern B or C (external content store mounted into the bot), add a `MOUNTS.md` at the repo root naming the curated subfolder, the host path, the mount target inside the container, and the service identity that owns it.
 - Update the top-level `README.md` to describe this specific program (not the generic scaffold).
 
-### Phase 3 — Verify and report
+**Do NOT** create `groups/<channel>/CLAUDE.md` files in the curriculum repo. Those live in the NanoClaw fork and are written in the handoff step below using `examples/groups/<channel>/CLAUDE.md` from the ProgramOS spec as the template.
 
-- Run `git status` and `git diff` in the repo. Show the user what you're about to commit.
-- Commit in coherent chunks (one commit per phase-2 step, not one giant commit).
-- Produce a checklist of what's still missing or guessed (placeholders, "TODO: confirm with X", etc.) and flag any answers from Phase 1 that you had to interpret.
-- Tell the user the next 3 concrete steps to go live: (a) make the repo private and add the bot's git identity, (b) fork NanoClaw and apply the ProgramOS spec pointing at this repo, (c) configure the channel webhooks/tokens.
+### Phase 3 — Write the handoff file, verify, and report
+
+Write `PROGRAMOS_SETUP.md` at the curriculum repo root. This file is the **structured handoff** to the next agent (the one that adapts the NanoClaw fork). It MUST contain:
+
+```markdown
+# ProgramOS setup — {{UNIT_SLUG}}
+
+## Identity
+- Unit slug: <slug>
+- Agent persona name: <name>
+- JID prefix: <prefix>
+- Curriculum repo path on host: <absolute path>
+- Mount target in container: /workspace/extra/<repo-name>
+
+## Deployment tier (Group C, Q7)
+- Tier: <1 / 2 / 3>
+- Reason: <one sentence>
+
+## Channels at launch (Group C, Q8)
+- Telegram: <yes/no> — bot token in env, allowed user IDs: <list>
+- Email: <none / IMAP / webhook> — provider: <name>
+- Web chat: <yes/no>
+- Teams: <none / Outgoing Webhook / Bot Framework>
+- Other: <list>
+
+## Content-source pattern (Group D, Q15–16)
+- Pattern: <A git-only / B coexist+frontend / C mirror>
+- Curated external mount (if B or C): <host path → container path>, owned by <identity>
+
+## Stakeholders + decision authority (Group B)
+- See program/EMAIL_ALLOWLIST.md for canonical list.
+- Reviewer for skill PRs: <named human>
+
+## Open questions / TODOs from brainstorm
+- <list>
+```
+
+Then:
+
+- Run `git status` and `git diff` in the curriculum repo. Show the user what you're about to commit.
+- Commit in coherent chunks (one commit per phase-2 step, not one giant commit). Commit `PROGRAMOS_SETUP.md` last with message `chore(setup): record brainstorm output for ProgramOS handoff`.
+- Tell the user the next 3 concrete steps to go live:
+  1. Make this repo private and add the bot's git identity as a collaborator.
+  2. Fork NanoClaw (`gh repo fork qwibitai/nanoclaw --clone`), then in a fresh agent session say: "Read the ProgramOS SPEC.md, the docs/08-deployment-tiers.md, and the PROGRAMOS_SETUP.md at `<curriculum-repo>/PROGRAMOS_SETUP.md`. Adapt this NanoClaw fork to that spec at the tier and channels named in PROGRAMOS_SETUP.md. Copy `groups/<channel>/CLAUDE.md` templates from the ProgramOS repo and customize per channel."
+  3. Configure the channel tokens / webhooks per the chosen tier (see `docs/01-prerequisites.md`).
 
 ## Constraints (do not violate)
 

@@ -64,8 +64,9 @@ Goal: a working Telegram bot for your unit by end of day, with email to follow w
    Read https://github.com/vishalsachdev/programos/blob/main/SPEC.md
    and https://github.com/vishalsachdev/programos/blob/main/docs/08-deployment-tiers.md
    then adapt this NanoClaw fork to that spec at Tier 1 (laptop). My curriculum repo
-   is at <path>; the channels and persona are defined in its BRAINSTORM.md output.
-   Enable Telegram (long-poll) first; defer email until Tier 2 unless I ask for IMAP.
+   is at <path>; the channels, persona, and content-source pattern are defined in
+   its PROGRAMOS_SETUP.md (produced by the BRAINSTORM step). Enable Telegram
+   (long-poll) first; add email via IMAP polling next if PROGRAMOS_SETUP.md says so.
    ```
 4. **Iterate** on per-channel `groups/<channel>/CLAUDE.md` files using the docs in this repo as reference. When you outgrow the laptop tier (24/7 uptime, web chat, team channels), graduate to Tier 2 — same spec, swap channel transports per [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md).
 

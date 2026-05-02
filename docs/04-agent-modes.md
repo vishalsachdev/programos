@@ -15,7 +15,7 @@ Pick the mode in the channel handler **before dispatch**, based on the message a
 - Sandbox: `read-only`.
 - Behavior: search the curriculum repo, compose a cited answer, reply.
 - No commits. No file writes outside the audit log.
-- Output: prose answer with file-path citations like `program/CURRICULUM.md:42`.
+- Output: prose answer with source-labeled citations: `[curriculum:program/CURRICULUM.md:42]` for files in the curriculum repo, `[<source>:<path>, read <ISO timestamp>]` for files in extra read-only mounts (Box, SharePoint, etc.). See [`10-content-sources.md`](./10-content-sources.md) for the full rule.
 
 Most stakeholder traffic is in this mode. Faculty asking "what's the prereq for Course 401?" Advisors asking about admission deadlines. Anyone on a channel with no decision authority.
 

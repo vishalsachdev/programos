@@ -1,6 +1,8 @@
 # 02 — Curriculum repository
 
-The curriculum repository is the **source of truth for your program** and the **persistent store for agent activity**. It lives outside this codebase, in its own repo, and gets mounted read-write into every agent container.
+The curriculum repository is the **source of truth for bot operations** — every decision the agent captures, every audit-log entry, every learned skill — and the **default source of truth for program content** (curriculum, policies, allowlists). It lives outside this codebase, in its own repo, and gets mounted read-write into every agent container.
+
+**Important qualifier added in `docs/10-content-sources.md`**: many adopters keep their *content* (syllabi, policy docs, partner agreements) in an external store like Box or SharePoint where the team already edits, and mount it read-only into the agent alongside the curriculum repo. In that pattern the curriculum repo remains authoritative for what the bot has *done* (decisions, audit, skills), while the external mount is authoritative for what the docs *say* today. Pick the pattern intentionally — see `docs/10-content-sources.md`.
 
 ## Why it's separate
 

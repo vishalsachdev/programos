@@ -14,7 +14,7 @@ All channels share one process and one port. NanoClaw's router uses the JID pref
 
 | Channel | Path | Auth | Inbound format | Outbound format | JID prefix |
 |---------|------|------|----------------|-----------------|------------|
-| Email (webhook) | `POST /` | HMAC from email service | parsed MIME | HTML | `webhook-email-<prog>@<prog>` |
+| Email (webhook) | `POST /email` | HMAC from email service | parsed MIME | HTML | `webhook-email-<prog>@<prog>` |
 | Email (IMAP poll) | (poll, no path) | IMAP credentials | parsed MIME | HTML via SMTP | `imap-email-<prog>@<prog>` |
 | Telegram | (long-poll, no path) | bot token | Telegram Update | Markdown V2 | `tg-<prog>@<prog>` |
 | Teams (Bot Framework) | `POST /api/messages` | JWT (BF library) | BF Activity | AdaptiveCard | `teams-<prog>@<prog>` |
@@ -56,6 +56,11 @@ Use this when you don't have a public webhook URL or your email provider's webho
 - Send a typing indicator while the agent runs — runs can take 30+ seconds.
 - Respect the 4096-character message limit. Split on paragraph boundaries if exceeded.
 - Use Markdown V2; escape `_*[]()~>#+-=|{}.!` in the agent's reply before sending.
+
+**One-time setup (Tier 1):**
+1. In Telegram, message [@BotFather](https://t.me/BotFather), `/newbot`. Pick a display name and a username ending in `bot`. BotFather replies with the bot token — that's `TELEGRAM_BOT_TOKEN`.
+2. To find allowed user IDs (yours and your stakeholders'): each user messages [@userinfobot](https://t.me/userinfobot); it replies with their numeric ID. Comma-separate into `TELEGRAM_ALLOWED_USER_IDS`.
+3. Optional: BotFather → `/setprivacy` → Disable, if you want the bot to receive group messages without being @mentioned.
 
 ### Teams (Bot Framework)
 - Bot Framework SDK does the JWT validation; you don't.

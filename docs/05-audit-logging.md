@@ -60,6 +60,24 @@ commits:
   - 4e5d8f9: "chore(actions): add notify advisors of sequencing change"
 ```
 
+### Source snapshots (required when the reply cites an extra mount)
+
+When the agent's reply cites a file from an extra read-only mount (Box, SharePoint, etc., per [`10-content-sources.md`](./10-content-sources.md)), the outbound entry MUST include a `source_snapshots` section. This freezes the cited content into the audit log so "what did the bot tell the dean on Mar 15, and what was it looking at?" stays answerable after the source file is edited.
+
+```yaml
+source_snapshots:
+  - source: box
+    path: syllabi/BADM550-S26.pdf
+    read_at: 2026-05-02T14:31:07Z
+    sha256: 9f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c
+    excerpt: |
+      <verbatim quote of the cited passage, exactly as the agent read it>
+```
+
+Curriculum-repo citations don't need a snapshot — the git commit SHA at read time pins the content. The audit-log entry already records the head SHA via the per-run commit.
+
+**Channel-handler responsibility, not agent responsibility.** The agent quotes the excerpt in its reply (see channel-prompt templates in `examples/groups/`); the handler hashes the file at read time and writes the snapshot block before the audit-log commit. Don't trust the agent to compute the sha256.
+
 ## Commit strategy
 
 Audit-log files are committed at the **end** of each container run. One commit per run, message: `chore(audit-log): <channel>/<timestamp>` covering both the inbound and the outbound for that run. This keeps the git history readable without an entry per file.

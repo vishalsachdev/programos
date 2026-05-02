@@ -32,6 +32,20 @@ if [[ -e "$TARGET_DIR" ]]; then
   exit 1
 fi
 
+# Preflight: git identity must be configured, or the initial commit will fail.
+GIT_NAME=$(git config --get user.name 2>/dev/null || true)
+GIT_EMAIL=$(git config --get user.email 2>/dev/null || true)
+if [[ -z "$GIT_NAME" || -z "$GIT_EMAIL" ]]; then
+  echo "Error: git user.name and user.email must be configured before running this script." >&2
+  echo "  Configure globally:" >&2
+  echo "    git config --global user.name  \"Your Name\"" >&2
+  echo "    git config --global user.email \"you@example.org\"" >&2
+  echo "  Or per-repo after init:" >&2
+  echo "    cd $TARGET_DIR && git config user.name \"...\" && git config user.email \"...\"" >&2
+  echo "  Then rerun this script." >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BRAINSTORM_TEMPLATE="$REPO_ROOT/examples/BRAINSTORM.md"

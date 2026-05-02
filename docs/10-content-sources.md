@@ -114,6 +114,25 @@ Either way, the agent prompt and citation rules don't change. Only the mount sou
 
 Box Drive uses the *user's* credentials (whoever logged into the Box Drive client). For Tier 1 that's the laptop owner. For Tier 2/3 the bot needs a **service account** in Box (or an enterprise app with read scope on the curated folder). Don't reuse a personal Box account on a shared VPS.
 
+## Bot-proposed mount additions
+
+Once the bot is running, stakeholders will ask about content the bot can't see — a SharePoint site that wasn't mounted at launch, a new Box folder a partner started using, a shared drive someone forgot to add. The bot can't add a mount itself: that's a host-side change to the container-runner config, deliberately outside the agent's reach (security model — see [`08-deployment-tiers.md`](./08-deployment-tiers.md)).
+
+What the bot CAN do is **propose** the addition through the same agent-proposes / human-approves mechanism that backs the learning loop ([`07-learning-loop.md`](./07-learning-loop.md)):
+
+- The agent detects the gap ("user asked about the FY27 partnership documents three times this week; I have no source containing them") and, in status-update mode, opens a PR against the curriculum repo's `MOUNTS.md` proposing the new mount: source name, host path, container target path, suggested service identity, and the audit-log entries that motivated the proposal.
+- A human reviewer evaluates the proposal — is this the right folder, who owns it, what's the privacy posture — and either merges or rejects.
+- On merge, the human (or a deploy script) makes the host-side change: install/configure the sync (Box Drive, rclone, etc.), update the container-runner bind mounts, restart the container.
+- The bot picks up the new mount on next invocation and starts citing it per the standard precedence + source-labeling rules.
+
+What stays out of scope:
+
+- The bot does **not** install software, configure OAuth, or modify the container-runner config. Those are host actions a human takes.
+- The bot does **not** auto-merge its own mount-addition PRs. Same rule as skills.
+- The proposal is a recommendation backed by audit-log evidence; the human still owns the privacy and curation decision (which subfolder, which credentials, what's safe to expose).
+
+In effect: the bot can detect *that* a content gap exists and propose *what* to mount; a human decides *whether* and *how*. Same trust model as everything else in this spec.
+
 ## What this is NOT
 
 - It is not a sync layer. The bot doesn't write back to Box. If a decision needs to land in a Box document, a human edits the Box doc.

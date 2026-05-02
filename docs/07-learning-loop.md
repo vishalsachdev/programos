@@ -83,6 +83,10 @@ If you're documenting this for an external audience (NSF reviewer, accreditor, I
 
 That language reads well in a "Responsible AI" or "Human-in-the-loop" section without overpromising.
 
+## Related: agent-proposed mount additions
+
+The same proposes-via-PR / humans-merge mechanism extends to content sources: a running bot that detects "users keep asking about content I can't see" can open a PR against the curriculum repo's `MOUNTS.md` proposing a new external mount, backed by the audit-log entries that motivated the proposal. A human reviews, makes the host-side mount change, and redeploys. See [`10-content-sources.md`](./10-content-sources.md) → "Bot-proposed mount additions."
+
 ## Future work (optional research overlay)
 
 For a research deployment that explicitly wants to study autonomous skill evolution, you can add a *separate* `skills-experimental/` dir with a different lifecycle (autonomous writes allowed, isolated from production agent invocations, evaluated against a held-out test set). Keep it strictly outside the production trust boundary. Frameworks like Hermes Agent (NousResearch) or DSPy/GEPA can drive that overlay if you go this route.

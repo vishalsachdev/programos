@@ -12,5 +12,5 @@ Keep edits funder-agnostic and institution-agnostic. Anything Illinois-specific 
 
 - Numbered docs (`docs/NN-name.md`) form the canonical reading order. Insert new docs at the next available number; do not renumber.
 - README "What's in this repo" table must list every doc in the same order as the numbered files.
-- SPEC.md §2 (Components) and §5 (Curriculum repo contract) are load-bearing — every architectural concept the spec depends on must be referenced in one of those two sections.
+- SPEC.md §2 (Components) and §5 (Program repo contract) are load-bearing — every architectural concept the spec depends on must be referenced in one of those two sections.
 - Per-channel agent prompts in `examples/groups/` are templates for adopters. Keep them under ~60 lines each; long-form guidance belongs in `docs/`.

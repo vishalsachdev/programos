@@ -33,14 +33,14 @@ How ProgramOS sits on top of NanoClaw, and what's adopter-supplied vs framework-
 ┌──────────────────────────────────────────────────────────────────────┐
 │   Claude Code agent in Docker container                              │
 │   • prompt = groups/<channel>/CLAUDE.md (ADOPTER-SUPPLIED)           │
-│   • workspace = curriculum repo, mounted at /workspace/extra/<name>  │
+│   • workspace = program repo, mounted at /workspace/extra/<name>  │
 │   • mode = question (read-only) | status-update (workspace-write)    │
 └──────────────────────────────────────────┬───────────────────────────┘
                                            │  reads/writes
                                            ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│   Curriculum repository (ADOPTER-OWNED, separate repo)               │
-│   • program/CURRICULUM.md           — source of truth                │
+│   Program repository (ADOPTER-OWNED, separate repo)               │
+│   • program/CONCEPT.md           — source of truth                │
 │   • program/EMAIL_ALLOWLIST.md      — authorized senders             │
 │   • discussions/DECISIONS.md        — append-only decision log       │
 │   • discussions/ACTION_ITEMS.md     — open actions                   │
@@ -57,7 +57,7 @@ How ProgramOS sits on top of NanoClaw, and what's adopter-supplied vs framework-
 | Channel handlers (`src/channels/*.ts`) | Adopter | Adding/changing a channel |
 | Agent prompts (`groups/<channel>/CLAUDE.md`) | Adopter | Changing agent behavior, persona, citation style |
 | Audit log (`src/audit-log.ts`) | Adopter | Changing what gets logged or where |
-| Curriculum repo structure | Adopter | Always (this is your program) |
+| Program repo structure | Adopter | Always (this is your program) |
 
 ## Why this split
 
@@ -109,6 +109,6 @@ For a brand-new ProgramOS on a brand-new NanoClaw fork, expect roughly:
 - **6 agent prompts** in `groups/<channel>/CLAUDE.md`
 - **1 audit-log module** (~80 lines) in `src/audit-log.ts`
 - **2 small NanoClaw hooks** in `src/index.ts` and `src/container-runner.ts` (audit logging + container chown patch)
-- **Curriculum repo** in a separate repository
+- **Program repo** in a separate repository
 
-Total: roughly 1,000–1,500 lines of code on top of NanoClaw, plus the curriculum repo content. The reference deployment fits in this envelope.
+Total: roughly 1,000–1,500 lines of code on top of NanoClaw, plus the program repo content. The reference deployment fits in this envelope.

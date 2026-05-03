@@ -1,6 +1,6 @@
 # {{UNIT_SLUG}} — ProgramOS brainstorm
 
-> Hand this file to your coding agent (Claude Code, Cursor, Codex, etc.) along with read access to https://github.com/vishalsachdev/programos. The agent will interview you, fill in the curriculum repo, and produce per-channel prompts.
+> Hand this file to your coding agent (Claude Code, Cursor, Codex, etc.) along with read access to https://github.com/vishalsachdev/programos. The agent will interview you, fill in the program repo, and produce per-channel prompts.
 
 ## What you (the agent) should do
 
@@ -32,14 +32,14 @@ Ask the user the following, in order. Stop and wait for an answer between groups
 9. For each channel: what authentication is realistic? (HMAC webhook secret / JWT / bot token / shared API key / IMAP credentials / institutional SSO)
 10. For email specifically: who controls the inbound mailbox, and is webhook access realistic at this institution? If not, default to IMAP polling against a shared/forwarded mailbox. If the unit is at UIUC, see ProgramOS `docs/09-illinois-quickstart.md` for the @illinois.edu forwarding-rule recipe.
 
-#### Group D — What does the curriculum repo actually contain?
+#### Group D — What does the program repo actually contain?
 
 11. What is the program's **source of truth** today? (a SharePoint site, a Notion workspace, a private GitHub repo, a faculty member's laptop, nothing yet, **a Box folder** — common at UIUC)
 12. Can it be migrated to a private git repo, and who owns it? If migration is unrealistic, see Q15 below — we have a pattern for that.
-13. What documents are load-bearing? (curriculum, policies, FAQ, decision log, partner agreements, grant deliverables, accreditation docs)
+13. What documents are load-bearing? (program content, policies, FAQ, decision log, partner agreements, grant deliverables, accreditation docs)
 14. What's the privacy posture — does it contain PII, FERPA-protected data, grant-confidential strategy, or just public-facing content?
 15. **Content-source pattern.** Pick one (see ProgramOS `docs/10-content-sources.md`):
-    - **A. Git-only** — migrate everything into the curriculum repo; team edits in git going forward. Greenfield only.
+    - **A. Git-only** — migrate everything into the program repo; team edits in git going forward. Greenfield only.
     - **B. Coexist + bot-as-frontend** *(default)* — team keeps editing in Box / SharePoint / etc.; the bot reads from there *and* from git, and answers across both. Requires a curated subfolder, the precedence rule (operational facts → git, content facts → external store), snapshot-with-cite in the audit log, and source labeling on every reply.
     - **C. Mirror** — team keeps editing in Box; a sync daemon mirrors the curated folder into git on a cron. Use this when an auditor will ask "what did doc X say last March?" for files the bot may not have cited.
 16. If you picked B or C: name the **single curated subfolder** to mount, and the **service identity** that owns it (not a personal account on Tier 2/3). For B on Tier 1 (laptop), the user's Box Drive credentials are fine.
@@ -59,11 +59,11 @@ Ask the user the following, in order. Stop and wait for an answer between groups
 
 Once Phase 1 answers are in, do all of the following:
 
-**This phase fills in the curriculum repo only.** The NanoClaw fork (which contains channel handlers and `groups/<channel>/CLAUDE.md` system prompts) is a separate repo and gets adapted in a later step by a different agent invocation — see "Handoff" below.
+**This phase fills in the program repo only.** The NanoClaw fork (which contains channel handlers and `groups/<channel>/CLAUDE.md` system prompts) is a separate repo and gets adapted in a later step by a different agent invocation — see "Handoff" below.
 
-In the curriculum repo:
+In the program repo:
 
-- Replace placeholders in `program/CURRICULUM.md` with the actual program structure from Group D. Cite source docs.
+- Replace placeholders in `program/CONCEPT.md` with the actual program structure from Group D. Cite source docs.
 - Populate `program/EMAIL_ALLOWLIST.md` from Group B answers. Mark decision authority truthfully.
 - Create one file per significant policy in `program/policies/`.
 - Create one file per significant content area (course / module / deliverable) in `program/courses/` (rename the directory if "courses" doesn't fit — e.g., `deliverables/` for a grant project, `working-groups/` for a committee).
@@ -71,11 +71,11 @@ In the curriculum repo:
 - If Group D-Q15 chose pattern B or C (external content store mounted into the bot), add a `MOUNTS.md` at the repo root naming the curated subfolder, the host path, the mount target inside the container, and the service identity that owns it.
 - Update the top-level `README.md` to describe this specific program (not the generic scaffold).
 
-**Do NOT** create `groups/<channel>/CLAUDE.md` files in the curriculum repo. Those live in the NanoClaw fork and are written in the handoff step below using `examples/groups/<channel>/CLAUDE.md` from the ProgramOS spec as the template.
+**Do NOT** create `groups/<channel>/CLAUDE.md` files in the program repo. Those live in the NanoClaw fork and are written in the handoff step below using `examples/groups/<channel>/CLAUDE.md` from the ProgramOS spec as the template.
 
 ### Phase 3 — Write the handoff file, verify, and report
 
-Write `PROGRAMOS_SETUP.md` at the curriculum repo root. This file is the **structured handoff** to the next agent (the one that adapts the NanoClaw fork). It MUST contain:
+Write `PROGRAMOS_SETUP.md` at the program repo root. This file is the **structured handoff** to the next agent (the one that adapts the NanoClaw fork). It MUST contain:
 
 ```markdown
 # ProgramOS setup — {{UNIT_SLUG}}
@@ -84,7 +84,7 @@ Write `PROGRAMOS_SETUP.md` at the curriculum repo root. This file is the **struc
 - Unit slug: <slug>
 - Agent persona name: <name>
 - JID prefix: <prefix>
-- Curriculum repo path on host: <absolute path>
+- Program repo path on host: <absolute path>
 - Mount target in container: /workspace/extra/<repo-name>
 
 ## Deployment tier (Group C, Q7)
@@ -112,11 +112,11 @@ Write `PROGRAMOS_SETUP.md` at the curriculum repo root. This file is the **struc
 
 Then:
 
-- Run `git status` and `git diff` in the curriculum repo. Show the user what you're about to commit.
+- Run `git status` and `git diff` in the program repo. Show the user what you're about to commit.
 - Commit in coherent chunks (one commit per phase-2 step, not one giant commit). Commit `PROGRAMOS_SETUP.md` last with message `chore(setup): record brainstorm output for ProgramOS handoff`.
 - Tell the user the next 3 concrete steps to go live:
   1. Make this repo private and add the bot's git identity as a collaborator.
-  2. Fork NanoClaw (`gh repo fork qwibitai/nanoclaw --clone`), then in a fresh agent session say: "Read the ProgramOS SPEC.md, the docs/08-deployment-tiers.md, and the PROGRAMOS_SETUP.md at `<curriculum-repo>/PROGRAMOS_SETUP.md`. Adapt this NanoClaw fork to that spec at the tier and channels named in PROGRAMOS_SETUP.md. Copy `groups/<channel>/CLAUDE.md` templates from the ProgramOS repo and customize per channel."
+  2. Fork NanoClaw (`gh repo fork qwibitai/nanoclaw --clone`), then in a fresh agent session say: "Read the ProgramOS SPEC.md, the docs/08-deployment-tiers.md, and the PROGRAMOS_SETUP.md at `<program-repo>/PROGRAMOS_SETUP.md`. Adapt this NanoClaw fork to that spec at the tier and channels named in PROGRAMOS_SETUP.md. Copy `groups/<channel>/CLAUDE.md` templates from the ProgramOS repo and customize per channel."
   3. Configure the channel tokens / webhooks per the chosen tier (see `docs/01-prerequisites.md`).
 
 ## Constraints (do not violate)

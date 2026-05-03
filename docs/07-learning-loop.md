@@ -10,7 +10,7 @@ A program coordinator that never improves becomes a glorified FAQ tool. A progra
 
 ### 1. Skills as agent-proposed pull requests
 
-The curriculum repo gains a `skills/` directory. Each skill is a markdown file describing a procedure the agent should follow when a recurring situation arises (e.g., "when an admissions officer asks about transfer credit limits, check `program/policies/transfer-credit.md` first, then cite the relevant section").
+The program repo gains a `skills/` directory. Each skill is a markdown file describing a procedure the agent should follow when a recurring situation arises (e.g., "when an admissions officer asks about transfer credit limits, check `program/policies/transfer-credit.md` first, then cite the relevant section").
 
 **The contract:**
 
@@ -33,7 +33,7 @@ The curriculum repo gains a `skills/` directory. Each skill is a markdown file d
 
 The audit log (`discussions/audit-log/`) already contains every inbound and outbound message. Add a SQLite FTS5 index over it (rebuilt on a cron, or incrementally on each write) and expose a `search_audit_log(query)` tool to the agent.
 
-This gives the agent **episodic memory** — "have we answered something like this before?" — without changing the trust model. Citations into prior conversations are file paths in the curriculum repo, the same way curriculum citations work.
+This gives the agent **episodic memory** — "have we answered something like this before?" — without changing the trust model. Citations into prior conversations are file paths in the program repo, the same way program-repo citations work.
 
 The index is derived data; if it's lost, rebuild from the audit log. Don't treat it as a source of truth.
 
@@ -63,8 +63,8 @@ mode: question | status-update | both
 3. <step>
 
 ## Citations to include
-- <path in curriculum repo>
-- <path in curriculum repo>
+- <path in program repo>
+- <path in program repo>
 
 ## History
 - <YYYY-MM-DD>: created from <audit-log path>, PR #<n>
@@ -85,7 +85,7 @@ That language reads well in a "Responsible AI" or "Human-in-the-loop" section wi
 
 ## Related: agent-proposed mount additions
 
-The same proposes-via-PR / humans-merge mechanism extends to content sources: a running bot that detects "users keep asking about content I can't see" can open a PR against the curriculum repo's `MOUNTS.md` proposing a new external mount, backed by the audit-log entries that motivated the proposal. A human reviews, makes the host-side mount change, and redeploys. See [`10-content-sources.md`](./10-content-sources.md) → "Bot-proposed mount additions."
+The same proposes-via-PR / humans-merge mechanism extends to content sources: a running bot that detects "users keep asking about content I can't see" can open a PR against the program repo's `MOUNTS.md` proposing a new external mount, backed by the audit-log entries that motivated the proposal. A human reviews, makes the host-side mount change, and redeploys. See [`10-content-sources.md`](./10-content-sources.md) → "Bot-proposed mount additions."
 
 ## Future work (optional research overlay)
 

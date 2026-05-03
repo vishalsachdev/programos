@@ -82,7 +82,7 @@ EMAIL_SMTP_PASS=<app password>
 EMAIL_FROM_DISPLAY=Coordinator Bot <<unit>@illinois.edu>
 ```
 
-In the curriculum repo's `program/EMAIL_ALLOWLIST.md`, add the addresses that may interact with the bot. Stakeholders not in this list get filtered silently.
+In the program repo's `program/EMAIL_ALLOWLIST.md`, add the addresses that may interact with the bot. Stakeholders not in this list get filtered silently.
 
 ### 6. Smoke test
 
@@ -90,7 +90,7 @@ In the curriculum repo's `program/EMAIL_ALLOWLIST.md`, add the addresses that ma
 2. Check the Outlook rule fired and a copy went to `<unit>@bot.example.org`.
 3. Check the inbound webhook hit your VPS (`tail -f` the bot logs).
 4. Check the bot replied; reply lands in the original sender's inbox with `From: <unit>@illinois.edu`.
-5. Check `discussions/audit-log/email/` in the curriculum repo for the inbound + outbound files.
+5. Check `discussions/audit-log/email/` in the program repo for the inbound + outbound files.
 
 If any step fails, fix that step before adding more channels.
 

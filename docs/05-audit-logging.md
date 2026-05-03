@@ -1,10 +1,10 @@
 # 05 — Audit logging
 
-Every inbound and every outbound message gets a markdown file in the curriculum repo. This is the only persistent store outside of NanoClaw's SQLite, and it's what survives container destruction. Treat it as the legal record.
+Every inbound and every outbound message gets a markdown file in the program repo. This is the only persistent store outside of NanoClaw's SQLite, and it's what survives container destruction. Treat it as the legal record.
 
 ## Where
 
-Inside the curriculum repo: `discussions/audit-log/<channel>/<ISO-timestamp>-<direction>.md`
+Inside the program repo: `discussions/audit-log/<channel>/<ISO-timestamp>-<direction>.md`
 
 - `<channel>` is one of `email`, `telegram`, `teams`, `teams-webhook`, `webchat`, `copilot-studio`.
 - `<ISO-timestamp>` is `2026-04-25T16-30-22Z` (replace colons with hyphens for filesystem compatibility).
@@ -74,7 +74,7 @@ source_snapshots:
       <verbatim quote of the cited passage, exactly as the agent read it>
 ```
 
-Curriculum-repo citations don't need a snapshot — the git commit SHA at read time pins the content. The audit-log entry already records the head SHA via the per-run commit.
+Program-repo citations don't need a snapshot — the git commit SHA at read time pins the content. The audit-log entry already records the head SHA via the per-run commit.
 
 **Channel-handler responsibility, not agent responsibility.** The agent quotes the excerpt in its reply (see channel-prompt templates in `examples/groups/`); the handler hashes the file at read time and writes the snapshot block before the audit-log commit. Don't trust the agent to compute the sha256.
 
@@ -98,4 +98,4 @@ The audit log is in git, so it's permanent by default. If you have a retention p
 
 ## Why markdown, not a database
 
-Markdown is reviewable by anyone with `git log` and `cat`. Curriculum reviewers, accreditation auditors, and program directors all prefer reading text files in a folder to running queries. The agent itself can also read the audit log to answer questions like "what did we decide last semester about X?" — no separate query layer needed.
+Markdown is reviewable by anyone with `git log` and `cat`. Reviewers, accreditation auditors, and program directors all prefer reading text files in a folder to running queries. The agent itself can also read the audit log to answer questions like "what did we decide last semester about X?" — no separate query layer needed.

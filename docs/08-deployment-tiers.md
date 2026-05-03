@@ -1,6 +1,6 @@
 # 08 — Deployment tiers
 
-ProgramOS deploys at three tiers. Same NanoClaw image, same ProgramOS spec, same curriculum repo — only the channel transports and host runtime change. Start at the lowest tier you can; promote when you outgrow it.
+ProgramOS deploys at three tiers. Same NanoClaw image, same ProgramOS spec, same program repo — only the channel transports and host runtime change. Start at the lowest tier you can; promote when you outgrow it.
 
 ## Why tiers matter
 
@@ -19,11 +19,11 @@ Tier 1 exists so you can demo, pilot, and accumulate audit-log evidence before y
 | Channels enabled | Telegram (long-poll, no inbound networking), Email via IMAP polling (see [`03-channels.md`](./03-channels.md)). |
 | Channels deferred | Web chat (needs a public URL), Teams (needs app registration), Copilot Studio. |
 | Public ingress | **None.** No reverse proxy, no domain, no port forwarding. Bot reaches out to Telegram and IMAP; nothing reaches in. |
-| Persistence | Curriculum repo on local disk; pushed to a private GitHub repo on every commit. NanoClaw SQLite alongside it. |
+| Persistence | Program repo on local disk; pushed to a private GitHub repo on every commit. NanoClaw SQLite alongside it. |
 | Secrets | `.env` file in the bot directory, mode 600. macOS Keychain or `pass` (Linux) for the LLM API key. |
 | Cost | LLM API + GitHub. ~$0 in infra. |
 
-**Adoption pitch**: "Telegram first, email next week. Bot runs on your laptop. The curriculum repo is yours, in your private GitHub. Stop the process and the bot stops; everything it learned is in git."
+**Adoption pitch**: "Telegram first, email next week. Bot runs on your laptop. The program repo is yours, in your private GitHub. Stop the process and the bot stops; everything it learned is in git."
 
 **When to graduate**: laptop sleeps and stakeholders notice; you want stakeholders outside Telegram (web chat, Teams); you want multi-user reliability.
 
@@ -38,11 +38,11 @@ Tier 1 exists so you can demo, pilot, and accumulate audit-log evidence before y
 | Channels enabled | All Tier 1 channels + Email via webhook, Web chat, Teams (Outgoing Webhook). |
 | Channels deferred | Teams (Bot Framework) and Copilot Studio still need M365 admin app registration; defer until you have admin support. |
 | Public ingress | Caddy or nginx reverse proxy on `:443` with Let's Encrypt. One vhost per channel path. |
-| Persistence | Curriculum repo cloned on the VPS; commits pushed to private GitHub. NanoClaw SQLite on a persistent volume. Daily snapshot to the curriculum repo (or a separate backup target). |
+| Persistence | Program repo cloned on the VPS; commits pushed to private GitHub. NanoClaw SQLite on a persistent volume. Daily snapshot to the program repo (or a separate backup target). |
 | Secrets | `.env` mode 600 + restricted ssh access. Optionally [age](https://github.com/FiloSottile/age) or [sops](https://github.com/getsops/sops) for committed-encrypted secrets. |
 | Cost | $6–20/mo VPS + LLM API + domain. |
 
-**Migration from Tier 1**: copy the curriculum repo URL, copy the `.env`, switch the email channel from IMAP to webhook (see [`03-channels.md`](./03-channels.md) — same agent prompts and allowlist, only the transport changes), point a subdomain at the VPS. Half a day if you've done it before.
+**Migration from Tier 1**: copy the program repo URL, copy the `.env`, switch the email channel from IMAP to webhook (see [`03-channels.md`](./03-channels.md) — same agent prompts and allowlist, only the transport changes), point a subdomain at the VPS. Half a day if you've done it before.
 
 **When to graduate**: stakeholders span multiple time zones and one VPS goes down badly; compliance requires logged infra access; the unit standardizes on a specific cloud.
 
@@ -56,7 +56,7 @@ Tier 1 exists so you can demo, pilot, and accumulate audit-log evidence before y
 | Process supervision | The platform. |
 | Channels enabled | Everything in Tier 2 + Teams (Bot Framework) + Copilot Studio (when M365 admin registers the app). |
 | Public ingress | Platform-managed TLS + custom domain. |
-| Persistence | Curriculum repo as before (still git-backed). Move SQLite to a managed service (Azure SQL / RDS / Cloud SQL) or accept that container restarts lose it (audit log in git is the source of truth). |
+| Persistence | Program repo as before (still git-backed). Move SQLite to a managed service (Azure SQL / RDS / Cloud SQL) or accept that container restarts lose it (audit log in git is the source of truth). |
 | Secrets | The platform's secret store (Azure Key Vault / AWS Secrets Manager). |
 | Cost | $20–100/mo container + LLM API + domain + (optional) managed DB. |
 
@@ -66,7 +66,7 @@ Tier 1 exists so you can demo, pilot, and accumulate audit-log evidence before y
 
 ## What stays constant across tiers
 
-- The curriculum repo layout (`program/`, `discussions/`, `skills/`, `audit-log/`).
+- The program repo layout (`program/`, `discussions/`, `skills/`, `audit-log/`).
 - The agent operating modes (question vs status-update; read-only vs workspace-write sandbox).
 - Per-channel `groups/<channel>/CLAUDE.md` prompts.
 - Audit log format.

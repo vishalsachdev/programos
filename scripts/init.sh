@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# programos init — scaffold a new ProgramOS curriculum repo and seed it with
+# programos init — scaffold a new ProgramOS program repo and seed it with
 # a structured brainstorm prompt for the adopter to hand to their coding agent.
 #
 # Usage:
 #   ./scripts/init.sh <unit-slug> [target-dir]
 #
 # Example:
-#   ./scripts/init.sh ai-ready-uiuc ~/code/ai-ready-uiuc-curriculum
+#   ./scripts/init.sh ai-ready-uiuc ~/code/ai-ready-uiuc
 #
 # Result: a fresh git repo at <target-dir> containing:
-#   - the ProgramOS curriculum-repo skeleton (program/, discussions/, skills/)
+#   - the ProgramOS program-repo skeleton (program/, discussions/, skills/)
 #   - a BRAINSTORM.md with a structured discovery prompt
 #   - a README pointing at the ProgramOS spec
 #
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 UNIT_SLUG="${1:-}"
-TARGET_DIR="${2:-./${UNIT_SLUG}-curriculum}"
+TARGET_DIR="${2:-./${UNIT_SLUG}}"
 
 if [[ -z "$UNIT_SLUG" ]]; then
   echo "Usage: $0 <unit-slug> [target-dir]" >&2
@@ -64,7 +64,7 @@ for ch in email telegram teams teams-webhook webchat copilot-studio; do
   touch "$TARGET_DIR/discussions/audit-log/$ch/.gitkeep"
 done
 
-cat > "$TARGET_DIR/program/CURRICULUM.md" <<EOF
+cat > "$TARGET_DIR/program/CONCEPT.md" <<EOF
 # ${UNIT_SLUG} — Source of truth
 
 <Fill in via brainstorm. See BRAINSTORM.md at the repo root.>
@@ -108,12 +108,12 @@ node_modules/
 EOF
 
 cat > "$TARGET_DIR/README.md" <<EOF
-# ${UNIT_SLUG} curriculum repo
+# ${UNIT_SLUG} program repo
 
 Source of truth for the **${UNIT_SLUG}** program coordinator bot.
 
 This repo is consumed by a ProgramOS deployment (see https://github.com/vishalsachdev/programos).
-The bot mounts this repo read-write into agent containers at \`/workspace/extra/${UNIT_SLUG}-curriculum\`.
+The bot mounts this repo read-write into agent containers at \`/workspace/extra/${UNIT_SLUG}\`.
 
 ## Next steps
 
@@ -130,7 +130,7 @@ sed "s/{{UNIT_SLUG}}/${UNIT_SLUG}/g" "$BRAINSTORM_TEMPLATE" > "$TARGET_DIR/BRAIN
   cd "$TARGET_DIR"
   git init -q
   git add .
-  git commit -q -m "init: scaffold ${UNIT_SLUG} curriculum repo from ProgramOS"
+  git commit -q -m "init: scaffold ${UNIT_SLUG} program repo from ProgramOS"
 )
 
 echo ""

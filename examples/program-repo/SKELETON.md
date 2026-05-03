@@ -1,12 +1,12 @@
-# Curriculum repo — starter skeleton
+# Program repo — starter skeleton
 
 Copy this layout into a new private repository, then fill in the blanks.
 
 ```
-your-curriculum-repo/
+your-program-repo/
 ├── README.md
 ├── program/
-│   ├── CURRICULUM.md
+│   ├── CONCEPT.md
 │   ├── EMAIL_ALLOWLIST.md
 │   ├── courses/
 │   │   ├── COURSE_101.md
@@ -34,10 +34,10 @@ your-curriculum-repo/
 
 ## File starters
 
-### `program/CURRICULUM.md`
+### `program/CONCEPT.md`
 
 ```markdown
-# <PROGRAM> Curriculum
+# <PROGRAM> Concept
 
 **Total credits:** XX
 **Duration:** XX months

@@ -12,7 +12,7 @@ For a working Telegram bot in an afternoon, with no IT involvement.
 - [ ] [`gh` CLI](https://cli.github.com/) authenticated (`gh auth login`) — needed to fork NanoClaw via the quickstart. Optional if you fork in the browser instead.
 - [ ] Git configured globally with your name and email (`git config --global user.name`, `git config --global user.email`). The `init.sh` bootstrap commits the scaffold and will fail without these.
 - [ ] A fork of [NanoClaw](https://github.com/qwibitai/nanoclaw) — your working repo.
-- [ ] A separate **curriculum repository** (private GitHub repo) you control. Created by `scripts/init.sh` from this spec; mounted read-write into agent containers. See [`02-curriculum-repo.md`](./02-curriculum-repo.md).
+- [ ] A separate **program repository** (private GitHub repo) you control. Created by `scripts/init.sh` from this spec; mounted read-write into agent containers. See [`02-program-repo.md`](./02-program-repo.md).
 
 ### Secrets
 
@@ -37,7 +37,7 @@ No webhook URL, no domain, no public IP, no reverse proxy.
 
 - **Agent persona name.** Pick something short, memorable, and not tied to your institution if you ever expect to talk about the system publicly. Replace `<AGENT_NAME>` everywhere.
 - **Channel JID prefix.** A short string identifying your program in NanoClaw's internal routing (e.g., `myprog`). All channels use JIDs like `tg-myprog@myprog`. Don't reuse across deployments on the same NanoClaw instance.
-- **Email allowlist policy.** Names + roles of who can email the bot, if you enable email at Tier 1 via IMAP. Markdown in your curriculum repo; can change without redeploying.
+- **Email allowlist policy.** Names + roles of who can email the bot, if you enable email at Tier 1 via IMAP. Markdown in your program repo; can change without redeploying.
 
 ### Smoke test
 

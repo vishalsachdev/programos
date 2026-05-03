@@ -7,9 +7,9 @@
 Turn a NanoClaw deployment into a **multi-channel AI program coordinator** that:
 
 1. Receives messages from stakeholders (faculty, staff, advisors, admissions, etc.) across email, Telegram, Teams, and web chat.
-2. Routes each message to a Claude Code agent running in a Docker container with a curriculum repository mounted.
+2. Routes each message to a Claude Code agent running in a Docker container with a program repository mounted.
 3. Operates in one of two modes per message: **Question** (read-only, cite, reply) or **Status update** (extract decisions/actions/questions, commit, push, summarize).
-4. Logs every inbound and outbound message to an audit trail inside the curriculum repo.
+4. Logs every inbound and outbound message to an audit trail inside the program repo.
 5. Replies via the original channel with channel-appropriate formatting.
 
 ## 2. Components
@@ -20,11 +20,11 @@ Turn a NanoClaw deployment into a **multi-channel AI program coordinator** that:
 | Per-channel handler (email/Telegram/Teams/web chat/Copilot Studio) | Adopter-supplied in `src/channels/` |
 | Per-channel agent instructions | Adopter-supplied in `groups/<channel>/CLAUDE.md` |
 | Audit log writer | Adopter-supplied in `src/audit-log.ts` |
-| Curriculum repository | Separate adopter-owned repo, mounted into containers at `/workspace/extra/<repo-name>` |
-| Email allowlist | Markdown file *inside the curriculum repo*, not in this codebase |
-| Skills directory | `skills/` *inside the curriculum repo*. Read in question mode; written by the agent only via PR in status-update mode. See [`docs/07-learning-loop.md`](./docs/07-learning-loop.md). |
+| Program repository | Separate adopter-owned repo, mounted into containers at `/workspace/extra/<repo-name>` |
+| Email allowlist | Markdown file *inside the program repo*, not in this codebase |
+| Skills directory | `skills/` *inside the program repo*. Read in question mode; written by the agent only via PR in status-update mode. See [`docs/07-learning-loop.md`](./docs/07-learning-loop.md). |
 | Audit-log search index | Optional SQLite FTS5 index over `discussions/audit-log/`, exposed to the agent as a `search_audit_log(query)` tool. Derived data; rebuildable. |
-| Extra content mounts | Optional read-only bind mounts under `/workspace/extra/<source-name>/` for external content stores (Box, SharePoint, network shares, partner repos). Adopter-supplied. The curriculum repo remains the source of truth for *bot operations* (decisions, audit, skills); extra mounts hold *content* the team edits elsewhere. Precedence rule, snapshot-with-cite, and source-labeling requirements in [`docs/10-content-sources.md`](./docs/10-content-sources.md). |
+| Extra content mounts | Optional read-only bind mounts under `/workspace/extra/<source-name>/` for external content stores (Box, SharePoint, network shares, partner repos). Adopter-supplied. The program repo remains the source of truth for *bot operations* (decisions, audit, skills); extra mounts hold *content* the team edits elsewhere. Precedence rule, snapshot-with-cite, and source-labeling requirements in [`docs/10-content-sources.md`](./docs/10-content-sources.md). |
 
 ## 3. Channel contract
 
@@ -47,23 +47,23 @@ Every container invocation operates in exactly one of these modes, chosen by the
 
 ### Question mode (default)
 - **Trigger**: any inbound that isn't an explicit status update.
-- **Behavior**: search the curriculum repo, compose an answer with file-path citations, reply. **No commits.**
+- **Behavior**: search the program repo, compose an answer with file-path citations, reply. **No commits.**
 - **Container sandbox**: `read-only`.
 
 ### Status-update mode
 - **Trigger**: explicit signal from sender (subject line prefix, command keyword, or channel-specific marker), OR sender role of "decision-maker" *and* message contains decision-shaped language.
-- **Behavior**: extract decisions, action items, and open questions; commit each to the appropriate file in the curriculum repo with a granular commit per category; push; reply with a structured summary of what was captured.
+- **Behavior**: extract decisions, action items, and open questions; commit each to the appropriate file in the program repo with a granular commit per category; push; reply with a structured summary of what was captured.
 - **Container sandbox**: `workspace-write`.
 
 See [`docs/04-agent-modes.md`](./docs/04-agent-modes.md) for the full decision tree.
 
-## 5. Curriculum repository contract
+## 5. Program repository contract
 
-The curriculum repo is mounted read-write into agent containers. It MUST contain:
+The program repo is mounted read-write into agent containers. It MUST contain:
 
 | Path | Purpose |
 |------|---------|
-| `program/CURRICULUM.md` | Source of truth: program structure, courses, credits, sequencing |
+| `program/CONCEPT.md` | Source of truth: program structure, courses, credits, sequencing |
 | `program/EMAIL_ALLOWLIST.md` | Markdown table of authorized email senders. **Filename is load-bearing** — channel code reads this exact path. |
 | `discussions/DECISIONS.md` | Append-only log of program decisions, written by the agent in status-update mode |
 | `discussions/ACTION_ITEMS.md` | Open action items extracted from messages |
@@ -71,7 +71,7 @@ The curriculum repo is mounted read-write into agent containers. It MUST contain
 | `discussions/audit-log/` | One subdirectory per channel; one file per inbound and per outbound message |
 | `skills/` | One markdown file per skill the agent has learned. Agent reads in question mode; agent proposes new/edited skills via PR in status-update mode. Never auto-merged. Format and contract in [`docs/07-learning-loop.md`](./docs/07-learning-loop.md). |
 
-See [`docs/02-curriculum-repo.md`](./docs/02-curriculum-repo.md) and [`examples/curriculum-repo/SKELETON.md`](./examples/curriculum-repo/SKELETON.md).
+See [`docs/02-program-repo.md`](./docs/02-program-repo.md) and [`examples/program-repo/SKELETON.md`](./examples/program-repo/SKELETON.md).
 
 ## 6. Audit log contract
 
@@ -87,7 +87,7 @@ See [`docs/05-audit-logging.md`](./docs/05-audit-logging.md).
 
 ## 6.5. Learning loop
 
-The agent improves over time without breaking the audit trail. Two mechanisms, both grounded in the curriculum repo:
+The agent improves over time without breaking the audit trail. Two mechanisms, both grounded in the program repo:
 
 - **Skills as PRs**: in status-update mode, the agent MAY propose a new file under `skills/` (or an edit to an existing one) by writing to a feature branch and opening a pull request. A human merges. Direct commits to the default branch from the agent are forbidden. In question mode, the agent reads `skills/` but cannot write.
 - **Episodic recall via FTS5**: an optional SQLite FTS5 index over `discussions/audit-log/`, exposed as a `search_audit_log(query)` tool, lets the agent find prior conversations on the same topic. The index is derived from the audit log and is rebuildable.
@@ -101,7 +101,7 @@ Full contract, skill file format, and grant/accreditation framing in [`docs/07-l
 Each channel has a `groups/<channel>/CLAUDE.md` file that becomes the agent's system prompt when handling that channel's messages. These prompts MUST:
 
 - Identify the channel and the agent persona.
-- Reference the curriculum repo path (mounted at `/workspace/extra/<repo>`).
+- Reference the program repo path (mounted at `/workspace/extra/<repo>`).
 - Define the question-vs-status-update decision rule for this channel.
 - Specify the reply format (HTML, Markdown, AdaptiveCard).
 - Specify the audit-log writing behavior.
@@ -115,7 +115,7 @@ Before going live, the adopter MUST replace:
 
 - [ ] Program name throughout (default placeholder: `<PROGRAM>`)
 - [ ] Agent persona name (default placeholder: `<AGENT_NAME>`)
-- [ ] Curriculum repo name and path
+- [ ] Program repo name and path
 - [ ] Email domain for inbound webhook (must match outbound `From` domain in the email service)
 - [ ] Telegram bot token, Teams app credentials, web chat API key
 - [ ] HTTP port (default `3003`)
@@ -128,7 +128,7 @@ See [`docs/06-customization.md`](./docs/06-customization.md).
 This spec does **not** cover:
 
 - Student-facing channels (different threat model — see future spec).
-- Generative content creation (the agent reads/cites existing curriculum, doesn't invent).
+- Generative content creation (the agent reads/cites existing program content, does not invent).
 - Autonomous skill creation or self-modification of runtime code (see §6.5 — agent proposes via PR, humans merge).
 - Grade pass-back or LMS integration (separate concern; see Canvas MCP if you need that).
 - Multi-tenant deployments serving multiple programs from one container (possible but not specified here).

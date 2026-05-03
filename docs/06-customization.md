@@ -26,7 +26,7 @@ The following should stay institution-agnostic in your code, even if your deploy
 
 - The two-mode operating model (question / status-update).
 - The audit-log file format.
-- The curriculum-repo directory layout.
+- The program-repo directory layout.
 
 Reason: when a colleague at another institution asks how you built this, you should be able to point them at the same spec without scrubbing.
 
@@ -40,7 +40,7 @@ Reason: when a colleague at another institution asks how you built this, you sho
 
 Decide before launch:
 
-- Is your **curriculum repo** public or private? Almost always private — it contains stakeholder names, internal strategy, accreditation drafts.
+- Is your **program repo** public or private? Almost always private — it contains stakeholder names, internal strategy, accreditation drafts.
 - Is your **bot repo** (the NanoClaw fork) public? Up to you. If you want it public, run [`scripts/scrub.sh`](#scrub-script) below to verify there are no allowlist names, real email domains, or internal URLs in it.
 - Is your **audit log** public? Almost never. It contains every inbound message verbatim.
 

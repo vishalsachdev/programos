@@ -32,7 +32,7 @@ Every channel handler MUST:
 
 - Accept inbound traffic on a path under the single shared HTTP server (default port `3003`).
 - Validate authenticity (HMAC for webhooks, JWT for Teams, bot token for Telegram, API key for web chat).
-- Apply input filters before dispatch (allowlist for email, allowed-user-id list for Telegram, etc.).
+- Apply input filters before dispatch (allowlist for email, allowed user IDs or handles for Telegram, etc.).
 - Construct a NanoClaw `Message` with channel-specific JID format: `<channel>-<program>@<program>` (e.g., `webhook-email@msbai`, `tg-msbai@msbai`).
 - Hand off to the orchestrator and await the agent's reply.
 - Format reply per channel (HTML for email, Markdown for Telegram, AdaptiveCards for Teams, plain JSON for web chat).

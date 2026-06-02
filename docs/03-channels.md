@@ -30,12 +30,16 @@ Every channel handler MUST:
 - Audit-log the inbound (see [`05-audit-logging.md`](./05-audit-logging.md)) **before** dispatch, so failed runs still leave a trail.
 - Use the same JID for one logical conversation across messages. Telegram uses chat ID; email uses thread/Message-ID; Teams uses conversation reference.
 - Audit-log the outbound right before the channel API call, so a successful agent run that fails to send still leaves a trail of what would have been said.
+- **Fail safe on allowlist reload.** Allowlists live in the program repo and are re-read on a TTL (the reference impl refreshes every 5 minutes). If a reload fails transiently (mid-`git pull`, file briefly absent, parse error), **retain the last-good copy** rather than falling open (admit everyone) or falling fully closed (lock everyone out). A transient read error must not change who can reach the bot.
 
 ## Channel-specific gotchas
 
 ### Email — webhook variant (recommended for production)
 - Inbound is webhook from your email provider. Validate HMAC.
-- The `From` address goes through allowlist; reject silently for non-allowlist senders (don't bounce — leaks bot existence).
+- The `From` address goes through allowlist. Apply a **two-tier rejection policy** — don't blanket-bounce (that leaks bot existence to spoofed addresses and generates backscatter), but don't blanket-silence either (a real colleague who gets no reply assumes the mailbox is broken):
+  - **Unknown / external senders not on the allowlist** → drop silently. No reply.
+  - **Recognized-institution senders not on the allowlist** (e.g., the `From` domain matches your own institution's) → send a courteous, **deduped** "access is currently limited — to request access, contact `<admin>`" reply. Dedupe per sender so a repeat emailer is notified once, not on every message.
+  - Either way, **audit-log the dropped message** (see [`05-audit-logging.md`](./05-audit-logging.md)) so there's a record of who was turned away.
 - Reply via the provider's outbound API. Set `In-Reply-To` and `References` headers to thread correctly.
 - The reply body is HTML — sanitize what comes back from the agent. Use a simple Markdown→HTML pipeline; no scripts.
 
@@ -45,21 +49,24 @@ Use this when you don't have a public webhook URL or your email provider's webho
 - Connect to the mailbox over IMAP using app-password or OAuth2 credentials. For institutional accounts, prefer a dedicated shared mailbox / role mailbox over a personal one.
 - Poll on a fixed cadence (default: every 60 seconds). Use `IDLE` if the server supports it to lower latency.
 - Move processed messages to a `Processed/` folder (or set the `\Seen` flag) so the same message isn't dispatched twice. Idempotency is on you, not the provider.
-- The `From` address goes through allowlist; non-allowlist messages get moved to `Filtered/` silently.
+- The `From` address goes through allowlist, with the same **two-tier policy** as the webhook variant: unknown/external non-allowlist senders are moved to `Filtered/` silently; recognized-institution non-allowlist senders get a courteous, deduped "access is limited — contact `<admin>`" reply before filing. Audit-log the dropped message either way.
 - Reply via SMTP (same provider). Set `In-Reply-To` and `References` headers to thread correctly. Same HTML-body sanitization rules as the webhook variant.
 - **Tradeoffs vs webhook**: simpler to set up (no public URL, no HMAC) and unblocks adoption when IT can't grant webhook access; slower (poll-cycle latency), more brittle (long-running IMAP connections drop), and you eat the storage of the mailbox itself.
 - **Path to webhook**: when you graduate to a VPS/cloud tier, swap the IMAP poller for the webhook handler. The agent prompts, allowlist, audit log, and JID format don't change — only the transport.
 
 ### Telegram
 - Long-poll, not webhook (simpler to deploy, no public endpoint for this channel).
-- Filter on allowed user IDs, not usernames (usernames change, IDs don't).
+- Filter senders against an allowlist. Two options, with a real tradeoff:
+  - **Numeric user IDs** — most robust (IDs never change and can't be reassigned), but high-friction to collect: each stakeholder has to message [@userinfobot](https://t.me/userinfobot) and send you their ID, and the list lives in an env var (`TELEGRAM_ALLOWED_USER_IDS`).
+  - **`@handles` in the shared allowlist** — lower-friction and what the reference implementation does: store Telegram handles right alongside emails in the program repo's `EMAIL_ALLOWLIST.md`, so stakeholder access is managed in one human-readable file with no redeploy. The cost: handles can change or be reassigned, so re-verify periodically. Senders with **no username** are dropped (there's nothing to match).
+  - Pick IDs if your stakeholder set is small and stable and you want maximum robustness; pick handles if you want one allowlist file the program owns. Don't mix silently — be explicit about which one is authoritative.
 - Send a typing indicator while the agent runs — runs can take 30+ seconds.
 - Respect the 4096-character message limit. Split on paragraph boundaries if exceeded.
 - Use Markdown V2; escape `_*[]()~>#+-=|{}.!` in the agent's reply before sending.
 
 **One-time setup (Tier 1):**
 1. In Telegram, message [@BotFather](https://t.me/BotFather), `/newbot`. Pick a display name and a username ending in `bot`. BotFather replies with the bot token — that's `TELEGRAM_BOT_TOKEN`.
-2. To find allowed user IDs (yours and your stakeholders'): each user messages [@userinfobot](https://t.me/userinfobot); it replies with their numeric ID. Comma-separate into `TELEGRAM_ALLOWED_USER_IDS`.
+2. Populate the allowlist (see the filter options above): either collect numeric IDs — each user messages [@userinfobot](https://t.me/userinfobot), comma-separate into `TELEGRAM_ALLOWED_USER_IDS` — or add their `@handle` to a Telegram column in the program repo's `EMAIL_ALLOWLIST.md` (the reference-implementation approach).
 3. Optional: BotFather → `/setprivacy` → Disable, if you want the bot to receive group messages without being @mentioned.
 
 ### Teams (Bot Framework)

@@ -52,6 +52,22 @@ audit_id: 2026-04-25T16-30-22Z-in
 - file2.docx (3.1 KB)
 ```
 
+### Blocked / dropped inbound
+
+A message that fails the allowlist never reaches the agent, but it still gets an inbound entry — "who tried to reach the bot and was turned away" is exactly the kind of question an accreditor or a successor coordinator asks. Log it with `mode: dropped` and a `disposition` field recording how the channel handled it (`silent`, `access-closed-reply`, `filtered`), so the two-tier rejection policy in [`03-channels.md`](./03-channels.md) is auditable:
+
+```yaml
+channel: email
+direction: in
+timestamp: 2026-04-25T16:30:22Z
+sender: unknown@elsewhere.example
+mode: dropped
+disposition: silent          # or: access-closed-reply | filtered
+audit_id: 2026-04-25T16-30-22Z-in
+```
+
+Don't include the raw body of an unauthenticated/unknown sender's message beyond what you need to identify the attempt — it may be spam or spoofed.
+
 ## Outbound file body
 
 ```markdown
@@ -103,6 +119,12 @@ Program-repo citations don't need a snapshot — the git commit SHA at read time
 The exporter commits audit-log files at the **end** of each session (or on each cron tick that finds new messages). One commit per session, message: `chore(audit-log): <channel>/<timestamp>` covering both the inbound and the outbound for that session. This keeps the git history readable without an entry per file.
 
 In status-update mode, the **agent** commits substantive changes (`DECISIONS.md`, `ACTION_ITEMS.md`, `OPEN_QUESTIONS.md`) **before** the session closes — those land first in `git log`. The exporter's audit-log commit comes after, as a trailing commit per conversation. That ordering means an accreditation reviewer scrolling through `git log` sees decisions cleanly grouped, with audit-log entries as separate, traceable trailing commits.
+
+### Concurrent writers: rebase on push-reject
+
+The program repo has more than one writer. Agent containers commit decisions, the exporter commits audit-log entries, a content-sync daemon may commit (pattern C in [`10-content-sources.md`](./10-content-sources.md)), and a human may edit the repo directly. When two of them push close together, the second `git push` is **rejected** (non-fast-forward) — and if the pusher then force-pushes or resets to "win," it silently drops the other writer's commits and the deployed checkout starts diverging from the remote.
+
+The rule for any automated writer (exporter included): **on push-reject, `git pull --rebase` and retry the push; never force-push the program repo.** Rebase replays your audit-log/decision commits on top of whatever landed first, so no writer's history is lost and the VPS checkout stays in lockstep with the remote. If a rebase hits a conflict (rare — audit-log files are append-only and per-session-named, so they almost never collide), fail loudly and leave it for a human rather than auto-resolving.
 
 ## What NOT to log
 

@@ -36,8 +36,9 @@ Every channel handler MUST:
 - Construct a NanoClaw `Message` with channel-specific JID format: `<channel>-<program>@<program>` (e.g., `webhook-email@msbai`, `tg-msbai@msbai`).
 - Hand off to the orchestrator and await the agent's reply.
 - Format reply per channel (HTML for email, Markdown for Telegram, AdaptiveCards for Teams, plain JSON for web chat).
+- Pass the formatted reply through a shared **delivery gate** before send. The gate validates outbound content against a per-channel profile — extract the intended reply block, refuse known agent-scaffolding signatures (session narration, literal prompt/tool markup), and account for delivery completeness (every intended recipient either receives the send or the shortfall is reported loudly). A reply the gate refuses MUST NOT be sent; refusals surface to the operator, never silently drop. Gate verdicts MUST be machine-logged to the audit trail so a "gate passed" claim is verifiable. *(Added after a July 2026 production incident in which raw session scaffolding shipped to stakeholders because the send path bypassed formatting — treat outbound validation as part of the channel contract, not a courtesy.)*
 - Send via the channel's outbound API.
-- Trigger audit-log writes for both inbound and outbound.
+- Trigger audit-log writes for both inbound and outbound, including delivery-status events (bounces, complaints) reported back by the outbound provider.
 
 See [`docs/03-channels.md`](./docs/03-channels.md) for per-channel details.
 
@@ -80,6 +81,8 @@ For every inbound message, write a file to `discussions/audit-log/<channel>/<tim
 
 For every outbound reply, write `discussions/audit-log/<channel>/<timestamp>-out.md` containing:
 - channel, recipient, timestamp, reply body, mode used (question/status), files modified (if any), commit SHAs (if any).
+
+Implementations MAY instead aggregate all channels' entries into one daily append-only file (`discussions/audit-log/YYYY-MM-DD.md`), as the reference deployment does — the contract is the required fields and append-only behavior, not the file layout. Whichever layout is used, delivery-gate verdicts and delivery problems (bounces, complaints) are appended alongside message entries.
 
 The audit log is the only persistent store outside of NanoClaw's SQLite — it's what survives container destruction and what gets reviewed for accreditation.
 
@@ -135,4 +138,4 @@ This spec does **not** cover:
 
 ## 10. Reference implementation
 
-A production deployment running this spec serves an online Master's program at a U.S. business school. Source is private; behavior matches every requirement in this document. Excerpts and architecture diagrams in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+A production deployment running this spec serves an online Master's program at a U.S. business school. Source is private. The deployment tracks this spec with two noted deviations: it runs three of the spec's channel types (email, Telegram, web chat — its Teams and Copilot Studio handlers were retired in June 2026), and it uses the daily-file audit-log layout (§6). Excerpts and architecture diagrams in [`ARCHITECTURE.md`](./ARCHITECTURE.md).

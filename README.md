@@ -89,7 +89,7 @@ Cloning a templated repo gets stale fast (NanoClaw moves, your program is differ
 
 ## Production reference
 
-This spec was extracted from a production deployment serving an online Master's program at a U.S. business school. The deployment handles email + Telegram + Teams + web chat + Microsoft Copilot Studio, runs in Docker on a small VPS, and commits to a private program repo. Source for that instance is private (it contains stakeholder PII and program-specific strategy); the spec here is the part that generalizes.
+This spec was extracted from a production deployment serving an online Master's program at a U.S. business school. The deployment handles email + Telegram + web chat (Teams and Copilot Studio handlers were built early on and retired in June 2026, once it was clear stakeholders didn't use them), runs in Docker on a small VPS, and commits to a private program repo. Source for that instance is private (it contains stakeholder PII and program-specific strategy); the spec here is the part that generalizes.
 
 ---
 

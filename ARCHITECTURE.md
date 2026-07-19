@@ -7,11 +7,11 @@ How ProgramOS sits on top of NanoClaw, and what's adopter-supplied vs framework-
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                         Stakeholder channels                         │
-│   Email   Telegram   Teams (BF)   Teams (Webhook)   Web   Copilot    │
-└────┬─────────┬────────────┬──────────────┬───────────┬──────────┬────┘
-     │         │            │              │           │          │
-     │         │            │              │           │          │
-     ▼         ▼            ▼              ▼           ▼          ▼
+│              Email        Telegram        Web Chat                   │
+│   (the reference also ran Teams + Copilot handlers, retired 2026-06) │
+└────────────────┬──────────────┬───────────────┬──────────────────────┘
+                 │              │               │
+                 ▼              ▼               ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │   src/channels/*.ts  ── handler per channel (ADOPTER-SUPPLIED)       │
 │   • auth (HMAC / JWT / bot token / API key)                          │
@@ -99,14 +99,16 @@ The agent runs the same Claude Code container in both modes; only the sandbox fl
 Every inbound: `discussions/audit-log/<channel>/<ISO-timestamp>-in.md`.
 Every outbound: `discussions/audit-log/<channel>/<ISO-timestamp>-out.md`.
 
+(The reference deployment uses the daily-file layout from SPEC §6 instead — one append-only `discussions/audit-log/YYYY-MM-DD.md` across all channels, which also carries delivery-gate verdicts and delivery-problem events.)
+
 Files are committed in batch at the end of each container run, attributed to the bot's git identity. Status-update runs commit decision/action/question changes separately from audit-log commits, so accreditation reviewers can see decisions cleanly without log noise.
 
 ## What you actually build
 
 For a brand-new ProgramOS on a brand-new NanoClaw fork, expect roughly:
 
-- **6 channel handlers** (~150 lines each) in `src/channels/`
-- **6 agent prompts** in `groups/<channel>/CLAUDE.md`
+- **1 channel handler per channel** (~150 lines each) in `src/channels/` — the reference runs 3 (email, Telegram, web chat) after retiring its Teams and Copilot handlers
+- **1 agent prompt per channel** in `groups/<channel>/CLAUDE.md`, plus a shared `groups/global/CLAUDE.md` playbook
 - **1 audit-log module** (~80 lines) in `src/audit-log.ts`
 - **2 small NanoClaw hooks** in `src/index.ts` and `src/container-runner.ts` (audit logging + container chown patch)
 - **Program repo** in a separate repository

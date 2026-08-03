@@ -41,6 +41,7 @@ You're already comfortable running a NanoClaw deployment (Docker, a VPS, a webho
 | [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md) | Laptop → VPS → Cloud. What changes between tiers (channels, ingress, secrets), what stays constant (program repo, audit log, skill loop). |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | UIUC-specific recipe for letting an `@illinois.edu` address talk to the bot without an M365 admin app registration (forwarding rule + external inbound). |
 | [`docs/10-content-sources.md`](./docs/10-content-sources.md) | How to relate an external content store (Box, SharePoint, network share) to ProgramOS. Three patterns; recommended default is "coexist + bot-as-frontend" — team keeps editing in Box, bot reads both stores and labels every claim. |
+| [`docs/11-multi-program-mesh.md`](./docs/11-multi-program-mesh.md) | Deploying multiple ProgramOS agents across programs at one institution. Two-level KB hierarchy, per-agent Nostr identity, A2A cross-agent routing, and shared-policy deduplication. |
 | [`scripts/init.sh`](./scripts/init.sh) | One-command bootstrap for a new adopter — scaffolds a program repo and seeds it with a brainstorm prompt. |
 | [`examples/BRAINSTORM.md`](./examples/BRAINSTORM.md) | Discovery prompt the bootstrap drops into the new repo; hand it to your coding agent. |
 | [`examples/groups/`](./examples/groups/) | Generic per-channel agent instruction templates. |

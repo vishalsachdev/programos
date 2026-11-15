@@ -39,3 +39,6 @@ agents-sdk-docs
 
 __pycache__/
 *.pyc
+
+# wrangler cache
+.wrangler/

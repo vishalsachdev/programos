@@ -30,4 +30,5 @@ if [[ "${1:-}" == "--dry-run" ]]; then
     exit 0
 fi
 
-npx wrangler pages deploy "$PUBLIC" --project-name "$PROJECT" --branch main
+# wrangler reads CLOUDFLARE_API_TOKEN. Without it, wrangler uses its own login.
+npx wrangler pages deploy "$PUBLIC" --project-name "$PROJECT" --branch main --commit-dirty=true

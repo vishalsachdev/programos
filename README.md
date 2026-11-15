@@ -4,7 +4,7 @@ A coordinator bot for a project or program team, and the knowledge base it keeps
 
 The bot answers questions from an allowlisted team by email (and Telegram for the admin), with citations into a git repo that is the team's source of truth. It records decisions, action items and open questions in that repo, sends reminders, routes approval requests to the right person, checks its replies before they are sent, and keeps an audit log.
 
-> **Status: work in progress on a local branch.** The code in this repo is a first export. `AGENTS.md`, the settings example and the governance doc are new. The code is the source of truth; older docs that restated it were removed.
+> **Status: first public version (2026-11-14).** The code in this repo is a first export. `AGENTS.md`, the settings example and the governance doc are new. The code is the source of truth; older docs that restated it were removed.
 
 ## What you get
 
@@ -68,7 +68,8 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/deployment.md`](./docs/deployment.md) | What kind of host works and what to start with | Yes |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
-| [`docs/12-governance.md`](./docs/12-governance.md)(./docs/12-governance.md) | The numbered rules and how to change one | Draft |
+| [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |
+| [`site/`](./site/) | The public page and its deploy script | Yes |
 | [`docs/reminder-registry.md`](./docs/reminder-registry.md) | Template for the list of scheduled jobs | Yes |
 | [`docs/evaluation-protocol.md`](./docs/evaluation-protocol.md), [`docs/capability-scenarios.md`](./docs/capability-scenarios.md) | How the bot is evaluated | Yes |
 | [`docs/framework/`](./docs/framework/) | NanoClaw's own reference docs | Upstream text |

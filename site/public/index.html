@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ProgramOS: a coordinator bot and the record it keeps</title>
+    <meta
+      name="description"
+      content="ProgramOS is an open-source coordinator bot for a project or program team. It answers from a git knowledge base with citations, records decisions, and checks every reply before it is sent. Clone it and adapt it with your coding agent."
+    />
+    <meta property="og:title" content="ProgramOS" />
+    <meta
+      property="og:description"
+      content="A coordinator bot for a project team, and the knowledge base it keeps. Clone it and adapt it with your coding agent."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://programos.illinihunt.org/" />
+    <link rel="canonical" href="https://programos.illinihunt.org/" />
+    <style>
+      :root {
+        --paper: #f5f2ea;
+        --card: #fffdf8;
+        --ink: #1d1c19;
+        --soft: #5d5a52;
+        --line: #d9d3c4;
+        --accent: #0e5a4b;
+        --accent-soft: #e2efe9;
+        --warn: #8a4b12;
+        --warn-soft: #f6ead9;
+        --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #151715;
+          --card: #1d201d;
+          --ink: #e9e6dd;
+          --soft: #a9a59a;
+          --line: #353a35;
+          --accent: #74cdb3;
+          --accent-soft: #1d2f2a;
+          --warn: #e3b27a;
+          --warn-soft: #2e261b;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-text-size-adjust: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 17px/1.6 var(--sans);
+      }
+      a {
+        color: var(--accent);
+        text-underline-offset: 3px;
+      }
+      a:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 0.88em;
+        overflow-wrap: anywhere;
+      }
+      .wrap {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 0 20px;
+      }
+      header.top {
+        border-bottom: 1px solid var(--line);
+      }
+      header.top .wrap {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 24px;
+        align-items: baseline;
+        justify-content: space-between;
+        padding-top: 16px;
+        padding-bottom: 16px;
+      }
+      .mark {
+        font: 700 1.15rem var(--serif);
+        letter-spacing: 0.01em;
+        color: var(--ink);
+        text-decoration: none;
+      }
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 20px;
+        font-size: 0.95rem;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+        gap: 48px;
+        align-items: center;
+        padding: 64px 0 56px;
+      }
+      h1 {
+        font: 700 clamp(2.1rem, 5.2vw, 3.3rem) / 1.1 var(--serif);
+        margin: 0 0 20px;
+        text-wrap: balance;
+      }
+      .lede {
+        font-size: 1.15rem;
+        color: var(--soft);
+        margin: 0 0 28px;
+        max-width: 34em;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .btn {
+        display: inline-block;
+        padding: 11px 20px;
+        border: 1.5px solid var(--accent);
+        border-radius: 4px;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--paper);
+      }
+      .proof {
+        margin: 28px 0 0;
+        padding-left: 14px;
+        border-left: 3px solid var(--accent);
+        color: var(--soft);
+        font-size: 0.97rem;
+        max-width: 36em;
+      }
+      /* The exchange: the one illustration on the page. */
+      .exchange {
+        margin: 0;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        font-size: 0.93rem;
+        box-shadow: 6px 6px 0 var(--line);
+      }
+      .exchange figcaption {
+        padding: 8px 16px;
+        border-bottom: 1px solid var(--line);
+        font: 0.74rem var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--soft);
+      }
+      .msg {
+        padding: 16px;
+      }
+      .msg + .msg {
+        border-top: 1px dashed var(--line);
+      }
+      .msg .who {
+        font: 0.78rem var(--mono);
+        color: var(--soft);
+        margin: 0 0 6px;
+      }
+      .msg p {
+        margin: 0 0 10px;
+      }
+      .msg p:last-child {
+        margin-bottom: 0;
+      }
+      .cite {
+        display: inline-block;
+        font: 0.8rem var(--mono);
+        background: var(--accent-soft);
+        color: var(--accent);
+        padding: 1px 7px;
+        border-radius: 3px;
+        overflow-wrap: anywhere;
+      }
+      .trail {
+        list-style: none;
+        margin: 0;
+        padding: 12px 16px;
+        border-top: 1px solid var(--line);
+        font: 0.78rem/1.7 var(--mono);
+        color: var(--soft);
+      }
+      .trail li::before {
+        content: "\2713\00a0";
+        color: var(--accent);
+      }
+      section {
+        padding: 56px 0;
+        border-top: 1px solid var(--line);
+      }
+      .label {
+        font: 0.76rem var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin: 0 0 8px;
+      }
+      h2 {
+        font: 700 clamp(1.5rem, 3.4vw, 2rem) / 1.2 var(--serif);
+        margin: 0 0 16px;
+        text-wrap: balance;
+      }
+      .intro {
+        color: var(--soft);
+        max-width: 42em;
+        margin: 0 0 32px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 16px;
+      }
+      .cell {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 18px 20px;
+      }
+      .cell h3 {
+        font: 600 1.02rem var(--sans);
+        margin: 0 0 6px;
+      }
+      .cell p {
+        margin: 0;
+        color: var(--soft);
+        font-size: 0.95rem;
+      }
+      ol.path {
+        list-style: none;
+        counter-reset: step;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 12px;
+      }
+      ol.path li {
+        counter-increment: step;
+        border-top: 3px solid var(--accent);
+        padding: 12px 4px 0 0;
+        font-size: 0.95rem;
+        color: var(--soft);
+      }
+      ol.path li::before {
+        content: counter(step, decimal-leading-zero);
+        display: block;
+        font: 0.8rem var(--mono);
+        color: var(--accent);
+      }
+      ol.path strong {
+        display: block;
+        color: var(--ink);
+      }
+      ol.steps {
+        margin: 0;
+        padding-left: 1.3em;
+        max-width: 44em;
+      }
+      ol.steps li {
+        margin-bottom: 12px;
+        padding-left: 4px;
+      }
+      pre {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 14px 16px;
+        margin: 10px 0 0;
+        font: 0.88rem/1.5 var(--mono);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .limits {
+        background: var(--warn-soft);
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--warn);
+        border-radius: 6px;
+        padding: 20px 22px;
+        margin-top: 28px;
+      }
+      .limits h3 {
+        margin: 0 0 8px;
+        font: 600 1.02rem var(--sans);
+        color: var(--warn);
+      }
+      .limits ul {
+        margin: 0 0 12px;
+        padding-left: 1.2em;
+      }
+      .limits li {
+        margin-bottom: 6px;
+      }
+      .limits p {
+        margin: 0;
+      }
+      dl.docs {
+        display: grid;
+        grid-template-columns: minmax(0, 15em) minmax(0, 1fr);
+        gap: 0;
+        margin: 0;
+        border-top: 1px solid var(--line);
+      }
+      dl.docs dt,
+      dl.docs dd {
+        margin: 0;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      dl.docs dt {
+        font-family: var(--mono);
+        font-size: 0.9rem;
+        padding-right: 16px;
+        overflow-wrap: anywhere;
+      }
+      dl.docs dd {
+        color: var(--soft);
+      }
+      footer {
+        border-top: 1px solid var(--line);
+        padding: 28px 0 48px;
+        color: var(--soft);
+        font-size: 0.9rem;
+      }
+      @media (max-width: 780px) {
+        .hero {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 36px;
+          padding: 40px 0;
+        }
+        section {
+          padding: 40px 0;
+        }
+        dl.docs {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        dl.docs dt {
+          border-bottom: 0;
+          padding-bottom: 0;
+        }
+        dl.docs dd {
+          padding-top: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap">
+        <a class="mark" href="#top">ProgramOS</a>
+        <nav aria-label="Sections">
+          <a href="#what">What it does</a>
+          <a href="#source">Where it comes from</a>
+          <a href="#start">Start</a>
+          <a href="#safety">Safety</a>
+          <a href="https://github.com/vishalsachdev/programos">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top" class="wrap">
+      <div class="hero">
+        <div>
+          <h1>A coordinator for your team, and the record it keeps.</h1>
+          <p class="lede">
+            ProgramOS is a bot that answers your team's questions by email, from a git repository that is the team's
+            source of truth. It cites the file behind each answer. It writes down decisions, action items and open
+            questions as they happen.
+          </p>
+          <div class="actions">
+            <a class="btn primary" href="https://github.com/vishalsachdev/programos">Clone it on GitHub</a>
+            <a class="btn" href="#start">How to start</a>
+          </div>
+          <p class="proof">
+            The code is a close copy of a coordinator that has been tested in production with one program since April
+            2026. It is open source under the MIT license.
+          </p>
+        </div>
+
+        <figure class="exchange" aria-label="An example exchange with made-up content">
+          <figcaption>Example exchange (made-up content)</figcaption>
+          <div class="msg">
+            <p class="who">From a team member, by email</p>
+            <p>Did we decide who signs off on the vendor contract? I need to send it this week.</p>
+          </div>
+          <div class="msg">
+            <p class="who">From the coordinator</p>
+            <p>
+              Yes. On March 4 the team decided that the operations lead signs contracts under the spending limit, and
+              the director signs above it.
+              <span class="cite">discussions/DECISIONS.md</span>
+            </p>
+            <p>
+              One related question is still open: the spending limit for next year is not set.
+              <span class="cite">discussions/OPEN_QUESTIONS.md</span>
+            </p>
+          </div>
+          <ul class="trail">
+            <li>sender is on the allowlist</li>
+            <li>reply passed the delivery gate</li>
+            <li>exchange written to the audit log</li>
+          </ul>
+        </figure>
+      </div>
+
+      <section id="what">
+        <p class="label">What it does</p>
+        <h2>One place where questions get answered from the record.</h2>
+        <p class="intro">
+          It is for a team that runs a project, a program, a grant, a lab or a unit. The knowledge base is a plain git
+          repository of Markdown files that your team owns.
+        </p>
+        <div class="grid">
+          <div class="cell">
+            <h3>Answers with citations</h3>
+            <p>It searches the repository and replies with the file path behind each statement. It does not invent content.</p>
+          </div>
+          <div class="cell">
+            <h3>Records what the team decides</h3>
+            <p>Send it a status update. It extracts decisions, action items and open questions, and commits them.</p>
+          </div>
+          <div class="cell">
+            <h3>Sends reminders</h3>
+            <p>Scheduled jobs remind owners of action items and send regular summaries.</p>
+          </div>
+          <div class="cell">
+            <h3>Routes approvals</h3>
+            <p>A change that needs a person's approval goes to the person who has that authority, and waits for the answer.</p>
+          </div>
+          <div class="cell">
+            <h3>Checks replies before they are sent</h3>
+            <p>A delivery gate on the host inspects each reply. A reply that fails is held, and the operator is told.</p>
+          </div>
+          <div class="cell">
+            <h3>Keeps an audit log</h3>
+            <p>Accepted messages and replies are written to a log in your own repository.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="how">
+        <p class="label">How a message moves</p>
+        <h2>The agent works in a container. The host decides what leaves.</h2>
+        <ol class="path">
+          <li><strong>Message arrives</strong>Email, or Telegram for the admin.</li>
+          <li><strong>Allowlist check</strong>Only listed senders get an answer. The list is a file in your repository.</li>
+          <li><strong>Agent in a container</strong>It sees only the folders you mount. Your credentials stay on the host.</li>
+          <li><strong>Delivery gate</strong>The host checks the reply and its recipients.</li>
+          <li><strong>Reply and record</strong>The reply is sent. The repository and the audit log are updated.</li>
+        </ol>
+      </section>
+
+      <section id="source">
+        <p class="label">Where the code comes from</p>
+        <h2>What was tested in real use, not a rewrite that nobody has run.</h2>
+        <p class="intro">
+          The code is a close copy of K-ai, a coordinator for one online master's program. K-ai has been tested in
+          production with one program since April 2026. It is built on
+          <a href="https://github.com/qwibitai/nanoclaw">NanoClaw</a> (MIT).
+        </p>
+        <div class="grid">
+          <div class="cell">
+            <h3>Content removed, code kept</h3>
+            <p>The program's people, addresses, policies and history were removed. The code was not redesigned.</p>
+          </div>
+          <div class="cell">
+            <h3>The same tests pass</h3>
+            <p>The 1,761 tests that pass in K-ai pass in this repository. They run on every change.</p>
+          </div>
+          <div class="cell">
+            <h3>It stays current</h3>
+            <p>K-ai stays the source. This repository takes its changes through a repeatable export.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="start">
+        <p class="label">Start</p>
+        <h2>Clone it. Your coding agent does the adapting.</h2>
+        <p class="intro">
+          You need a host that can run Docker, a mail address for the bot, a git host for the knowledge base, and an AI
+          service that your organization allows your mail to reach. Check that last point first.
+        </p>
+        <ol class="steps">
+          <li>Clone the repository.
+            <pre>git clone https://github.com/vishalsachdev/programos.git</pre>
+          </li>
+          <li>Open it with your coding agent (Claude Code, Codex, Cursor or another) and say:
+            <pre>Read AGENTS.md and help me adapt this for my project.</pre>
+          </li>
+          <li>
+            The agent asks you six questions before it changes anything: which AI service is allowed, who approves,
+            which address the bot uses, where data lives, what senders are told, and which channels you want.
+          </li>
+          <li>It creates your knowledge-base repository, fills in the settings, and keeps the tests passing.</li>
+          <li>You review a test exchange. You decide when to deploy.</li>
+        </ol>
+      </section>
+
+      <section id="safety">
+        <p class="label">Safety</p>
+        <h2>Numbered rules, each with the failure it prevents.</h2>
+        <p class="intro">
+          The bot works under a set of numbered governance rules. The code, the prompts and the tests cite the rule
+          numbers. Role and access changes are made by the admin only, never because a message asked.
+        </p>
+        <div class="limits">
+          <h3>Where the guarantees stop</h3>
+          <ul>
+            <li>The person allowlist holds for email and Telegram. Web chat checks a shared secret only.</li>
+            <li>Use Telegram with one chat only. With two or more chats, a reply can go to the wrong chat.</li>
+            <li>Sender caps apply to email only, and they reset when the process restarts.</li>
+            <li>Email needs a separate intake service that is not in the repository.</li>
+          </ul>
+          <p>
+            The full list is in
+            <a href="https://github.com/vishalsachdev/programos/blob/main/SPEC.md#11-where-the-guarantees-stop">SPEC.md, section 11</a>.
+            Read it before you rely on a rule.
+          </p>
+        </div>
+      </section>
+
+      <section id="docs">
+        <p class="label">Read next</p>
+        <h2>The code is the source of truth. The documents cover what code cannot say.</h2>
+        <dl class="docs">
+          <dt><a href="https://github.com/vishalsachdev/programos/blob/main/AGENTS.md">AGENTS.md</a></dt>
+          <dd>The guide for your coding agent: what to ask, what to replace, safety items, first start.</dd>
+          <dt><a href="https://github.com/vishalsachdev/programos/blob/main/SPEC.md">SPEC.md</a></dt>
+          <dd>The contract: components, channels, modes, knowledge-base layout, audit log.</dd>
+          <dt><a href="https://github.com/vishalsachdev/programos/blob/main/docs/deployment.md">docs/deployment.md</a></dt>
+          <dd>What kind of host works, and what to start with.</dd>
+          <dt><a href="https://github.com/vishalsachdev/programos/blob/main/docs/12-governance.md">docs/12-governance.md</a></dt>
+          <dd>The numbered rules and how to change one.</dd>
+          <dt><a href="https://github.com/vishalsachdev/programos/tree/main/templates/program-repo">templates/program-repo/</a></dt>
+          <dd>A starter knowledge-base repository, in the formats the code reads.</dd>
+        </dl>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        ProgramOS is open source under the MIT license. The code derived from NanoClaw carries NanoClaw's MIT notice.
+        <a href="https://github.com/vishalsachdev/programos">github.com/vishalsachdev/programos</a>
+      </div>
+    </footer>
+  </body>
+</html>

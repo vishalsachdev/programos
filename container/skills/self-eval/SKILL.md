@@ -1,6 +1,6 @@
 ---
 name: self-eval
-description: Self-evaluation protocol — append structured eval metadata to every response
+description: Use when preparing a response that requires structured self-evaluation metadata.
 ---
 
 # Self-Evaluation Protocol
@@ -25,7 +25,7 @@ After composing your response to the user, **always** append a self-evaluation b
 
 ## Rules
 
-1. **Always emit** — every response must include this block, even error messages
+1. **Always emit** — every response must include this block, even error messages. The one exception is a task whose final output must be only a JSON object (the weekly outreach run).
 2. **Be honest** — if you're uncertain, say `low`. This data drives system improvements
 3. **Keep it brief** — the notes field is for one sentence, not a paragraph
 4. **Place last** — the eval block goes at the very end of your response, after all user-facing content
@@ -34,7 +34,7 @@ After composing your response to the user, **always** append a self-evaluation b
 
 Question with strong citation:
 ```
-<internal><eval>{"confidence":"high","has_citation":true,"category":"question","topics":["curriculum","credits"],"notes":"Answered from program/CURRICULUM.md line 42"}</eval></internal>
+<internal><eval>{"confidence":"high","has_citation":true,"category":"question","topics":["curriculum","credits"],"notes":"Answered from program/curriculum.md line 42"}</eval></internal>
 ```
 
 Status update processed:

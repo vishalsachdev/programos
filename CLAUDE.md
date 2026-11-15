@@ -4,7 +4,7 @@ Notes for Claude (and future maintainers) working on this repo. Adopter-facing d
 
 ## Scope of this repo
 
-ProgramOS is a **clonable implementation** (since 2026-11-14; before that it was a spec only). Adopters clone this repo and their coding agent follows `AGENTS.md`. The code in `src/`, `container/`, `groups/`, `setup/` and `scripts/` is an export from the reference deployment; `UPSTREAM.md` records the version. Do not hand-edit exported code here: fix it at the source and re-export, or record the edit so the next export repeats it. Files owned by this repo: `AGENTS.md`, `README.md`, `SPEC.md`, `ARCHITECTURE.md`, `config/`, `templates/`, `docs/12-governance.md`, `docs/deployment.md`, `docs/design/`, `plans/`, `site/`. The full list is `OWNED` in `scripts/upstream-sync/export.py`.
+ProgramOS is a **clonable implementation** (since 2026-11-14; before that it was a spec only). Adopters clone this repo and their coding agent follows `AGENTS.md`. The code in `src/`, `container/`, `groups/`, `setup/` and `scripts/` is an export from the reference deployment; `UPSTREAM.md` records the version. Do not hand-edit exported code here: fix it at the source and re-export, or record the edit so the next export repeats it. The authoritative list of files this repo owns is `OWNED` in `scripts/upstream-sync/export.py`, including `scripts/upstream-sync/` itself; exports never overwrite those paths.
 
 Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup guidance lives in `docs/09-illinois-quickstart.md`. The optional palette for the Illinois public site lives in `site/themes/illinois.css`.
 

@@ -1,6 +1,6 @@
 ---
 name: kb-conflict-check
-description: Runs a separate skeptical-reviewer pass before any DECISIONS.md commit to detect contradictions with existing entries — and, for facts sourced from external documents (spreadsheets, policy docs, meeting notes), cross-checks them against incumbent statements in courses/*.md and program/ files (v2 ingestion cross-check). Required step in the KB Write Protocol — invoke before staging a new DECISIONS.md entry, never after.
+description: Use when a new DECISIONS.md entry is ready for staging, including facts from external documents that may conflict with existing knowledge.
 ---
 
 # KB Conflict Check — Pre-Commit Gate
@@ -11,7 +11,7 @@ A second-pass conflict detector for `discussions/DECISIONS.md`. The same model t
 
 **v2.1 (G47 amendments + G51):** (a) a spreadsheet-cell fact with NO incumbent anywhere in the KB and no corroborating prose routes to `discussions/OPEN_QUESTIONS.md` — never into DECISIONS.md at any confidence (Step 2b, `route: open-questions`); (b) the cross-check script extracts distinctive phrases from the proposed entry text itself (deterministic 2-3-gram extraction — no hand-curated term list to go stale); (c) every gate script run's JSON verdict is reported to the host audit log via IPC (Step 2c) so "gate result: clean" claims have a machine-logged counterpart.
 
-**You MUST invoke this skill before committing any new entry to `discussions/DECISIONS.md`.** It is the programmatic counterpart to the conventions in `/workspace/extra/program-repo/CLAUDE.md` § "KB Write Protocol".
+Invoke this skill before you commit any new entry to `discussions/DECISIONS.md`. It is the programmatic counterpart to the conventions in `/workspace/extra/program-repo/CLAUDE.md` § "KB Write Protocol".
 
 If the user message contains `lore: intentional` (or `this supersedes`, `overrides the previous decision`, `intentional change`), **skip this skill entirely** and follow the supersede path in the KB Write Protocol instead — the user has signaled an intentional override and the gate would be in the way.
 
@@ -93,7 +93,7 @@ For the Step 3 skeptical-reviewer verdict, send a second payload with `"gate": "
 
 ### Step 3 — Spawn a skeptical-reviewer subagent
 
-**Use the Task tool with `subagent_type: "kb-gate-reviewer"`** to spawn a fresh subagent. This agent type is registered by the agent runner and runs on a stronger model than the main session (Opus tier by default — `NANOCLAW_GATE_MODEL`), because false negatives here corrupt the KB silently. The subagent must NOT see your reasoning or the original message — only the proposed entry and the related entries. This is the core of the gate: a separate context, separate model call. If the `kb-gate-reviewer` agent type is unavailable (e.g. an older agent runner), fall back to a plain Task subagent with the same prompt.
+**Use the Task tool with `subagent_type: "kb-gate-reviewer"`** to spawn a fresh subagent. This agent type is registered by the agent runner and runs on the model set by `NANOCLAW_GATE_MODEL` (default `opus`), in its own context, because false negatives here corrupt the KB silently. The subagent must NOT see your reasoning or the original message — only the proposed entry and the related entries. This is the core of the gate: a separate context, separate model call. If the `kb-gate-reviewer` agent type is unavailable (e.g. an older agent runner), fall back to a plain Task subagent with the same prompt.
 
 **CRITICAL — subagent output must stay internal.** The subagent inherits the parent container's `NANOCLAW_CHAT_JID`. Any text it emits that is not wrapped in `<internal>` tags **will be delivered to the stakeholder** as a reply from Coordinator. The prompt below wraps the verdict in `<internal>` to prevent this. Do not remove that wrapper.
 
@@ -195,7 +195,7 @@ Parse the subagent's output. Strip the `<internal>…</internal>` wrapper first 
    `courses/quantum_optimization.md:NNN` — [the incumbent line/passage, quoted verbatim]
    ```
 3. Commit the triage file with message: `kb-triage: flagged [topic] for human review — see kb-triage/YYYY-MM-DD-conflicts.md`
-4. **Notify Avery** via Telegram with a brief message: `KB conflict flagged for review: [topic]. Proposed entry in kb-triage/YYYY-MM-DD-conflicts.md. I did NOT commit to DECISIONS.md.` Use the `mcp__nanoclaw__send_telegram` tool (or the standard reply path on the Telegram channel). This admin ping is separate from email-thread CC routing.
+4. **Tell Avery** only on the Telegram channel, in your normal reply: `KB conflict flagged for review: [topic]. Proposed entry in kb-triage/YYYY-MM-DD-conflicts.md. I did NOT commit to DECISIONS.md.` There is no Telegram tool in this container. On other channels the host lists open kb-triage holds in its exceptions report; do not claim you notified Avery.
 5. In your reply to the original sender:
    - **DECISIONS-vs-DECISIONS conflict:** briefly acknowledge: "I noted [topic] but flagged a possible contradiction with prior records — the appropriate approver will review and confirm." Do not paraphrase the conflicting entries; the human resolves.
    - **Ingestion cross-check mismatch (source document vs. KB file):** name the discrepancy explicitly so the submitter can fix their document — quote both sides: "Your document says [X, with sheet/row]; the KB course file (`courses/….md`) says [Y]. Please confirm which is correct — I have NOT recorded this fact yet." The submitter owns the document and is the fastest path to resolution; this is the one conflict class where quoting both statements in the reply is required, not forbidden.
@@ -232,7 +232,7 @@ rm -rf /tmp/kb-conflict
 
 - It does not resolve conflicts. The human resolves.
 - It does not validate semantic correctness of the new decision (e.g. it won't catch a wrong date that conflicts with nothing — neither a DECISIONS entry nor any incumbent course/program statement).
-- It does not re-check entries on every commit. Aging-entry detection lives in the weekly FDE scan (Step 6).
+- It does not re-check entries on every commit or detect aging entries.
 
 ---
 

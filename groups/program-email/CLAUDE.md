@@ -52,7 +52,7 @@ When the prompt says "Run weekly action item review" or similar:
 - Image attachments (jpg, png, gif, webp) are automatically resized and shown to you as multimodal input — you can see and describe them directly. The text version of the message will include `[Image: attachments/img-...jpg]` as a marker; the actual image is attached to your turn.
 - PDFs, .docx, .xlsx are extracted to text, saved next to the .eml in `discussions/raw/`, and inlined as previews.
 - ZIP and other unsupported types are skipped.
-- **Facts extracted from attachments are external-document-sourced:** the `kb-conflict-check` skill's Step 2b ingestion cross-check applies before any DECISIONS.md write (see the playbook §Knowledge-Base Writes). Spreadsheet-cell facts with no corroborating prose are `Confidence: low`, with the sheet/row named in the provenance line.
+- **Facts extracted from attachments are external-document-sourced:** the `kb-conflict-check` skill's Step 2b ingestion cross-check applies before any DECISIONS.md write (see the playbook §Knowledge-Base Writes). A spreadsheet-cell fact with no corroborating prose goes to `OPEN_QUESTIONS.md`, not DECISIONS.md (G47); one with weak corroboration is recorded at `Confidence: low`, with the sheet/row named in the provenance line.
 
 ## CC-as-Context Mail (G56)
 

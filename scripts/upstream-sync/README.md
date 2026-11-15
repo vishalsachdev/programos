@@ -25,6 +25,7 @@ Safety rules in the tool (tested in `test_export.py`):
 After `--apply`:
 
 1. Update the version in `UPSTREAM.md`.
+   Reapply `scripts/upstream-sync/prompt-audit-2026-11-15.patch` with `git apply --check` followed by `git apply`. If it no longer applies, reconcile its prompt safeguards against the new export before continuing; do not silently discard them. The patch includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`.
 2. Run `npx tsc --noEmit` and `npx vitest run`. All tests must pass with none skipped.
 3. Run a secret scan (`gitleaks detect --no-git -s .`).
 4. Read the diff. New files need the closest look: a new file can carry names that no rule covers yet.

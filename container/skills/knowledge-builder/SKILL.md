@@ -1,6 +1,6 @@
 ---
 name: knowledge-builder
-description: Auto-FAQ and pattern library — builds institutional knowledge from conversation history
+description: Use when asked to identify recurring questions or patterns from authorized conversation history for institutional knowledge.
 ---
 
 # Knowledge Builder
@@ -39,7 +39,7 @@ Rules for FAQ updates:
 - Only add entries from high-confidence answers with citations
 - Merge similar questions into one entry with the best answer
 - Update `Last verified` date if the same question was answered again
-- Remove entries if the source file has changed significantly (flag for review instead)
+- If an entry's source file has changed significantly, flag the entry for review; do not remove it
 - Keep the FAQ organized by topic category (Curriculum, Admissions, Courses, Faculty, etc.)
 
 ### Step 4: Update Patterns Library

@@ -1,6 +1,6 @@
 ---
 name: kb-entry-gate
-description: Duplicate/redundancy/conflict gate for ACTION_ITEMS.md and OPEN_QUESTIONS.md — lexical pre-filter plus a semantic subagent verdict. Use before appending new action items or open questions.
+description: Use when adding an action item or open question that may duplicate or conflict with existing entries.
 ---
 
 # KB Entry Gate (v2 — semantic)
@@ -66,8 +66,8 @@ this gate exists to catch are exactly the ones the script cannot see.
 ### Step 3 — Semantic verdict (subagent, ALWAYS on lexical clean)
 
 Spawn a subagent via the Task tool with `subagent_type: "kb-gate-reviewer"`
-(registered by the agent runner; runs on a stronger model than the main
-session — Opus tier by default via `NANOCLAW_GATE_MODEL` — because the
+(registered by the agent runner; runs in its own context on the model set by
+`NANOCLAW_GATE_MODEL`, default `opus`, because the
 premise-check misses this gate exists to catch are reasoning failures. Fall
 back to a plain Task subagent if the agent type is unavailable). Its prompt
 must contain:

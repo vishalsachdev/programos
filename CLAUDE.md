@@ -4,7 +4,7 @@ Notes for Claude (and future maintainers) working on this repo. Adopter-facing d
 
 ## Scope of this repo
 
-ProgramOS is a **clonable implementation** (since 2026-11-14; before that it was a spec only). Adopters clone this repo and their coding agent follows `AGENTS.md`. The code in `src/`, `container/`, `groups/`, `setup/` and `scripts/` is an export from the reference deployment; `UPSTREAM.md` records the version. Do not hand-edit exported code here: fix it at the source and re-export, or record the edit so the next export repeats it. Files owned by this repo: `AGENTS.md`, `README.md`, `SPEC.md`, `ARCHITECTURE.md`, `config/`, `templates/`, `docs/12-governance.md`, `plans/`.
+ProgramOS is a **clonable implementation** (since 2026-11-14; before that it was a spec only). Adopters clone this repo and their coding agent follows `AGENTS.md`. The code in `src/`, `container/`, `groups/`, `setup/` and `scripts/` is an export from the reference deployment; `UPSTREAM.md` records the version. Do not hand-edit exported code here: fix it at the source and re-export, or record the edit so the next export repeats it. Files owned by this repo: `AGENTS.md`, `README.md`, `SPEC.md`, `ARCHITECTURE.md`, `config/`, `templates/`, `docs/12-governance.md`, `docs/deployment.md`, `docs/design/`, `plans/`, `site/`. The full list is `OWNED` in `scripts/upstream-sync/export.py`.
 
 Keep edits funder-agnostic and institution-agnostic. Anything Illinois-specific lives in `docs/09-illinois-quickstart.md`.
 
@@ -15,8 +15,29 @@ Keep edits funder-agnostic and institution-agnostic. Anything Illinois-specific 
 - Every doc is listed in the README docs table.
 - The live per-channel prompts are in `groups/`.
 
+## Site
+
+`site/public/` is served at https://programos.illinihunt.org (Cloudflare Pages project `programos`). Deploy with `./site/deploy.sh`; `--dry-run` lists the files. Every fact on the page repeats `README.md` or `SPEC.md`: change the page in the same commit.
+
+## Current Focus
+
+- [ ] Finalize `docs/12-governance.md` (sort the numbered rules; remove the "draft" status)
+
+## Roadmap
+
+- [x] Code export from the reference deployment, reviewed until clean
+- [x] `AGENTS.md`, README, SPEC and ARCHITECTURE rewritten; code is the source of truth
+- [x] CI: format, typecheck, tests, export tool tests, secret scan
+- [x] Public site at programos.illinihunt.org
+- [ ] Finalize `docs/12-governance.md`
+- [ ] Rewrite `docs/09-illinois-quickstart.md` (campus mail and cloud path)
+- [ ] A neutral inbound mail intake service (email needs one; none is in the repo)
+- [ ] Proof numbers on the site, each from a dated query, in one data file
+- [ ] Take fixes from the source through `scripts/upstream-sync/` (wrong-chat Telegram reply, timing test, others in SPEC section 11)
+
 ## Session Log
 
-### 2026-06-02
-- Completed: Re-synced the spec against the current `nanoclaw-msbai` reference impl (verified against actual channel code, not just commits). docs/03: email "reject silently" → verified two-tier policy (silent drop for unknown/external; courteous deduped reply for same-institution senders; audit-log either way); Telegram "use IDs" → IDs-vs-handles tradeoff documenting the `@handle`-in-allowlist approach; added fail-safe-on-allowlist-reload rule. docs/05: log blocked/dropped inbound (`mode: dropped`); rebase-on-push-reject for concurrent writers. SPEC.md §3 wording. (Public site `agentlab.illinihunt.org/programos` was also updated + its Cloudflare deploy fixed — see AgentLab repo.)
-- Next: Deliberately left out of core spec (MSBAi-specific): per-course `courses/<code>/sync/` mirror layout, "detect Box update → ping admin" nicety. Generalize into `docs/design/content-sources.md` (was docs/10) only if a second adopter needs them.
+### 2026-11-15
+- Completed: ProgramOS changed from a spec to a clonable implementation (one commit, `999346c`, after 12 review rounds). CI added and its action versions updated. Site built and deployed to programos.illinihunt.org with a 404 page. PRs 1 to 4 merged; `main` is the only remote branch.
+- Decisions: code is the source of truth, docs cover only what code cannot say; the reference deployment stays the source and this repo takes changes by export; publish as single commits with no source history.
+- Next: finalize `docs/12-governance.md`; decide which proof numbers may be public; render the site in dark mode (not checked); one timing test (`src/channels/webhook-ingest-context.test.ts`) can fail on a slow CI runner, and a rerun clears it. Older entries: `plans/session-archive.md`.

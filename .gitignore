@@ -3,3 +3,39 @@
 .idea/
 .vscode/
 node_modules/
+
+# --- runtime code (from the upstream project) ---
+# Dependencies
+.npm-cache/
+# Build output
+dist/
+
+# Local data & auth
+store/
+data/
+logs/
+
+# Groups - track only CLAUDE.md, ignore runtime data
+groups/*
+!groups/*/
+groups/*/*
+!groups/*/CLAUDE.md
+
+# Secrets
+*.keys.json
+.env
+
+# Temp files
+.tmp-*
+
+# OS
+
+# IDE
+
+# Skills system (local per-installation state)
+.nanoclaw/
+
+agents-sdk-docs
+
+__pycache__/
+*.pyc

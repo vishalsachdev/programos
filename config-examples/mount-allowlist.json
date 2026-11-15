@@ -1,0 +1,15 @@
+{
+  "allowedRoots": [
+    {
+      "path": "/srv/repos/your-program-repo",
+      "allowReadWrite": true,
+      "description": "The one program repo this coordinator serves. Replace with your path."
+    }
+  ],
+  "blockedPatterns": [
+    "password",
+    "secret",
+    "token"
+  ],
+  "nonMainReadOnly": false
+}

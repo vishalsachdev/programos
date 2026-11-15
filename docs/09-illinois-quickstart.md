@@ -1,5 +1,7 @@
 # 09 — Illinois (UIUC) email quickstart
 
+> **Not yet updated for the code in this repo.** Written 2026-05 for the spec-only version. It will be rewritten with the university cloud path. Until then, use it for the campus mail alias steps only.
+
 A unit-level recipe for letting an `@illinois.edu` address talk to a ProgramOS bot **without** waiting on a Microsoft 365 admin app registration. Optimized for fastest legitimate start.
 
 This doc is Illinois-specific by design. If you're at another institution, the same pattern (forwarding rule + external inbound webhook + sending alias) usually works — substitute your provider's equivalents.

@@ -1,103 +1,84 @@
 # ProgramOS
 
-A spec for turning a [NanoClaw](https://github.com/qwibitai/nanoclaw) deployment into a multi-channel **academic program coordinator**: an AI agent that fields questions from faculty, advisors, staff, and other stakeholders, operates on a structured program repository, and keeps decisions auditable.
+A coordinator bot for a project or program team, and the knowledge base it keeps. Clone this repo, adapt it with your coding agent, and run it.
 
-**Runs on your laptop in an afternoon (Telegram first, email next), graduates to a VPS or cloud when you're ready.** Same spec, same program repo, same audit log — only the channel transports and host runtime change as you scale up. See [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md).
+The bot answers questions from an allowlisted team by email (and Telegram for the admin), with citations into a git repo that is the team's source of truth. It records decisions, action items and open questions in that repo, sends reminders, routes approval requests to the right person, checks its replies before they are sent, and keeps an audit log.
 
-> **This repo is a spec, not code.** ProgramOS is what you get when you fork NanoClaw and apply this spec to it. Adopters clone NanoClaw, hand [`SPEC.md`](./SPEC.md) to their coding agent, and adapt the result to their program.
+> **Status: work in progress on a local branch.** The code in this repo is a first export. `AGENTS.md`, the settings example and the governance doc are new. The code is the source of truth; older docs that restated it were removed.
 
-## Security model in one paragraph
+## What you get
 
-Agent runs in a NanoClaw Docker container — it can only see what you mount, can only call out to APIs you allow. Tier 1 (laptop) has zero inbound networking: the bot polls Telegram and IMAP, nothing reaches in. Every inbound message, every outbound reply, and every commit to the program repo is recorded in an append-only audit log under `discussions/audit-log/`, which lives in a private git repo you own. The agent operates in two modes per message — `read-only` for questions, `workspace-write` for explicit decision-capture — and can never modify its own runtime or auto-merge its own learning. Skill changes go through human-reviewed pull requests. Full posture by tier in [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md), learning-loop contract in [`docs/07-learning-loop.md`](./docs/07-learning-loop.md).
+| Part | Where |
+|---|---|
+| The bot: host process, channels, delivery gate, audit log, scheduler, approvals | `src/` |
+| The agent that runs in a container for each message, and its skills | `container/` |
+| The agent's instructions for each channel | `groups/` |
+| Setup wizard and operations script examples | `setup/`, `scripts/` |
+| Instructions for your coding agent | [`AGENTS.md`](./AGENTS.md) |
+| A skeleton for your knowledge-base repo | [`templates/program-repo/`](./templates/program-repo/) |
+| Settings to fill in | [`config/instance.env.example`](./config/instance.env.example) |
+| The rules the bot works under, and why each exists | [`docs/12-governance.md`](./docs/12-governance.md) |
+| The design, as a spec | [`SPEC.md`](./SPEC.md), [`ARCHITECTURE.md`](./ARCHITECTURE.md), `docs/` |
 
----
+## Where the code comes from
 
-## Who is this for
+The code is a close copy of **K-ai**, a coordinator for one online master's program. It has been tested in production with one program since April 2026. K-ai is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) (MIT; see [`NOTICE`](./NOTICE)). We removed the program's content (people, addresses, policies, history) and put placeholders in its place. We did not redesign the code. The 1,761 tests that pass in K-ai pass here.
 
-You run an academic program (degree, certificate, executive education, online MOOC) and you want a single AI coordinator that:
+Two things follow from that choice:
 
-- Answers stakeholder questions about program content, policies, and decisions, with citations into a source-of-truth repo.
-- Captures decisions, action items, and open questions from emails and chat, then commits them back to that repo.
-- Speaks email + Telegram + Teams + web chat from one process, with channel-appropriate formatting.
-- Logs every inbound and outbound message for accreditation and audit.
+- **You get what was tested in real use**, not a cleaned-up rewrite that nobody has run.
+- **Some identity values are still written in the code as placeholders** (the bot's name, the operator, the mail domain). Your coding agent replaces them. [`AGENTS.md`](./AGENTS.md) lists each one and where it lives.
 
-You're already comfortable running a NanoClaw deployment (Docker, a VPS, a webhook URL, and an LLM API key).
+K-ai stays the source. This repo takes its changes through a repeatable export. See [`UPSTREAM.md`](./UPSTREAM.md).
 
----
+## Who this is for
 
-## What's in this repo
+A team that runs a project, a program, a grant, a lab or a unit, and wants one place where questions get answered from the record and decisions get written down. The examples in the prompts come from an academic program (courses, faculty, curriculum), because that is where the code was tested. The mechanisms are not specific to it.
 
-| File | What it gives you |
-|------|-------------------|
-| [`SPEC.md`](./SPEC.md) | The canonical spec. Feed this to your coding agent. |
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How ProgramOS sits on top of NanoClaw — what's framework, what's adopter-supplied. |
-| [`docs/01-prerequisites.md`](./docs/01-prerequisites.md) | NanoClaw fork, Docker, secrets, channel apps. |
-| [`docs/02-program-repo.md`](./docs/02-program-repo.md) | Required structure of the program-side repo (`CONCEPT.md`, `EMAIL_ALLOWLIST.md`, `discussions/`, etc.). |
-| [`docs/03-channels.md`](./docs/03-channels.md) | Per-channel contract: email webhook, Telegram, Teams, web chat. |
-| [`docs/04-agent-modes.md`](./docs/04-agent-modes.md) | Question vs Status-update modes. When to commit, when not to. |
-| [`docs/05-audit-logging.md`](./docs/05-audit-logging.md) | Inbound/outbound logging contract. |
-| [`docs/06-customization.md`](./docs/06-customization.md) | What to rename, what to keep. Branding the agent persona. |
-| [`docs/07-learning-loop.md`](./docs/07-learning-loop.md) | How the agent learns over time without breaking the audit trail (skills-as-PRs + FTS5 episodic recall). |
-| [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md) | Laptop → VPS → Cloud. What changes between tiers (channels, ingress, secrets), what stays constant (program repo, audit log, skill loop). |
-| [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | UIUC-specific recipe for letting an `@illinois.edu` address talk to the bot without an M365 admin app registration (forwarding rule + external inbound). |
-| [`docs/10-content-sources.md`](./docs/10-content-sources.md) | How to relate an external content store (Box, SharePoint, network share) to ProgramOS. Three patterns; recommended default is "coexist + bot-as-frontend" — team keeps editing in Box, bot reads both stores and labels every claim. |
-| [`docs/11-multi-program-mesh.md`](./docs/11-multi-program-mesh.md) | Deploying multiple ProgramOS agents across programs at one institution. Two-level KB hierarchy, per-agent Nostr identity, A2A cross-agent routing, and shared-policy deduplication. |
-| [`scripts/init.sh`](./scripts/init.sh) | One-command bootstrap for a new adopter — scaffolds a program repo and seeds it with a brainstorm prompt. |
-| [`examples/BRAINSTORM.md`](./examples/BRAINSTORM.md) | Discovery prompt the bootstrap drops into the new repo; hand it to your coding agent. |
-| [`examples/groups/`](./examples/groups/) | Generic per-channel agent instruction templates. |
-| [`examples/program-repo/`](./examples/program-repo/) | Reference layout for the program-side repository. |
+You need: a host that can run Docker, a mail address for the bot, a git host for the knowledge base, and an AI service your organization allows your mail to reach. Check that last point first.
 
----
+## Start
 
-## Quickstart — laptop tier (no IT involvement, ~1 afternoon)
+1. Clone this repo.
+2. Open it with your coding agent (Claude Code, Codex, Cursor or another) and say: "Read `AGENTS.md` and help me adapt this for my project."
+3. The agent asks you six questions before it changes anything: which AI service is allowed, who approves, which address the bot uses, where data lives, what senders are told, and which channels you want.
+4. It creates your knowledge-base repo, fills in settings, replaces placeholders, and keeps the tests passing.
+5. You review a test exchange. You decide when to deploy.
 
-Goal: a working Telegram bot for your unit by end of day, with email to follow within a week.
+## How it is kept safe
 
-1. **Bootstrap your program repo**:
-   ```
-   git clone https://github.com/vishalsachdev/programos.git
-   ./programos/scripts/init.sh <unit-slug> ~/code/<unit-slug>
-   ```
-   Scaffolds a fresh git repo with the canonical layout (`program/`, `discussions/`, `skills/`, audit-log subdirs) and drops a `BRAINSTORM.md` in it.
-2. **Hand `BRAINSTORM.md` to your coding agent** (Claude Code, Cursor, Codex — any agent that can read markdown and edit files). It interviews you about stakeholders, channels, and content (Group C asks which deployment tier you're starting at — pick laptop), then fills in the placeholders. Agent-agnostic by design.
-3. **Fork NanoClaw and apply the spec**: `gh repo fork qwibitai/nanoclaw --clone && cd nanoclaw`, then ask your agent:
-   ```
-   Read https://github.com/vishalsachdev/programos/blob/main/SPEC.md
-   and https://github.com/vishalsachdev/programos/blob/main/docs/08-deployment-tiers.md
-   then adapt this NanoClaw fork to that spec at Tier 1 (laptop). My program repo
-   is at <path>; the channels, persona, and content-source pattern are defined in
-   its PROGRAMOS_SETUP.md (produced by the BRAINSTORM step). Enable Telegram
-   (long-poll) first; add email via IMAP polling next if PROGRAMOS_SETUP.md says so.
-   ```
-4. **Iterate** on per-channel `groups/<channel>/CLAUDE.md` files using the docs in this repo as reference. When you outgrow the laptop tier (24/7 uptime, web chat, team channels), graduate to Tier 2 — same spec, swap channel transports per [`docs/08-deployment-tiers.md`](./docs/08-deployment-tiers.md).
+- The agent runs in a container. It sees only the folders you mount and is set to reach the model through a proxy on the host, which holds your credentials.
+- On email and Telegram, only allowlisted senders get an answer. The allowlist is a file in your knowledge-base repo. Web chat is different: anyone who has its shared secret can ask. Keep web chat off if you need a check per person.
+- The agent's replies and outbound mail pass a delivery gate on the host. A reply that fails the gate is not sent, and the operator is told on Telegram (the operator alerts need the Telegram admin channel).
+- Accepted inbound messages and replies are written to an audit log in your knowledge-base repo. Some paths are not logged; `SPEC.md` section 6 lists them.
+- These rules do not hold equally on every channel. [`SPEC.md`](./SPEC.md) section 11 lists where each one stops. Read it before you rely on one.
+- Role and access changes are made by the admin only, never because a message asked.
+- Numbered rules cover the rest. [`docs/12-governance.md`](./docs/12-governance.md) gives each rule and the failure it prevents.
 
-UIUC units that want `@illinois.edu` email working without a Microsoft 365 admin app registration: see [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md).
+## Docs
 
----
+The code is the source of truth. The documents below cover what the code cannot say: the contract, the reasons for the rules, and the decisions you must make. Where a document and the code differ, the code is right; please report the difference.
 
-## Why a spec, not a fork
+| File | What it covers | Matches the code? |
+|------|----------------|-------------------|
+| [`SPEC.md`](./SPEC.md) | The contract: components, channels, modes, knowledge-base layout, audit log, governance | Yes (rewritten 2026-11-14) |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How the parts fit and who owns each | Yes (rewritten 2026-11-14) |
+| [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: what to ask, what to replace, safety items, first start | Yes; checked against the code in review |
+| [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; run through the real parsers |
+| [`docs/deployment.md`](./docs/deployment.md) | What kind of host works and what to start with | Yes |
+| [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
+| [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
+| [`docs/12-governance.md`](./docs/12-governance.md)(./docs/12-governance.md) | The numbered rules and how to change one | Draft |
+| [`docs/reminder-registry.md`](./docs/reminder-registry.md) | Template for the list of scheduled jobs | Yes |
+| [`docs/evaluation-protocol.md`](./docs/evaluation-protocol.md), [`docs/capability-scenarios.md`](./docs/capability-scenarios.md) | How the bot is evaluated | Yes |
+| [`docs/framework/`](./docs/framework/) | NanoClaw's own reference docs | Upstream text |
 
-NanoClaw is the engine. Most of the work to make it a program coordinator is *outside* the framework — it's in:
+## Known issues
 
-- the structure of the program repo,
-- the per-channel agent prompts,
-- the decision/action/audit pipeline,
-- the channel-specific input filters (allowlists, HMAC, JWT).
-
-Cloning a templated repo gets stale fast (NanoClaw moves, your program is different). A spec stays useful: your agent reads it, reads the current NanoClaw, and produces an adaptation that matches both. The instance referenced in [`ARCHITECTURE.md`](./ARCHITECTURE.md) (a Master's-program coordinator running this spec in production) only had ~600 lines of MSBAi-specific code on top of NanoClaw — the rest was config and prompts.
-
----
-
-## Production reference
-
-This spec was extracted from a production deployment serving an online Master's program at a U.S. business school. The deployment handles email + Telegram + web chat (Teams and Copilot Studio handlers were built early on and retired in June 2026, once it was clear stakeholders didn't use them), runs in Docker on a small VPS, and commits to a private program repo. Source for that instance is private (it contains stakeholder PII and program-specific strategy); the spec here is the part that generalizes.
-
----
-
-## Status
-
-v0.1 — initial spec. Channels covered: email (webhook), Telegram, Teams (Bot Framework), Teams (Outgoing Webhook), Web Chat, Microsoft Copilot Studio. Not yet covered: Slack, Discord, WhatsApp (NanoClaw upstream supports these but the program-coordinator workflows haven't been spec'd here).
+- The dependency audit reports 26 findings inherited from the source. They are reported there; this repo keeps the source's exact versions until it fixes them.
+- One timing test can fail when the machine is busy. It passes when run alone.
+- Several values that should be settings are still in code. `AGENTS.md` lists them.
 
 ## License
 
-MIT. The NanoClaw framework has its own license — see upstream.
+MIT. The code derived from NanoClaw carries NanoClaw's MIT notice in [`NOTICE`](./NOTICE).

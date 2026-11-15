@@ -1,116 +1,100 @@
 # Architecture
 
-How ProgramOS sits on top of NanoClaw, and what's adopter-supplied vs framework-supplied.
+How the parts of ProgramOS fit, and who owns each.
 
-## High-level picture
+## The picture
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         Stakeholder channels                         │
-│              Email        Telegram        Web Chat                   │
-│   (the reference also ran Teams + Copilot handlers, retired 2026-06) │
+│                          Team channels                               │
+│             Email          Telegram         (Web chat)               │
 └────────────────┬──────────────┬───────────────┬──────────────────────┘
-                 │              │               │
                  ▼              ▼               ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│   src/channels/*.ts  ── handler per channel (ADOPTER-SUPPLIED)       │
-│   • auth (HMAC / JWT / bot token / API key)                          │
-│   • allowlist / allowed-users filter                                 │
-│   • build NanoClaw Message + JID                                     │
-│   • format reply per channel                                         │
+│  Channel handlers (src/channels/)                                    │
+│  • check the sender: signature, allowlist, caps (email)              │
+│  • read the filed inbound copy; build the message                    │
 └──────────────────────────────────────────┬───────────────────────────┘
-                                           │
                                            ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│   NanoClaw framework (UPSTREAM — DO NOT MODIFY)                      │
-│   • channel registry / router                                        │
-│   • group queue / concurrency                                        │
-│   • container runner (Docker)                                        │
-│   • SQLite (messages, sessions, groups)                              │
+│  Host orchestration (src/, from the NanoClaw framework)              │
+│  • router, per-group queue, SQLite store                             │
+│  • scheduler and reminders        • routed approvals                 │
+│  • credential proxy (holds the model credentials)                    │
 └──────────────────────────────────────────┬───────────────────────────┘
-                                           │  spawns
+                                           │ starts one container per turn
                                            ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│   Claude Code agent in Docker container                              │
-│   • prompt = groups/<channel>/CLAUDE.md (ADOPTER-SUPPLIED)           │
-│   • workspace = program repo, mounted at /workspace/extra/<name>  │
-│   • mode = question (read-only) | status-update (workspace-write)    │
+│  Agent in a Docker container (container/)                            │
+│  • instructions: groups/global/CLAUDE.md + groups/<channel>/CLAUDE.md│
+│  • skills: entry gate, conflict check, outreach, self-evaluation     │
+│  • sees only mounted folders; set to reach the model via the proxy   │
 └──────────────────────────────────────────┬───────────────────────────┘
-                                           │  reads/writes
+                     reads and writes      │      returns a reply
                                            ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│   Program repository (ADOPTER-OWNED, separate repo)               │
-│   • program/CONCEPT.md           — source of truth                │
-│   • program/EMAIL_ALLOWLIST.md      — authorized senders             │
-│   • discussions/DECISIONS.md        — append-only decision log       │
-│   • discussions/ACTION_ITEMS.md     — open actions                   │
-│   • discussions/OPEN_QUESTIONS.md   — unresolved questions           │
-│   • discussions/audit-log/          — full message history           │
-└──────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────┐   ┌──────────────────────────────────┐
+│  Program repo (yours)         │   │  Delivery gate and outbox (host) │
+│  • program/curriculum.md      │   │  • reply block required          │
+│  • program/EMAIL_ALLOWLIST.md │   │  • scaffolding refused           │
+│  • program/kb-governance.md   │   │  • recipients from allowlist     │
+│  • discussions/DECISIONS.md   │   │  • durable send, retries (email) │
+│  • discussions/ACTION_ITEMS.md│   └───────────────┬──────────────────┘
+│  • discussions/OPEN_QUESTIONS │                   ▼
+│  • discussions/audit-log/  ◄──┼── audit log writer (host), reply sensor
+└───────────────────────────────┘
 ```
 
-## Responsibility split
+## Who owns what
 
-| Layer | Owner | Touch when |
-|-------|-------|------------|
-| Container runtime, channel registry, message router, queue, SQLite | NanoClaw upstream | Never (rebase from upstream instead) |
-| Channel handlers (`src/channels/*.ts`) | Adopter | Adding/changing a channel |
-| Agent prompts (`groups/<channel>/CLAUDE.md`) | Adopter | Changing agent behavior, persona, citation style |
-| Audit log (`src/audit-log.ts`) | Adopter | Changing what gets logged or where |
-| Program repo structure | Adopter | Always (this is your program) |
+| Layer | Owner | Change it when |
+|-------|-------|----------------|
+| Router, queue, container runner, store, credential proxy | The framework, as exported | Rarely. A change here makes each later export harder to take. |
+| Channel handlers, delivery gate, audit log, scheduler, approvals | This repo, as exported from the reference deployment | When your project needs different behavior. Keep the governance rule numbers. |
+| Identity values (bot name, operator, mail domains, group names) | You | Always. `AGENTS.md` lists every site. |
+| Agent instructions (`groups/`) and skills (`container/skills/`) | You, starting from the tested text | To fit your project's vocabulary and policy |
+| Program repo | You | Always. It is your record. |
+| Governance rules | You, through the change protocol | When a rule's failure cannot happen in your setting, or a new failure appears |
 
-## Why this split
+## Why the code is a close copy
 
-NanoClaw is small enough to read end-to-end in an afternoon (its README brags ~17% of context). The temptation is to fork and modify everywhere. Don't. Almost every program-coordinator behavior you want is achievable in three places:
+The earlier version of this repo was a spec with no code. Each new team had to rebuild the adapter with a coding agent, and each rebuild fell behind the reference deployment within months. So this repo now carries the reference deployment's code, with its content removed and nothing else redesigned.
 
-1. **The channel handler** — for input filtering and reply formatting.
-2. **The per-channel `CLAUDE.md`** — for agent behavior and decision rules.
-3. **The audit-log writer** — for the persistent trail.
+The cost of that choice is visible: some values that should be settings are written in the code. The gain is that every mechanism here has run in production, and a new export from the reference deployment can replace the code without a rewrite.
 
-Treat NanoClaw itself as a black-box framework. When upstream releases a new version, you should be able to rebase in minutes, not days.
+## One turn, step by step
 
-## Two operational modes — concretely
+1. A message arrives. The channel handler checks the signature, the allowlist and, for email, the sender's cap (Telegram and web chat have no cap). A sender who fails never reaches the model.
+2. For email, a separate intake service (not in this repo; see `AGENTS.md`, "Inbound mail") has already committed a copy of the message to the program repo. The host reads that copy and writes the inbound audit entry.
+3. The host starts a container with the program repo mounted and the channel's instructions.
+4. The agent chooses the mode. In question mode it reads and cites. In status-update mode it runs the entry gate and the conflict check, then commits one change at a time.
+5. The agent returns a reply inside a reply block, with a self-evaluation.
+6. The delivery gate checks the reply. If it passes, the outbox sends it and records the result. If it fails, nothing is sent and the operator is told.
+7. The host writes the outbound audit entry and the gate result. The reply sensor checks the reply against the ground-truth files and files a report if it finds a problem.
 
-The single most important decision per message is **question vs status-update**. The decision tree:
+## What the host enforces and what the agent is asked to do
 
-```
-Inbound message arrives
-        │
-        ▼
-Is the channel one where the sender has decision authority? (e.g., faculty email, not student web chat)
-   ├── No  ─── always Question mode
-   └── Yes
-        │
-        ▼
-Does the message contain explicit signal? (subject prefix "[DECISION]", command "/decide", etc.)
-   ├── Yes ─── Status-update mode
-   └── No
-        │
-        ▼
-Does the body contain decision-shaped language? ("we decided", "going forward", "as of X we will")
-   ├── Yes ─── Status-update mode
-   └── No  ─── Question mode
-```
+| Enforced by host code | Asked of the agent, with a logged gate | Written practice |
+|---|---|---|
+| Who may reach the model | Entry gate before adding an item | How to word a decision entry |
+| Sender caps | Conflict check before a write | When to cross-reference |
+| Where recipient addresses may come from | Self-evaluation on each reply | Tone and format |
+| The delivery gate | | |
+| The audit log | | |
+| Protected files | | |
+| Role and access changes (admin only) | | |
 
-The agent runs the same Claude Code container in both modes; only the sandbox flag and the agent prompt differ.
+The left column is enforced by code, so weakening a prompt does not remove it. It is not complete on every channel or path: `SPEC.md` section 11 lists where each item stops (for example, the protected-file guard does not inspect shell commands).
 
-## Audit log — concretely
+## Audit log
 
-Every inbound: `discussions/audit-log/<channel>/<ISO-timestamp>-in.md`.
-Every outbound: `discussions/audit-log/<channel>/<ISO-timestamp>-out.md`.
+One file per day in `discussions/audit-log/`, for all channels, written and committed by the host. It carries accepted inbound messages, replies and delivery problems; `SPEC.md` section 6 lists what is not logged. Knowledge-base changes are committed separately from audit-log commits, so a reviewer can read decisions without log noise.
 
-(The reference deployment uses the daily-file layout from SPEC §6 instead — one append-only `discussions/audit-log/YYYY-MM-DD.md` across all channels, which also carries delivery-gate verdicts and delivery-problem events.)
+## What you build
 
-Files are committed in batch at the end of each container run, attributed to the bot's git identity. Status-update runs commit decision/action/question changes separately from audit-log commits, so accreditation reviewers can see decisions cleanly without log noise.
+For a new project you do not write channel handlers or an audit module. You:
 
-## What you actually build
-
-For a brand-new ProgramOS on a brand-new NanoClaw fork, expect roughly:
-
-- **1 channel handler per channel** (~150 lines each) in `src/channels/` — the reference runs 3 (email, Telegram, web chat) after retiring its Teams and Copilot handlers
-- **1 agent prompt per channel** in `groups/<channel>/CLAUDE.md`, plus a shared `groups/global/CLAUDE.md` playbook
-- **1 audit-log module** (~80 lines) in `src/audit-log.ts`
-- **2 small NanoClaw hooks** in `src/index.ts` and `src/container-runner.ts` (audit logging + container chown patch)
-- **Program repo** in a separate repository
-
-Total: roughly 1,000–1,500 lines of code on top of NanoClaw, plus the program repo content. The reference deployment fits in this envelope.
+- answer the policy and ownership questions in `AGENTS.md`,
+- replace the placeholders,
+- create your program repo, allowlist and governance file,
+- adapt the instructions and skills to your vocabulary,
+- stand up a host with Docker, a mail address and a reverse proxy.

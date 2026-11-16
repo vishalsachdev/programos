@@ -16,46 +16,12 @@
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://programos.illinihunt.org/" />
     <link rel="canonical" href="https://programos.illinihunt.org/" />
+    <link rel="stylesheet" href="/theme.css" />
     <style>
-      /* Illinois colors, following AgentLab's scheme (navy, white, orange accents).
-         Brand values: brand.illinois.edu (Illini Blue #13294b, Illini Orange #ff5f05, Altgeld #c84113).
-         Orange #ff5f05 is for decoration on light backgrounds (3:1 on white); text and the
-         primary button use Altgeld, which passes WCAG AA on white and on --card. */
       :root {
-        --paper: #ffffff;
-        --card: #f5f7fa;
-        --ink: #1a1a2e;
-        --soft: #5a6577;
-        --line: #e2e8f0;
-        --brand: #13294b;
-        --accent: #13294b;
-        --accent-soft: #e1e7f1;
-        --orange: #ff5f05;
-        --orange-text: #c84113;
-        --on-orange: #ffffff;
-        --warn: #a72f10;
-        --warn-soft: #fdf0e8;
         --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
         --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-      }
-      @media (prefers-color-scheme: dark) {
-        /* Dark: Illini Blue surfaces; orange is text-safe here (4.7:1 on navy, 5.9:1 on the page). */
-        :root {
-          --paper: #11181d;
-          --card: #13294b;
-          --ink: #f4f4f4;
-          --soft: #b5c8e2;
-          --line: #2f4668;
-          --brand: #f4f4f4;
-          --accent: #ff5f05;
-          --accent-soft: #11181d;
-          --orange: #ff5f05;
-          --orange-text: #ff5f05;
-          --on-orange: #11181d;
-          --warn: #ff5f05;
-          --warn-soft: #13294b;
-        }
       }
       * {
         box-sizing: border-box;
@@ -143,14 +109,14 @@
         text-decoration: none;
       }
       .btn.primary {
-        background: var(--orange-text);
-        border-color: var(--orange-text);
-        color: var(--on-orange);
+        background: var(--highlight-text);
+        border-color: var(--highlight-text);
+        color: var(--on-highlight);
       }
       .proof {
         margin: 28px 0 0;
         padding-left: 14px;
-        border-left: 3px solid var(--orange);
+        border-left: 3px solid var(--highlight);
         color: var(--soft);
         font-size: 0.97rem;
         max-width: 36em;
@@ -208,7 +174,7 @@
       }
       .trail li::before {
         content: "\2713\00a0";
-        color: var(--orange-text);
+        color: var(--highlight-text);
       }
       section {
         padding: 56px 0;
@@ -218,7 +184,7 @@
         font: 0.76rem var(--mono);
         letter-spacing: 0.1em;
         text-transform: uppercase;
-        color: var(--orange-text);
+        color: var(--highlight-text);
         margin: 0 0 8px;
       }
       h2 {
@@ -262,7 +228,7 @@
       }
       ol.path li {
         counter-increment: step;
-        border-top: 3px solid var(--orange);
+        border-top: 3px solid var(--highlight);
         padding: 12px 4px 0 0;
         font-size: 0.95rem;
         color: var(--soft);
@@ -271,7 +237,7 @@
         content: counter(step, decimal-leading-zero);
         display: block;
         font: 0.8rem var(--mono);
-        color: var(--orange-text);
+        color: var(--highlight-text);
       }
       ol.path strong {
         display: block;

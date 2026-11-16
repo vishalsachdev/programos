@@ -5,33 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Page not found: ProgramOS</title>
     <meta name="robots" content="noindex" />
+    <link rel="stylesheet" href="/theme.css" />
     <style>
       body {
         margin: 0;
         padding: 15vh 20px;
-        background: #ffffff;
-        color: #1a1a2e;
+        background: var(--paper);
+        color: var(--ink);
         font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         text-align: center;
       }
       h1 {
-        color: #13294b;
+        color: var(--brand);
         font: 700 2rem "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
       }
       a {
-        color: #13294b;
+        color: var(--accent);
       }
-      @media (prefers-color-scheme: dark) {
-        body {
-          background: #11181d;
-          color: #f4f4f4;
-        }
-        h1 {
-          color: #f4f4f4;
-        }
-        a {
-          color: #ff5f05;
-        }
+      a:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: 3px;
       }
     </style>
   </head>

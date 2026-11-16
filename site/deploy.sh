@@ -1,16 +1,23 @@
 #!/bin/bash
-# Deploy site/public/ to Cloudflare Pages. Only that folder is sent, never the repo root.
+# Deploy the public site to Cloudflare Pages. The repo root is never sent.
 #
 # Usage: ./site/deploy.sh [--dry-run]
 #   --dry-run: list the files that a deploy would send; send nothing
 #
 # The Pages project name comes from PAGES_PROJECT (default: programos).
+# SITE_THEME selects the CSS palette (default: neutral; also accepts illinois).
 
 set -euo pipefail
 
 SITE_DIR="$(cd "$(dirname "$0")" && pwd)"
 PUBLIC="$SITE_DIR/public"
 PROJECT="${PAGES_PROJECT:-programos}"
+THEME="${SITE_THEME:-neutral}"
+
+case "$THEME" in
+    neutral|illinois) ;;
+    *) echo "Unknown SITE_THEME: $THEME (expected neutral or illinois)" >&2; exit 1 ;;
+esac
 
 [[ -f "$PUBLIC/index.html" ]] || { echo "No index.html in $PUBLIC" >&2; exit 1; }
 
@@ -22,8 +29,16 @@ if [[ -n "$bad" ]]; then
     exit 1
 fi
 
-echo "Files in $PUBLIC:"
-(cd "$PUBLIC" && find . -type f | sort)
+DEPLOY_DIR="$PUBLIC"
+if [[ "$THEME" == illinois ]]; then
+    DEPLOY_DIR="$(mktemp -d)"
+    trap 'rm -rf -- "$DEPLOY_DIR"' EXIT
+    cp -R "$PUBLIC/." "$DEPLOY_DIR/"
+    cp "$SITE_DIR/themes/illinois.css" "$DEPLOY_DIR/theme.css"
+fi
+
+echo "Files to deploy ($THEME theme):"
+(cd "$DEPLOY_DIR" && find . -type f | sort)
 
 if [[ "${1:-}" == "--dry-run" ]]; then
     echo "Dry run: nothing was sent."
@@ -31,4 +46,4 @@ if [[ "${1:-}" == "--dry-run" ]]; then
 fi
 
 # wrangler reads CLOUDFLARE_API_TOKEN. Without it, wrangler uses its own login.
-npx wrangler pages deploy "$PUBLIC" --project-name "$PROJECT" --branch main --commit-dirty=true
+npx wrangler pages deploy "$DEPLOY_DIR" --project-name "$PROJECT" --branch main --commit-dirty=true

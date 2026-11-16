@@ -16,33 +16,12 @@
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://programos.illinihunt.org/" />
     <link rel="canonical" href="https://programos.illinihunt.org/" />
+    <link rel="stylesheet" href="/theme.css" />
     <style>
       :root {
-        --paper: #f5f2ea;
-        --card: #fffdf8;
-        --ink: #1d1c19;
-        --soft: #5d5a52;
-        --line: #d9d3c4;
-        --accent: #0e5a4b;
-        --accent-soft: #e2efe9;
-        --warn: #8a4b12;
-        --warn-soft: #f6ead9;
         --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
         --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --paper: #151715;
-          --card: #1d201d;
-          --ink: #e9e6dd;
-          --soft: #a9a59a;
-          --line: #353a35;
-          --accent: #74cdb3;
-          --accent-soft: #1d2f2a;
-          --warn: #e3b27a;
-          --warn-soft: #2e261b;
-        }
       }
       * {
         box-sizing: border-box;
@@ -89,7 +68,7 @@
       .mark {
         font: 700 1.15rem var(--serif);
         letter-spacing: 0.01em;
-        color: var(--ink);
+        color: var(--brand);
         text-decoration: none;
       }
       nav {
@@ -130,13 +109,14 @@
         text-decoration: none;
       }
       .btn.primary {
-        background: var(--accent);
-        color: var(--paper);
+        background: var(--highlight-text);
+        border-color: var(--highlight-text);
+        color: var(--on-highlight);
       }
       .proof {
         margin: 28px 0 0;
         padding-left: 14px;
-        border-left: 3px solid var(--accent);
+        border-left: 3px solid var(--highlight);
         color: var(--soft);
         font-size: 0.97rem;
         max-width: 36em;
@@ -194,7 +174,7 @@
       }
       .trail li::before {
         content: "\2713\00a0";
-        color: var(--accent);
+        color: var(--highlight-text);
       }
       section {
         padding: 56px 0;
@@ -204,7 +184,7 @@
         font: 0.76rem var(--mono);
         letter-spacing: 0.1em;
         text-transform: uppercase;
-        color: var(--accent);
+        color: var(--highlight-text);
         margin: 0 0 8px;
       }
       h2 {
@@ -248,7 +228,7 @@
       }
       ol.path li {
         counter-increment: step;
-        border-top: 3px solid var(--accent);
+        border-top: 3px solid var(--highlight);
         padding: 12px 4px 0 0;
         font-size: 0.95rem;
         color: var(--soft);
@@ -257,7 +237,7 @@
         content: counter(step, decimal-leading-zero);
         display: block;
         font: 0.8rem var(--mono);
-        color: var(--accent);
+        color: var(--highlight-text);
       }
       ol.path strong {
         display: block;

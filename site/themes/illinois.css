@@ -1,0 +1,36 @@
+/* Illinois colors, following AgentLab's scheme (navy, white, orange accents).
+   Brand values: brand.illinois.edu (Illini Blue #13294b, Illini Orange #ff5f05, Altgeld #c84113).
+   Orange #ff5f05 is for decoration on light backgrounds (3:1 on white); text and the
+   primary button use Altgeld, which passes WCAG AA on white and on --card. */
+:root {
+  --paper: #ffffff;
+  --card: #f5f7fa;
+  --ink: #1a1a2e;
+  --soft: #5a6577;
+  --line: #e2e8f0;
+  --brand: #13294b;
+  --accent: #13294b;
+  --accent-soft: #e1e7f1;
+  --highlight: #ff5f05;
+  --highlight-text: #c84113;
+  --on-highlight: #ffffff;
+  --warn: #a72f10;
+  --warn-soft: #fdf0e8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #11181d;
+    --card: #13294b;
+    --ink: #f4f4f4;
+    --soft: #b5c8e2;
+    --line: #2f4668;
+    --brand: #f4f4f4;
+    --accent: #ff5f05;
+    --accent-soft: #11181d;
+    --highlight: #ff5f05;
+    --highlight-text: #ff5f05;
+    --on-highlight: #11181d;
+    --warn: #ff5f05;
+    --warn-soft: #13294b;
+  }
+}

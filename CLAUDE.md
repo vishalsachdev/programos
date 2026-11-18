@@ -37,7 +37,6 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 
 ## Session Log
 
-### 2026-11-15
-- Completed: ProgramOS changed from a spec to a clonable implementation (one commit, `999346c`, after 12 review rounds). CI added and its action versions updated. Site built and deployed to programos.illinihunt.org with a 404 page. PRs 1 to 4 merged; `main` is the only remote branch.
-- Decisions: code is the source of truth, docs cover only what code cannot say; the reference deployment stays the source and this repo takes changes by export; publish as single commits with no source history.
-- Next: finalize `docs/12-governance.md`; decide which proof numbers may be public; render the site in dark mode (not checked); one timing test (`src/channels/webhook-ingest-context.test.ts`) can fail on a slow CI runner, and a rerun clears it. Older entries: `plans/session-archive.md`.
+### 2026-11-16
+- Completed: pulled PR #5 (Illinois colors as an opt-in site theme, `e3a0113`); rebased the two local Codex fixwave commits on top and pushed them (`55ab09e`, `8950030`; CI green). Deployed the site with `SITE_THEME=illinois`; live `/theme.css` matches `site/themes/illinois.css`. Checked light and dark mode by headless Chrome screenshot at 1280px: navy and orange in both. Deleted the merged `site-illinois-colors` branch; `main` is the only remote branch.
+- Next: finalize `docs/12-governance.md`; decide which proof numbers may be public; check the site at 375px and its lower sections with the Illinois theme (not checked); the timing test `src/channels/webhook-ingest-context.test.ts` can fail on a slow CI runner, and a rerun clears it. Older entries: `plans/session-archive.md`.

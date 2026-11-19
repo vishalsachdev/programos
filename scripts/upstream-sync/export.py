@@ -39,7 +39,7 @@ OWNED = [
     'UPSTREAM.md', 'NOTICE', 'LICENSE', '.gitignore', '.git',
     'docs/09-illinois-quickstart.md', 'docs/12-governance.md',
     'docs/deployment.md', 'docs/design', 'config', 'templates', 'plans',
-    'site', 'scripts/upstream-sync', '.github/workflows/ci.yml',
+    'site', 'scripts/upstream-sync', '.github/workflows/ci.yml', 'inbound',
     'node_modules', 'dist',
 ]
 

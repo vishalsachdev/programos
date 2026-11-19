@@ -1,0 +1,23 @@
+{
+  "name": "programos-inbound",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Inbound mail intake for ProgramOS: a Cloudflare Email Worker that files each message in the knowledge-base repo and tells the host.",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "postal-mime": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "4.0.18"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

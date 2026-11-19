@@ -14,6 +14,7 @@ The bot answers questions from an allowlisted team by email (and Telegram for th
 | The agent that runs in a container for each message, and its skills | `container/` |
 | The agent's instructions for each channel | `groups/` |
 | Setup wizard and operations script examples | `setup/`, `scripts/` |
+| A mail intake worker for Cloudflare Email Routing. New, and not yet run against live services | [`inbound/`](./inbound/) |
 | Instructions for your coding agent | [`AGENTS.md`](./AGENTS.md) |
 | A skeleton for your knowledge-base repo | [`templates/program-repo/`](./templates/program-repo/) |
 | Settings to fill in | [`config/instance.env.example`](./config/instance.env.example) |
@@ -66,6 +67,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: what to ask, what to replace, safety items, first start | Yes; checked against the code in review |
 | [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; run through the real parsers |
 | [`docs/deployment.md`](./docs/deployment.md) | What kind of host works and what to start with | Yes |
+| [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
 | [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |

@@ -34,6 +34,13 @@ jobs:
       - name: Export tool tests
         run: python3 -B -m unittest discover scripts/upstream-sync
 
+      - name: Inbound mail worker (typecheck and tests)
+        working-directory: inbound
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+
       - name: Secret scan
         uses: gitleaks/gitleaks-action@v3
         env:

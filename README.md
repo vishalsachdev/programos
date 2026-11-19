@@ -64,7 +64,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`SPEC.md`](./SPEC.md) | The contract: components, channels, modes, knowledge-base layout, audit log, governance | Yes (rewritten 2026-11-14) |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How the parts fit and who owns each | Yes (rewritten 2026-11-14) |
 | [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: what to ask, what to replace, safety items, first start | Yes; checked against the code in review |
-| [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; run through the real parsers |
+| [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; `src/program-repo-template.test.ts` runs the real parsers over it |
 | [`docs/deployment.md`](./docs/deployment.md) | What kind of host works and what to start with | Yes |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |

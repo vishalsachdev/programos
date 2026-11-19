@@ -2,6 +2,7 @@ import os from 'os';
 import path from 'path';
 
 import { readEnvFile } from './env.js';
+import { BOT_MAIL_DOMAIN } from './instance-identity.js';
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
@@ -39,7 +40,7 @@ export const SCHEDULER_POLL_INTERVAL = 60000;
  * it from here (a missed literal in cc-context would silently disable G56
  * suppression).
  */
-export const DEFAULT_BOT_EMAIL = 'program@example.org';
+export const DEFAULT_BOT_EMAIL = `program@${BOT_MAIL_DOMAIN}`;
 
 /**
  * The bot mailbox actually in effect: SEND_FROM_EMAIL from .env or the

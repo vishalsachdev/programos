@@ -27,7 +27,7 @@ The code is a close copy of **K-ai**, a coordinator for one online master's prog
 Two things follow from that choice:
 
 - **You get what was tested in real use**, not a cleaned-up rewrite that nobody has run.
-- **Some identity values are still written in the code as placeholders** (the bot's name, the operator, the mail domain). Your coding agent replaces them. [`AGENTS.md`](./AGENTS.md) lists each one and where it lives.
+- **Some identity values are still written in the code as placeholders** (the bot's name, the operator, the channel group names). Your coding agent replaces them. [`AGENTS.md`](./AGENTS.md) lists each one and where it lives.
 
 K-ai stays the source. This repo takes its changes through a repeatable export. See [`UPSTREAM.md`](./UPSTREAM.md).
 
@@ -67,6 +67,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; run through the real parsers |
 | [`docs/deployment.md`](./docs/deployment.md) | What kind of host works and what to start with | Yes |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
+| [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
 | [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |
 | [`site/`](./site/) | The public page and its deploy script | Yes |

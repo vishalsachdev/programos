@@ -26,7 +26,6 @@ After `--apply`:
 
 1. Update the version in `UPSTREAM.md`.
    Reapply `scripts/upstream-sync/prompt-audit-2026-11-15.patch` with `git apply --check` followed by `git apply`. If it no longer applies, reconcile its prompt safeguards against the new export before continuing; do not silently discard them. The patch includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`.
-   Then reapply `scripts/upstream-sync/kb-template-consistency-2026-11-19.patch` the same way, after the first patch. It makes the skills, the push webhook and the weekly task prompt use `docs/faq.md`, fills the root `.env.example`, and adds `src/program-repo-template.test.ts`, which fails when the code and `templates/program-repo/` disagree. If it no longer applies, redo its edits by hand and keep that test.
 2. Run `npx tsc --noEmit` and `npx vitest run`. All tests must pass with none skipped.
 3. Run a secret scan (`gitleaks detect --no-git -s .`).
 4. Read the diff. New files need the closest look: a new file can carry names that no rule covers yet.

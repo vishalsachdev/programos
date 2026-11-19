@@ -1,0 +1,1995 @@
+diff --git a/src/behaviour-sensor-provider.test.ts b/src/behaviour-sensor-provider.test.ts
+new file mode 100644
+index 0000000..4716112
+--- /dev/null
++++ b/src/behaviour-sensor-provider.test.ts
+@@ -0,0 +1,149 @@
++/** Reply sensor: the URL and key header for each SENSOR_PROVIDER. */
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++// Hoisted: config.ts reads settings while it is imported.
++const mockEnv = vi.hoisted(() => ({}) as Record<string, string>);
++vi.mock('./env.js', () => ({
++  readEnvFile: vi.fn((keys: string[]) =>
++    Object.fromEntries(
++      Object.entries(mockEnv).filter(([k]) => keys.includes(k)),
++    ),
++  ),
++}));
++
++import {
++  evaluateBehaviourReply,
++  resolveSensorTarget,
++} from './behaviour-sensor.js';
++
++const mockFetch = vi.fn();
++vi.stubGlobal('fetch', mockFetch);
++
++const stubReader = {
++  refresh: () => ({ advanced: false, sha: 'stub-sha' }),
++  readFile: (relPath: string) =>
++    relPath === 'program/curriculum.md'
++      ? '# Curriculum\n\n| Course | Status |\n|---|---|\n| CRS 501 | Core |\n'
++      : null,
++  exists: (relPath: string) => relPath === 'program/curriculum.md',
++};
++
++const REPLY = 'The program is 30 credits over 12 months.';
++
++function modelReply(text: string) {
++  return {
++    ok: true,
++    json: async () => ({ content: [{ type: 'text', text }] }),
++  };
++}
++
++describe('sensor provider', () => {
++  const saved = { ...process.env };
++
++  beforeEach(() => {
++    vi.clearAllMocks();
++    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
++    delete process.env.SENSOR_PROVIDER;
++    delete process.env.ANTHROPIC_API_KEY;
++    delete process.env.BEHAVIOUR_SENSOR_DISABLED;
++  });
++
++  afterEach(() => {
++    process.env = { ...saved };
++  });
++
++  it('default: the Anthropic API with x-api-key', () => {
++    mockEnv.ANTHROPIC_API_KEY = 'sk-ant-real-key';
++    expect(resolveSensorTarget()).toEqual({
++      url: 'https://api.anthropic.com/v1/messages',
++      keyHeader: 'x-api-key',
++      apiKey: 'sk-ant-real-key',
++    });
++  });
++
++  it('default ignores Foundry settings, and reports a missing key as before', () => {
++    Object.assign(mockEnv, {
++      ANTHROPIC_FOUNDRY_RESOURCE: 'unit-resource',
++      ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
++    });
++    expect(resolveSensorTarget()).toEqual({ error: 'no-api-key' });
++  });
++
++  it('foundry: the Foundry messages URL with the key in api-key', () => {
++    Object.assign(mockEnv, {
++      SENSOR_PROVIDER: 'foundry',
++      ANTHROPIC_API_KEY: 'sk-ant-real-key',
++      ANTHROPIC_FOUNDRY_RESOURCE: 'unit-resource',
++      ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
++    });
++    expect(resolveSensorTarget()).toEqual({
++      url: 'https://unit-resource.services.ai.azure.com/anthropic/v1/messages',
++      keyHeader: 'api-key',
++      apiKey: 'foundry-real-key',
++    });
++  });
++
++  it('foundry: honours FOUNDRY_KEY_HEADER and a custom base URL; the process environment also selects it', () => {
++    process.env.SENSOR_PROVIDER = 'foundry';
++    Object.assign(mockEnv, {
++      ANTHROPIC_FOUNDRY_BASE_URL: 'https://gw.example.edu/unit/anthropic/',
++      ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
++      FOUNDRY_KEY_HEADER: 'x-api-key',
++    });
++    expect(resolveSensorTarget()).toEqual({
++      url: 'https://gw.example.edu/unit/anthropic/v1/messages',
++      keyHeader: 'x-api-key',
++      apiKey: 'foundry-real-key',
++    });
++  });
++
++  it('foundry without its settings, or an unknown provider, is an error and never falls back', async () => {
++    Object.assign(mockEnv, {
++      SENSOR_PROVIDER: 'foundry',
++      ANTHROPIC_API_KEY: 'sk-ant-real-key',
++    });
++    expect(resolveSensorTarget()).toEqual({ error: 'no-foundry-settings' });
++    const result = await evaluateBehaviourReply(REPLY, stubReader);
++    expect(result.annotation).toBe('[sensor: error: no-foundry-settings]');
++    mockEnv.SENSOR_PROVIDER = 'bedrock';
++    expect(resolveSensorTarget()).toEqual({
++      error: 'unknown-sensor-provider',
++    });
++    expect(mockFetch).not.toHaveBeenCalled();
++  });
++
++  it('the live request goes to the resolved URL with the resolved header (anthropic)', async () => {
++    mockEnv.ANTHROPIC_API_KEY = 'sk-ant-real-key';
++    mockFetch.mockResolvedValue(modelReply('PASS'));
++    await evaluateBehaviourReply(REPLY, stubReader, { refresh: false });
++    const [url, init] = mockFetch.mock.calls[0];
++    expect(url).toBe('https://api.anthropic.com/v1/messages');
++    expect(init.headers).toEqual({
++      'content-type': 'application/json',
++      'x-api-key': 'sk-ant-real-key',
++      'anthropic-version': '2023-06-01',
++    });
++  });
++
++  it('the live request goes to the resolved URL with the resolved header (foundry)', async () => {
++    Object.assign(mockEnv, {
++      SENSOR_PROVIDER: 'foundry',
++      ANTHROPIC_API_KEY: 'sk-ant-real-key',
++      ANTHROPIC_FOUNDRY_RESOURCE: 'unit-resource',
++      ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
++    });
++    mockFetch.mockResolvedValue(modelReply('PASS'));
++    await evaluateBehaviourReply(REPLY, stubReader, { refresh: false });
++    expect(mockFetch).toHaveBeenCalledTimes(1);
++    const [url, init] = mockFetch.mock.calls[0];
++    expect(url).toBe(
++      'https://unit-resource.services.ai.azure.com/anthropic/v1/messages',
++    );
++    expect(init.headers).toEqual({
++      'content-type': 'application/json',
++      'api-key': 'foundry-real-key',
++      'anthropic-version': '2023-06-01',
++    });
++    expect(JSON.stringify(init)).not.toContain('sk-ant-real-key');
++  });
++});
+diff --git a/src/behaviour-sensor.ts b/src/behaviour-sensor.ts
+index 9a18a26..32dc8bf 100644
+--- a/src/behaviour-sensor.ts
++++ b/src/behaviour-sensor.ts
+@@ -29,6 +29,7 @@ import path from 'path';
+ import { TIMEZONE } from './config.js';
+ import { stripInternalTags } from './delivery-gate.js';
+ import { readEnvFile } from './env.js';
++import { basePath, readFoundrySettings } from './model-provider.js';
+ import { logger } from './logger.js';
+ import { getRepoReader } from './repo-reader.js';
+ import { getProgramRepoPath } from './program-repo.js';
+@@ -1078,18 +1079,62 @@ export function courseCodeTag(res: { unknown: string[] }): string | null {
+     : null;
+ }
+ 
++/** Where the sensor posts, and the header that carries its key. */
++export interface SensorTarget {
++  url: string;
++  keyHeader: string;
++  apiKey: string;
++}
++
++/**
++ * The sensor's destination. It is explicit and does not fail over:
++ * SENSOR_PROVIDER is `anthropic` (default) or `foundry`. With `foundry`,
++ * SENSOR_MODEL is a deployment name; name the deployment by its model ID,
++ * because sensorRequestShape keys off the name. Returns an error reason
++ * when the settings for the chosen provider are missing.
++ */
++export function resolveSensorTarget(): SensorTarget | { error: string } {
++  const provider = (
++    process.env.SENSOR_PROVIDER ||
++    readEnvFile(['SENSOR_PROVIDER']).SENSOR_PROVIDER ||
++    'anthropic'
++  ).toLowerCase();
++  if (provider === 'foundry') {
++    try {
++      const foundry = readFoundrySettings();
++      return {
++        url: `${foundry.baseUrl.origin}${basePath(foundry.baseUrl)}/v1/messages`,
++        keyHeader: foundry.keyHeader,
++        apiKey: foundry.apiKey,
++      };
++    } catch {
++      return { error: 'no-foundry-settings' };
++    }
++  }
++  if (provider !== 'anthropic') return { error: 'unknown-sensor-provider' };
++  const apiKey =
++    process.env.ANTHROPIC_API_KEY ||
++    readEnvFile(['ANTHROPIC_API_KEY']).ANTHROPIC_API_KEY;
++  if (!apiKey) return { error: 'no-api-key' };
++  return {
++    url: 'https://api.anthropic.com/v1/messages',
++    keyHeader: 'x-api-key',
++    apiKey,
++  };
++}
++
+ async function callSensorModel(
+   prompt: string,
+-  apiKey: string,
++  target: SensorTarget,
+ ): Promise<string> {
+   const controller = new AbortController();
+   const timeoutId = setTimeout(() => controller.abort(), SENSOR_TIMEOUT_MS);
+   try {
+-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
++    const resp = await fetch(target.url, {
+       method: 'POST',
+       headers: {
+         'content-type': 'application/json',
+-        'x-api-key': apiKey,
++        [target.keyHeader]: target.apiKey,
+         'anthropic-version': '2023-06-01',
+       },
+       body: JSON.stringify({
+@@ -1333,17 +1378,17 @@ export async function evaluateBehaviourReply(
+     );
+   }
+ 
+-  const apiKey =
+-    process.env.ANTHROPIC_API_KEY ||
+-    readEnvFile(['ANTHROPIC_API_KEY']).ANTHROPIC_API_KEY;
+-  if (!apiKey) {
++  const target = resolveSensorTarget();
++  if ('error' in target) {
+     return evaluation(
+       {
+-        annotation: '[sensor: error: no-api-key]',
++        annotation: `[sensor: error: ${target.error}]`,
+         isFail: false,
+-        desc: 'no-api-key',
++        desc: target.error,
+       },
+-      '(not evaluated — no API key)',
++      target.error === 'no-api-key'
++        ? '(not evaluated — no API key)'
++        : `(not evaluated — ${target.error})`,
+     );
+   }
+ 
+@@ -1388,7 +1433,7 @@ export async function evaluateBehaviourReply(
+       cappedRequestContext(options.requestContext),
+     );
+     try {
+-      baseVerdict = parseVerdict(await callSensorModel(prompt, apiKey));
++      baseVerdict = parseVerdict(await callSensorModel(prompt, target));
+     } catch (err) {
+       if (!(err instanceof SensorStopError)) throw err;
+       logger.warn(
+diff --git a/src/container-runner-provider.test.ts b/src/container-runner-provider.test.ts
+new file mode 100644
+index 0000000..199bfd8
+--- /dev/null
++++ b/src/container-runner-provider.test.ts
+@@ -0,0 +1,348 @@
++/**
++ * Container runner: what the container is given for each model provider.
++ * The invariant: no real credential in the container args, and the per-run
++ * proxy token in no log.
++ */
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { EventEmitter } from 'events';
++import { PassThrough } from 'stream';
++
++vi.mock('./config.js', () => ({
++  CONTAINER_IMAGE: 'nanoclaw-agent:latest',
++  CONTAINER_MAX_OUTPUT_SIZE: 10485760,
++  CONTAINER_TIMEOUT: 1800000,
++  CREDENTIAL_PROXY_PORT: 3001,
++  DATA_DIR: '/tmp/nanoclaw-test-data',
++  GROUPS_DIR: '/tmp/nanoclaw-test-groups',
++  IDLE_TIMEOUT: 1800000,
++  TIMEZONE: 'America/Los_Angeles',
++}));
++
++vi.mock('./logger.js', () => ({
++  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
++}));
++
++vi.mock('fs', async () => {
++  const actual = await vi.importActual<typeof import('fs')>('fs');
++  return {
++    ...actual,
++    default: {
++      ...actual,
++      existsSync: vi.fn(() => false),
++      mkdirSync: vi.fn(),
++      writeFileSync: vi.fn(),
++      readFileSync: vi.fn(() => ''),
++      readdirSync: vi.fn(() => []),
++      statSync: vi.fn(() => ({ isDirectory: () => false })),
++      copyFileSync: vi.fn(),
++    },
++  };
++});
++
++vi.mock('./host-fs-safety.js', () => ({
++  chownTreeNoFollow: vi.fn(),
++  copyDirInTree: vi.fn(),
++  ensureDirInTree: vi.fn((root: string) => root),
++  writeFileInTree: vi.fn(),
++}));
++
++vi.mock('./mount-security.js', () => ({
++  validateAdditionalMounts: vi.fn(() => []),
++}));
++
++vi.mock('./container-runtime.js', () => ({
++  CONTAINER_RUNTIME_BIN: 'docker',
++  CONTAINER_HOST_GATEWAY: 'host.docker.internal',
++  hostGatewayArgs: () => [],
++  readonlyMountArgs: (h: string, c: string) => ['-v', `${h}:${c}:ro`],
++  stopContainer: vi.fn(),
++}));
++
++vi.mock('./credential-proxy.js', () => ({
++  detectAuthMode: vi.fn(() => 'api-key'),
++  registerProxyCaller: vi.fn(),
++  revokeProxyCaller: vi.fn(),
++}));
++
++// The real module, on a mocked `.env`, so the settings-to-args path is real.
++const mockEnv: Record<string, string> = {};
++vi.mock('./env.js', () => ({
++  readEnvFile: vi.fn((keys: string[]) =>
++    Object.fromEntries(
++      Object.entries(mockEnv).filter(([k]) => keys.includes(k)),
++    ),
++  ),
++}));
++
++function createFakeProcess() {
++  const proc = new EventEmitter() as EventEmitter & {
++    stdin: PassThrough;
++    stdout: PassThrough;
++    stderr: PassThrough;
++    kill: ReturnType<typeof vi.fn>;
++    pid: number;
++  };
++  proc.stdin = new PassThrough();
++  proc.stdout = new PassThrough();
++  proc.stderr = new PassThrough();
++  proc.kill = vi.fn();
++  proc.pid = 12345;
++  return proc;
++}
++
++let fakeProc: ReturnType<typeof createFakeProcess>;
++
++vi.mock('child_process', async () => {
++  const actual =
++    await vi.importActual<typeof import('child_process')>('child_process');
++  return {
++    ...actual,
++    spawn: vi.fn(() => fakeProc),
++    exec: vi.fn(
++      (_cmd: string, _opts: unknown, cb?: (err: Error | null) => void) => {
++        if (cb) cb(null);
++        return new EventEmitter();
++      },
++    ),
++  };
++});
++
++import { spawn } from 'child_process';
++import { logger } from './logger.js';
++import { registerProxyCaller, revokeProxyCaller } from './credential-proxy.js';
++import { writeFileInTree } from './host-fs-safety.js';
++import { runContainerAgent } from './container-runner.js';
++import {
++  recordProviderResult,
++  resetModelProviderState,
++} from './model-provider.js';
++import type { RegisteredGroup } from './types.js';
++
++const ANTHROPIC_KEY = 'sk-ant-real-key';
++const FOUNDRY_KEY = 'foundry-real-key';
++const FOUNDRY_ENV = {
++  MODEL_PROVIDERS: 'foundry,anthropic',
++  ANTHROPIC_API_KEY: ANTHROPIC_KEY,
++  ANTHROPIC_FOUNDRY_RESOURCE: 'unit-resource',
++  ANTHROPIC_FOUNDRY_API_KEY: FOUNDRY_KEY,
++};
++
++const testGroup: RegisteredGroup = {
++  name: 'Test Group',
++  folder: 'test-group',
++  trigger: '@Andy',
++  added_at: new Date().toISOString(),
++};
++const testInput = {
++  prompt: 'Hello',
++  groupFolder: 'test-group',
++  chatJid: 'test@g.us',
++  isMain: false,
++};
++
++function setEnv(env: Record<string, string>) {
++  for (const key of Object.keys(mockEnv)) delete mockEnv[key];
++  Object.assign(mockEnv, env);
++  resetModelProviderState();
++}
++
++/** Start a run, end it with a non-zero exit (so the full run log is written). */
++async function runOnce(): Promise<{
++  args: string[];
++  env: Map<string, string>;
++}> {
++  fakeProc = createFakeProcess();
++  const result = runContainerAgent(testGroup, testInput, () => {});
++  const args = vi.mocked(spawn).mock.calls.at(-1)?.[1] as string[];
++  fakeProc.emit('close', 1);
++  await vi.advanceTimersByTimeAsync(10);
++  await result;
++  const env = new Map<string, string>();
++  args.forEach((arg, i) => {
++    if (args[i - 1] !== '-e') return;
++    const eq = arg.indexOf('=');
++    env.set(arg.slice(0, eq), arg.slice(eq + 1));
++  });
++  return { args, env };
++}
++
++function allLogged(): string {
++  return JSON.stringify([
++    vi.mocked(logger.debug).mock.calls,
++    vi.mocked(logger.info).mock.calls,
++    vi.mocked(logger.warn).mock.calls,
++    vi.mocked(logger.error).mock.calls,
++    vi.mocked(writeFileInTree).mock.calls,
++  ]);
++}
++
++describe('container-runner model provider', () => {
++  const savedEnv = { ...process.env };
++
++  beforeEach(() => {
++    vi.useFakeTimers();
++    vi.clearAllMocks();
++    delete process.env.NANOCLAW_AGENT_MODEL;
++    delete process.env.NANOCLAW_GATE_MODEL;
++    setEnv({});
++  });
++
++  afterEach(() => {
++    vi.useRealTimers();
++    process.env = { ...savedEnv };
++    setEnv({});
++  });
++
++  it('with no settings, the container env is exactly the Anthropic set', async () => {
++    const { env } = await runOnce();
++    expect([...env.keys()].sort()).toEqual([
++      'ANTHROPIC_API_KEY',
++      'ANTHROPIC_BASE_URL',
++      'ANTHROPIC_CUSTOM_HEADERS',
++      'TZ',
++    ]);
++    expect(env.get('ANTHROPIC_BASE_URL')).toBe(
++      'http://host.docker.internal:3001',
++    );
++    expect(env.get('ANTHROPIC_API_KEY')).toBe('placeholder');
++    const token = env.get('ANTHROPIC_CUSTOM_HEADERS')!.split(': ')[1];
++    // One argument, as before the provider setting existed.
++    expect(registerProxyCaller).toHaveBeenCalledWith(token);
++    expect(logger.info).toHaveBeenCalledWith(
++      expect.objectContaining({ provider: 'anthropic' }),
++      'Spawning container agent',
++    );
++  });
++
++  it('Foundry selected: Foundry env set, Anthropic env absent', async () => {
++    setEnv({
++      ...FOUNDRY_ENV,
++      FOUNDRY_OPUS_MODEL: 'claude-opus-5-5',
++      FOUNDRY_SONNET_MODEL: 'claude-sonnet-5-5',
++      FOUNDRY_HAIKU_MODEL: 'claude-haiku-5-5',
++    });
++    const { env } = await runOnce();
++    expect(env.get('CLAUDE_CODE_USE_FOUNDRY')).toBe('1');
++    expect(env.get('ANTHROPIC_FOUNDRY_API_KEY')).toBe('placeholder');
++    expect(env.get('ANTHROPIC_FOUNDRY_BASE_URL')).toMatch(
++      /^http:\/\/host\.docker\.internal:3001\/_t\/[0-9a-f]{64}\/anthropic$/,
++    );
++    expect(env.get('ANTHROPIC_CUSTOM_HEADERS')).toMatch(
++      /^X-NanoClaw-Proxy-Token: [0-9a-f]{64}$/,
++    );
++    expect(env.get('ANTHROPIC_DEFAULT_OPUS_MODEL')).toBe('claude-opus-5-5');
++    expect(env.get('ANTHROPIC_DEFAULT_SONNET_MODEL')).toBe('claude-sonnet-5-5');
++    expect(env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL')).toBe('claude-haiku-5-5');
++    for (const key of [
++      'ANTHROPIC_BASE_URL',
++      'ANTHROPIC_API_KEY',
++      'CLAUDE_CODE_OAUTH_TOKEN',
++      'ANTHROPIC_AUTH_TOKEN',
++      'ANTHROPIC_FOUNDRY_RESOURCE',
++    ])
++      expect(env.has(key)).toBe(false);
++
++    // The same token in the header, the URL and the registration.
++    const token = env.get('ANTHROPIC_CUSTOM_HEADERS')!.split(': ')[1];
++    expect(env.get('ANTHROPIC_FOUNDRY_BASE_URL')).toContain(`/_t/${token}/`);
++    expect(registerProxyCaller).toHaveBeenCalledWith(token, 'foundry');
++    expect(revokeProxyCaller).toHaveBeenCalledWith(token);
++    expect(logger.info).toHaveBeenCalledWith(
++      expect.objectContaining({ provider: 'foundry' }),
++      'Spawning container agent',
++    );
++  });
++
++  it('Foundry selected: the base URL carries the path of a custom Foundry URL', async () => {
++    setEnv({
++      ...FOUNDRY_ENV,
++      ANTHROPIC_FOUNDRY_BASE_URL: 'https://gw.example.edu/unit/anthropic/',
++    });
++    const { env } = await runOnce();
++    expect(env.get('ANTHROPIC_FOUNDRY_BASE_URL')).toMatch(
++      /^http:\/\/host\.docker\.internal:3001\/_t\/[0-9a-f]{64}\/unit\/anthropic$/,
++    );
++    expect(env.get('ANTHROPIC_FOUNDRY_BASE_URL')).not.toContain('gw.example');
++  });
++
++  it('Foundry selected: no model pins unless set', async () => {
++    setEnv(FOUNDRY_ENV);
++    const { env } = await runOnce();
++    for (const key of [...env.keys()])
++      expect(key.startsWith('ANTHROPIC_DEFAULT_')).toBe(false);
++    expect(env.has('NANOCLAW_AGENT_MODEL')).toBe(false);
++  });
++
++  it('FOUNDRY_AGENT_MODEL and FOUNDRY_GATE_MODEL override the model settings on a Foundry run only', async () => {
++    process.env.NANOCLAW_AGENT_MODEL = 'claude-opus-5-5';
++    process.env.NANOCLAW_GATE_MODEL = 'opus';
++    setEnv({
++      ...FOUNDRY_ENV,
++      FOUNDRY_AGENT_MODEL: 'agent-deployment',
++      FOUNDRY_GATE_MODEL: 'gate-deployment',
++    });
++    let { env } = await runOnce();
++    expect(env.get('NANOCLAW_AGENT_MODEL')).toBe('agent-deployment');
++    expect(env.get('NANOCLAW_GATE_MODEL')).toBe('gate-deployment');
++
++    setEnv({
++      ...FOUNDRY_ENV,
++      MODEL_PROVIDERS: 'anthropic,foundry',
++      FOUNDRY_AGENT_MODEL: 'agent-deployment',
++      FOUNDRY_GATE_MODEL: 'gate-deployment',
++    });
++    ({ env } = await runOnce());
++    expect(env.get('NANOCLAW_AGENT_MODEL')).toBe('claude-opus-5-5');
++    expect(env.get('NANOCLAW_GATE_MODEL')).toBe('opus');
++    expect(env.has('CLAUDE_CODE_USE_FOUNDRY')).toBe(false);
++  });
++
++  it.each([
++    ['anthropic first', 'anthropic,foundry'],
++    ['foundry first', 'foundry,anthropic'],
++  ])('no real key anywhere in the container args (%s)', async (_n, order) => {
++    setEnv({ ...FOUNDRY_ENV, MODEL_PROVIDERS: order });
++    const { args } = await runOnce();
++    const joined = args.join('\n');
++    expect(joined).not.toContain(ANTHROPIC_KEY);
++    expect(joined).not.toContain(FOUNDRY_KEY);
++    expect(joined).not.toContain('unit-resource');
++    expect(allLogged()).not.toContain(ANTHROPIC_KEY);
++    expect(allLogged()).not.toContain(FOUNDRY_KEY);
++  });
++
++  it('the token is redacted in every log and in the run log, on both routes', async () => {
++    for (const order of ['foundry,anthropic', 'anthropic,foundry']) {
++      vi.clearAllMocks();
++      setEnv({ ...FOUNDRY_ENV, MODEL_PROVIDERS: order });
++      const { env } = await runOnce();
++      const token = env.get('ANTHROPIC_CUSTOM_HEADERS')!.split(': ')[1];
++      expect(token).toMatch(/^[0-9a-f]{64}$/);
++      const logged = allLogged();
++      expect(logged).not.toContain(token);
++      expect(logged).not.toContain('/_t/');
++      // The args were logged, with the token-bearing values replaced.
++      expect(logged).toContain('ANTHROPIC_CUSTOM_HEADERS=[REDACTED]');
++      if (order.startsWith('foundry'))
++        expect(logged).toContain('ANTHROPIC_FOUNDRY_BASE_URL=[REDACTED]');
++    }
++  });
++
++  it('records the provider in the run log', async () => {
++    setEnv(FOUNDRY_ENV);
++    await runOnce();
++    const runLog = vi.mocked(writeFileInTree).mock.calls.at(-1)!;
++    expect(JSON.stringify(runLog)).toContain('Provider: foundry');
++  });
++
++  it('selects once per run: after the primary trips, the next run is on the backup', async () => {
++    setEnv({ ...FOUNDRY_ENV, MODEL_PROVIDERS: 'anthropic,foundry' });
++    let { env } = await runOnce();
++    expect(env.has('ANTHROPIC_BASE_URL')).toBe(true);
++    for (let i = 0; i < 3; i++)
++      recordProviderResult('anthropic', { status: 529 });
++    ({ env } = await runOnce());
++    expect(env.get('CLAUDE_CODE_USE_FOUNDRY')).toBe('1');
++    expect(env.has('ANTHROPIC_BASE_URL')).toBe(false);
++  });
++});
+diff --git a/src/container-runner.ts b/src/container-runner.ts
+index 75cde69..3bb1fb8 100644
+--- a/src/container-runner.ts
++++ b/src/container-runner.ts
+@@ -44,6 +44,12 @@ import {
+   registerProxyCaller,
+   revokeProxyCaller,
+ } from './credential-proxy.js';
++import {
++  basePath,
++  getModelProviderConfig,
++  ModelProvider,
++  selectProvider,
++} from './model-provider.js';
+ import { validateAdditionalMounts } from './mount-security.js';
+ import {
+   CONTAINER_WORKING_CONTEXT_DIR,
+@@ -361,6 +367,7 @@ function buildContainerArgs(
+   mounts: VolumeMount[],
+   containerName: string,
+   proxyToken: string,
++  provider: ModelProvider,
+ ): string[] {
+   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+ 
+@@ -368,24 +375,52 @@ function buildContainerArgs(
+   args.push('-e', `TZ=${TIMEZONE}`);
+ 
+   // Route API traffic through the credential proxy (containers never see real secrets)
+-  args.push(
+-    '-e',
+-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+-  );
+-  args.push(
+-    '-e',
+-    `ANTHROPIC_CUSTOM_HEADERS=X-NanoClaw-Proxy-Token: ${proxyToken}`,
+-  );
+-
+-  // Mirror the host's auth method with a placeholder value.
+-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
+-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
+-  //               proxy injects real OAuth token on that exchange request.
+-  const authMode = detectAuthMode();
+-  if (authMode === 'api-key') {
+-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
++  const proxyOrigin = `http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`;
++  const foundry =
++    provider === 'foundry' ? getModelProviderConfig().foundry : undefined;
++  const modelOverrides: Record<string, string | undefined> = {};
++  if (foundry) {
++    // Foundry mode. The token is also in the base URL path, because it is
++    // not verified that the SDK sends the custom header in this mode. The
++    // key is a placeholder; the proxy puts the real one in.
++    args.push('-e', 'CLAUDE_CODE_USE_FOUNDRY=1');
++    args.push(
++      '-e',
++      `ANTHROPIC_FOUNDRY_BASE_URL=${proxyOrigin}/_t/${proxyToken}${basePath(foundry.baseUrl)}`,
++    );
++    args.push('-e', 'ANTHROPIC_FOUNDRY_API_KEY=placeholder');
++    args.push(
++      '-e',
++      `ANTHROPIC_CUSTOM_HEADERS=X-NanoClaw-Proxy-Token: ${proxyToken}`,
++    );
++    // Deployment names. Without these pins the SDK's aliases resolve to an
++    // older built-in default.
++    for (const [key, value] of [
++      ['ANTHROPIC_DEFAULT_OPUS_MODEL', foundry.opusModel],
++      ['ANTHROPIC_DEFAULT_SONNET_MODEL', foundry.sonnetModel],
++      ['ANTHROPIC_DEFAULT_HAIKU_MODEL', foundry.haikuModel],
++    ] as const) {
++      if (value) args.push('-e', `${key}=${value}`);
++    }
++    modelOverrides.NANOCLAW_AGENT_MODEL = foundry.agentModel;
++    modelOverrides.NANOCLAW_GATE_MODEL = foundry.gateModel;
+   } else {
+-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
++    args.push('-e', `ANTHROPIC_BASE_URL=${proxyOrigin}`);
++    args.push(
++      '-e',
++      `ANTHROPIC_CUSTOM_HEADERS=X-NanoClaw-Proxy-Token: ${proxyToken}`,
++    );
++
++    // Mirror the host's auth method with a placeholder value.
++    // API key mode: SDK sends x-api-key, proxy replaces with real key.
++    // OAuth mode:   SDK exchanges placeholder token for temp API key,
++    //               proxy injects real OAuth token on that exchange request.
++    const authMode = detectAuthMode();
++    if (authMode === 'api-key') {
++      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
++    } else {
++      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
++    }
+   }
+ 
+   // Per-call-site model config: forward the model knobs into the container
+@@ -398,7 +433,8 @@ function buildContainerArgs(
+     'NANOCLAW_GATE_MODEL',
+     'NANOCLAW_AGENT_EFFORT',
+   ]) {
+-    const value = process.env[key];
++    // On a Foundry run, a FOUNDRY_*_MODEL deployment name wins.
++    const value = modelOverrides[key] || process.env[key];
+     if (value) {
+       args.push('-e', `${key}=${value}`);
+     }
+@@ -449,13 +485,25 @@ export async function runContainerAgent(
+   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
+   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
+   const proxyToken = randomBytes(32).toString('hex');
+-  const containerArgs = buildContainerArgs(mounts, containerName, proxyToken);
++  // Once per run. A retry is a new run, so it picks again.
++  const provider = selectProvider();
++  const containerArgs = buildContainerArgs(
++    mounts,
++    containerName,
++    proxyToken,
++    provider,
++  );
++  // Both of these carry the per-run proxy token.
+   const loggedArgs = containerArgs
+-    .map((arg) =>
+-      arg.startsWith('ANTHROPIC_CUSTOM_HEADERS=')
+-        ? 'ANTHROPIC_CUSTOM_HEADERS=[REDACTED]'
+-        : arg,
+-    )
++    .map((arg) => {
++      for (const key of [
++        'ANTHROPIC_CUSTOM_HEADERS',
++        'ANTHROPIC_FOUNDRY_BASE_URL',
++      ]) {
++        if (arg.startsWith(`${key}=`)) return `${key}=[REDACTED]`;
++      }
++      return arg;
++    })
+     .join(' ');
+ 
+   logger.debug(
+@@ -477,6 +525,7 @@ export async function runContainerAgent(
+       containerName,
+       mountCount: mounts.length,
+       isMain: input.isMain,
++      provider,
+     },
+     'Spawning container agent',
+   );
+@@ -486,7 +535,9 @@ export async function runContainerAgent(
+   ensureDirInTree(groupDir, 'logs');
+ 
+   return new Promise((resolve) => {
+-    registerProxyCaller(proxyToken);
++    // One argument on the default route, as before this module existed.
++    if (provider === 'anthropic') registerProxyCaller(proxyToken);
++    else registerProxyCaller(proxyToken, provider);
+     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
+       stdio: ['pipe', 'pipe', 'pipe'],
+     });
+@@ -674,6 +725,7 @@ export async function runContainerAgent(
+         `Timestamp: ${new Date().toISOString()}`,
+         `Group: ${group.name}`,
+         `IsMain: ${input.isMain}`,
++        `Provider: ${provider}`,
+         `Duration: ${duration}ms`,
+         `Exit Code: ${code}`,
+         `Stdout Truncated: ${stdoutTruncated}`,
+diff --git a/src/credential-proxy-providers.test.ts b/src/credential-proxy-providers.test.ts
+new file mode 100644
+index 0000000..1372728
+--- /dev/null
++++ b/src/credential-proxy-providers.test.ts
+@@ -0,0 +1,324 @@
++/**
++ * Credential proxy: routing by provider, the Foundry credential, the
++ * path-prefix token, and the base URL path prefix. Uses local fake upstreams.
++ */
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import http from 'http';
++import type { AddressInfo } from 'net';
++
++const mockEnv: Record<string, string> = {};
++vi.mock('./env.js', () => ({
++  readEnvFile: vi.fn(() => ({ ...mockEnv })),
++}));
++
++vi.mock('./logger.js', () => ({
++  logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
++}));
++
++import {
++  startCredentialProxy,
++  registerProxyCaller,
++  revokeProxyCaller,
++} from './credential-proxy.js';
++import { logger } from './logger.js';
++import {
++  resetModelProviderState,
++  selectProvider,
++  setProviderChangeNotifier,
++} from './model-provider.js';
++
++const anthropicToken = 'a'.repeat(64);
++const foundryToken = 'f'.repeat(64);
++const ANTHROPIC_KEY = 'sk-ant-real-key';
++const FOUNDRY_KEY = 'foundry-real-key';
++
++interface Seen {
++  url: string;
++  headers: http.IncomingHttpHeaders;
++}
++
++function fakeUpstream(seen: Seen[], status: () => number) {
++  const server = http.createServer((req, res) => {
++    seen.push({ url: req.url!, headers: { ...req.headers } });
++    res.writeHead(status(), { 'content-type': 'application/json' });
++    res.end(JSON.stringify({ ok: true }));
++  });
++  return new Promise<http.Server>((resolve) =>
++    server.listen(0, '127.0.0.1', () => resolve(server)),
++  );
++}
++
++function send(
++  port: number,
++  path: string,
++  headers: Record<string, string> = {},
++): Promise<number> {
++  return new Promise((resolve, reject) => {
++    const req = http.request(
++      { hostname: '127.0.0.1', port, method: 'POST', path, headers },
++      (res) => {
++        res.resume();
++        res.on('end', () => resolve(res.statusCode!));
++      },
++    );
++    req.on('error', reject);
++    req.write('{}');
++    req.end();
++  });
++}
++
++describe('credential-proxy providers', () => {
++  let proxy: http.Server;
++  let anthropicUpstream: http.Server;
++  let foundryUpstream: http.Server;
++  let proxyPort: number;
++  let anthropicSeen: Seen[];
++  let foundrySeen: Seen[];
++  let anthropicStatus: number;
++  let foundryStatus: number;
++
++  async function start(env: Record<string, string> = {}) {
++    Object.assign(
++      mockEnv,
++      {
++        MODEL_PROVIDERS: 'anthropic,foundry',
++        ANTHROPIC_API_KEY: ANTHROPIC_KEY,
++        ANTHROPIC_BASE_URL: `http://127.0.0.1:${(anthropicUpstream.address() as AddressInfo).port}`,
++        ANTHROPIC_FOUNDRY_BASE_URL: `http://127.0.0.1:${(foundryUpstream.address() as AddressInfo).port}/anthropic`,
++        ANTHROPIC_FOUNDRY_API_KEY: FOUNDRY_KEY,
++      },
++      env,
++    );
++    registerProxyCaller(anthropicToken);
++    registerProxyCaller(foundryToken, 'foundry');
++    proxy = await startCredentialProxy(0);
++    proxyPort = (proxy.address() as AddressInfo).port;
++  }
++
++  beforeEach(async () => {
++    vi.clearAllMocks();
++    resetModelProviderState();
++    anthropicSeen = [];
++    foundrySeen = [];
++    anthropicStatus = 200;
++    foundryStatus = 200;
++    anthropicUpstream = await fakeUpstream(
++      anthropicSeen,
++      () => anthropicStatus,
++    );
++    foundryUpstream = await fakeUpstream(foundrySeen, () => foundryStatus);
++  });
++
++  afterEach(async () => {
++    revokeProxyCaller(anthropicToken);
++    revokeProxyCaller(foundryToken);
++    await new Promise<void>((r) => (proxy ? proxy.close(() => r()) : r()));
++    await new Promise<void>((r) => anthropicUpstream.close(() => r()));
++    await new Promise<void>((r) => foundryUpstream.close(() => r()));
++    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
++    resetModelProviderState();
++  });
++
++  it('routes each token to its own upstream with its own credential', async () => {
++    await start();
++    await send(proxyPort, '/v1/messages', {
++      'x-nanoclaw-proxy-token': anthropicToken,
++      'x-api-key': 'placeholder',
++    });
++    await send(proxyPort, '/anthropic/v1/messages', {
++      'x-nanoclaw-proxy-token': foundryToken,
++      'api-key': 'placeholder',
++    });
++    expect(anthropicSeen).toHaveLength(1);
++    expect(anthropicSeen[0].url).toBe('/v1/messages');
++    expect(anthropicSeen[0].headers['x-api-key']).toBe(ANTHROPIC_KEY);
++    expect(foundrySeen).toHaveLength(1);
++    expect(foundrySeen[0].url).toBe('/anthropic/v1/messages');
++    expect(foundrySeen[0].headers['api-key']).toBe(FOUNDRY_KEY);
++    // Neither upstream ever sees the other's key or the caller token.
++    expect(JSON.stringify(anthropicSeen)).not.toContain(FOUNDRY_KEY);
++    expect(JSON.stringify(foundrySeen)).not.toContain(ANTHROPIC_KEY);
++    expect(JSON.stringify(foundrySeen)).not.toContain(foundryToken);
++    expect(JSON.stringify(anthropicSeen)).not.toContain(anthropicToken);
++  });
++
++  it('Foundry: the real key replaces the placeholder in the header the caller used', async () => {
++    await start();
++    await send(proxyPort, '/anthropic/v1/messages', {
++      'x-nanoclaw-proxy-token': foundryToken,
++      'x-api-key': 'placeholder',
++    });
++    expect(foundrySeen[0].headers['x-api-key']).toBe(FOUNDRY_KEY);
++    expect(foundrySeen[0].headers['api-key']).toBeUndefined();
++
++    await send(proxyPort, '/anthropic/v1/messages', {
++      'x-nanoclaw-proxy-token': foundryToken,
++      'api-key': 'placeholder',
++    });
++    expect(foundrySeen[1].headers['api-key']).toBe(FOUNDRY_KEY);
++    expect(foundrySeen[1].headers['x-api-key']).toBeUndefined();
++    expect(JSON.stringify(foundrySeen)).not.toContain('placeholder');
++  });
++
++  it('Foundry: with no key header from the caller, sets FOUNDRY_KEY_HEADER (default api-key)', async () => {
++    await start();
++    await send(proxyPort, '/anthropic/v1/messages', {
++      'x-nanoclaw-proxy-token': foundryToken,
++    });
++    expect(foundrySeen[0].headers['api-key']).toBe(FOUNDRY_KEY);
++    expect(foundrySeen[0].headers['x-api-key']).toBeUndefined();
++  });
++
++  it('Foundry: FOUNDRY_KEY_HEADER=x-api-key is used when the caller sent no key header', async () => {
++    await start({ FOUNDRY_KEY_HEADER: 'x-api-key' });
++    await send(proxyPort, '/anthropic/v1/messages', {
++      'x-nanoclaw-proxy-token': foundryToken,
++    });
++    expect(foundrySeen[0].headers['x-api-key']).toBe(FOUNDRY_KEY);
++    expect(foundrySeen[0].headers['api-key']).toBeUndefined();
++  });
++
++  it('Foundry: an authorization header from the container is dropped', async () => {
++    await start();
++    await send(proxyPort, '/anthropic/v1/messages', {
++      'x-nanoclaw-proxy-token': foundryToken,
++      authorization: 'Bearer placeholder',
++    });
++    expect(foundrySeen[0].headers['authorization']).toBeUndefined();
++    expect(foundrySeen[0].headers['api-key']).toBe(FOUNDRY_KEY);
++  });
++
++  it('accepts the token as a path prefix, strips it, and keeps it out of the logs', async () => {
++    await start();
++    const status = await send(
++      proxyPort,
++      `/_t/${foundryToken}/anthropic/v1/messages?beta=true`,
++      { 'api-key': 'placeholder' },
++    );
++    expect(status).toBe(200);
++    expect(foundrySeen[0].url).toBe('/anthropic/v1/messages?beta=true');
++    expect(foundrySeen[0].headers['api-key']).toBe(FOUNDRY_KEY);
++
++    // The Anthropic route takes a path token too.
++    expect(await send(proxyPort, `/_t/${anthropicToken}/v1/messages`)).toBe(
++      200,
++    );
++    expect(anthropicSeen[0].url).toBe('/v1/messages');
++
++    for (const fn of [logger.info, logger.warn, logger.error, logger.debug]) {
++      const logged = JSON.stringify(vi.mocked(fn).mock.calls);
++      expect(logged).not.toContain(foundryToken);
++      expect(logged).not.toContain(anthropicToken);
++    }
++  });
++
++  it('logs the stripped path, never the token, when the upstream is unreachable', async () => {
++    await start({
++      ANTHROPIC_FOUNDRY_BASE_URL: 'http://127.0.0.1:59998/anthropic',
++    });
++    const status = await send(
++      proxyPort,
++      `/_t/${foundryToken}/anthropic/v1/messages`,
++    );
++    expect(status).toBe(502);
++    const logged = JSON.stringify(vi.mocked(logger.error).mock.calls);
++    expect(logged).toContain('/anthropic/v1/messages');
++    expect(logged).not.toContain(foundryToken);
++    expect(logged).not.toContain('/_t/');
++  });
++
++  it('an unknown or revoked token still gets 401, in the header or the path', async () => {
++    await start();
++    const unknown = 'b'.repeat(64);
++    expect(
++      await send(proxyPort, '/v1/messages', {
++        'x-nanoclaw-proxy-token': unknown,
++      }),
++    ).toBe(401);
++    expect(await send(proxyPort, `/_t/${unknown}/anthropic/v1/messages`)).toBe(
++      401,
++    );
++    expect(await send(proxyPort, '/_t/short/anthropic/v1/messages')).toBe(401);
++    revokeProxyCaller(foundryToken);
++    expect(
++      await send(proxyPort, `/_t/${foundryToken}/anthropic/v1/messages`),
++    ).toBe(401);
++    expect(anthropicSeen).toHaveLength(0);
++    expect(foundrySeen).toHaveLength(0);
++  });
++
++  it('Anthropic route: joins a path prefix in ANTHROPIC_BASE_URL to the request path', async () => {
++    const port = (anthropicUpstream.address() as AddressInfo).port;
++    await start({
++      ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}/gateway/claude/`,
++    });
++    await send(proxyPort, '/v1/messages?beta=true', {
++      'x-nanoclaw-proxy-token': anthropicToken,
++    });
++    expect(anthropicSeen[0].url).toBe('/gateway/claude/v1/messages?beta=true');
++    expect(anthropicSeen[0].headers['x-api-key']).toBe(ANTHROPIC_KEY);
++  });
++
++  it('a Foundry token is refused when Foundry is not configured', async () => {
++    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
++    Object.assign(mockEnv, {
++      ANTHROPIC_API_KEY: ANTHROPIC_KEY,
++      ANTHROPIC_BASE_URL: `http://127.0.0.1:${(anthropicUpstream.address() as AddressInfo).port}`,
++    });
++    registerProxyCaller(foundryToken, 'foundry');
++    proxy = await startCredentialProxy(0);
++    proxyPort = (proxy.address() as AddressInfo).port;
++    expect(
++      await send(proxyPort, '/anthropic/v1/messages', {
++        'x-nanoclaw-proxy-token': foundryToken,
++      }),
++    ).toBe(502);
++    expect(anthropicSeen).toHaveLength(0);
++  });
++
++  it('a listed provider with missing settings stops the proxy from starting', () => {
++    Object.assign(mockEnv, {
++      MODEL_PROVIDERS: 'anthropic,foundry',
++      ANTHROPIC_API_KEY: ANTHROPIC_KEY,
++    });
++    expect(() => startCredentialProxy(0)).toThrow(/lists foundry/);
++  });
++
++  it('feeds the breaker: three 5xx answers move the next run to Foundry, with one notice', async () => {
++    await start();
++    const notify = vi.fn();
++    setProviderChangeNotifier(notify);
++    expect(selectProvider()).toBe('anthropic');
++    anthropicStatus = 529;
++    for (let i = 0; i < 3; i++)
++      await send(proxyPort, '/v1/messages', {
++        'x-nanoclaw-proxy-token': anthropicToken,
++      });
++    expect(selectProvider()).toBe('foundry');
++    expect(selectProvider()).toBe('foundry');
++    expect(notify).toHaveBeenCalledTimes(1);
++    expect(notify.mock.calls[0][0]).toContain('anthropic → foundry');
++  });
++
++  it('feeds the breaker: a 2xx between failures keeps the provider', async () => {
++    await start();
++    for (const status of [401, 429, 200, 500, 503]) {
++      anthropicStatus = status;
++      await send(proxyPort, '/v1/messages', {
++        'x-nanoclaw-proxy-token': anthropicToken,
++      });
++    }
++    expect(selectProvider()).toBe('anthropic');
++  });
++
++  it('feeds the breaker: an unreachable upstream counts as a failure', async () => {
++    await start({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:59997' });
++    for (let i = 0; i < 3; i++)
++      expect(
++        await send(proxyPort, '/v1/messages', {
++          'x-nanoclaw-proxy-token': anthropicToken,
++        }),
++      ).toBe(502);
++    expect(selectProvider()).toBe('foundry');
++  });
++});
+diff --git a/src/credential-proxy.ts b/src/credential-proxy.ts
+index 5990016..f611825 100644
+--- a/src/credential-proxy.ts
++++ b/src/credential-proxy.ts
+@@ -9,6 +9,10 @@
+  *             API key via /api/oauth/claude_cli/create_api_key.
+  *             Proxy injects real OAuth token on that exchange request;
+  *             subsequent requests carry the temp key which is valid as-is.
++ *
++ * Each run's token is registered with a provider. The proxy picks the
++ * upstream and the credential per request from that token, and reports each
++ * upstream result to the provider's circuit breaker (model-provider.ts).
+  */
+ import { createServer, Server } from 'http';
+ import { request as httpsRequest } from 'https';
+@@ -17,6 +21,12 @@ import { timingSafeEqual } from 'crypto';
+ 
+ import { readEnvFile } from './env.js';
+ import { logger } from './logger.js';
++import {
++  basePath,
++  getModelProviderConfig,
++  ModelProvider,
++  recordProviderResult,
++} from './model-provider.js';
+ 
+ export type AuthMode = 'api-key' | 'oauth';
+ 
+@@ -26,26 +36,54 @@ export interface ProxyConfig {
+ 
+ const PROXY_TOKEN_HEADER = 'x-nanoclaw-proxy-token';
+ const MAX_PROXY_BODY_BYTES = 20 * 1024 * 1024;
+-const activeCallers = new Set<string>();
++const activeCallers = new Map<string, ModelProvider>();
++/**
++ * The token may also arrive as a path prefix. It is not verified that the
++ * SDK sends ANTHROPIC_CUSTOM_HEADERS in Foundry mode, and a request with no
++ * token is rejected. A path with this prefix must never be logged.
++ */
++const PATH_TOKEN_RE = /^\/_t\/([0-9a-f]{64})(\/.*)?$/;
+ 
+ /** Tokens are generated by the host for one container run, never persisted. */
+-export function registerProxyCaller(token: string): void {
++export function registerProxyCaller(
++  token: string,
++  provider: ModelProvider = 'anthropic',
++): void {
+   if (!/^[0-9a-f]{64}$/.test(token))
+     throw new Error('Invalid proxy caller token');
+-  activeCallers.add(token);
++  activeCallers.set(token, provider);
+ }
+ 
+ export function revokeProxyCaller(token: string): void {
+   activeCallers.delete(token);
+ }
+ 
+-function isAuthorized(token: string | string[] | undefined): boolean {
+-  if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return false;
++function providerForToken(
++  token: string | string[] | undefined,
++): ModelProvider | null {
++  if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return null;
+   const candidate = Buffer.from(token, 'hex');
+-  for (const active of activeCallers) {
+-    if (timingSafeEqual(candidate, Buffer.from(active, 'hex'))) return true;
++  let found: ModelProvider | null = null;
++  for (const [active, provider] of activeCallers) {
++    if (timingSafeEqual(candidate, Buffer.from(active, 'hex')))
++      found = provider;
+   }
+-  return false;
++  return found;
++}
++
++/**
++ * Identify the caller from the token header, or else from a path prefix.
++ * Returns the provider and the path with any token prefix removed.
++ */
++function resolveCaller(
++  headerToken: string | string[] | undefined,
++  url: string,
++): { provider: ModelProvider; path: string } | null {
++  const match = PATH_TOKEN_RE.exec(url);
++  const path = match ? match[2] || '/' : url;
++  const provider =
++    providerForToken(headerToken) ?? (match && providerForToken(match[1]));
++  return provider ? { provider, path } : null;
+ }
+ 
+ export function startCredentialProxy(
+@@ -69,17 +107,37 @@ export function startCredentialProxy(
+   const upstreamUrl = new URL(
+     secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+   );
+-  const isHttps = upstreamUrl.protocol === 'https:';
+-  const makeRequest = isHttps ? httpsRequest : httpRequest;
++  // A path in ANTHROPIC_BASE_URL is kept: it is joined before the request
++  // path. No path (the default) leaves the request path as sent.
++  const anthropicPrefix = basePath(upstreamUrl);
++  // Throws on a listed provider with missing settings: a startup error.
++  const foundry = getModelProviderConfig().foundry;
+ 
+   return new Promise((resolve, reject) => {
+     const server = createServer((req, res) => {
+-      if (!isAuthorized(req.headers[PROXY_TOKEN_HEADER])) {
++      const caller = resolveCaller(
++        req.headers[PROXY_TOKEN_HEADER],
++        req.url || '/',
++      );
++      if (!caller) {
+         res.writeHead(401);
+         res.end('Unauthorized');
+         req.resume();
+         return;
+       }
++      const { provider, path: requestPath } = caller;
++      if (provider === 'foundry' && !foundry) {
++        // Not reachable through selectProvider(); refuse instead of
++        // sending a Foundry-shaped request to another upstream.
++        res.writeHead(502);
++        res.end('Bad Gateway');
++        req.resume();
++        return;
++      }
++      const targetUrl =
++        provider === 'foundry' && foundry ? foundry.baseUrl : upstreamUrl;
++      const isHttps = targetUrl.protocol === 'https:';
++      const makeRequest = isHttps ? httpsRequest : httpRequest;
+ 
+       const rejectOversize = () => {
+         res.writeHead(413);
+@@ -110,7 +168,7 @@ export function startCredentialProxy(
+         const headers: Record<string, string | number | string[] | undefined> =
+           {
+             ...(req.headers as Record<string, string>),
+-            host: upstreamUrl.host,
++            host: targetUrl.host,
+             'content-length': body.length,
+           };
+ 
+@@ -120,7 +178,14 @@ export function startCredentialProxy(
+         delete headers['transfer-encoding'];
+         delete headers[PROXY_TOKEN_HEADER];
+ 
+-        if (authMode === 'api-key') {
++        if (provider === 'foundry' && foundry) {
++          // The real key goes in whichever key header the caller used. A
++          // bearer token from the container is never forwarded.
++          delete headers['authorization'];
++          const sent = ['x-api-key', 'api-key'].filter((h) => headers[h]);
++          for (const h of sent.length ? sent : [foundry.keyHeader])
++            headers[h] = foundry.apiKey;
++        } else if (authMode === 'api-key') {
+           // API key mode: inject x-api-key on every request
+           delete headers['x-api-key'];
+           headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
+@@ -139,21 +204,28 @@ export function startCredentialProxy(
+ 
+         const upstream = makeRequest(
+           {
+-            hostname: upstreamUrl.hostname,
+-            port: upstreamUrl.port || (isHttps ? 443 : 80),
+-            path: req.url,
++            hostname: targetUrl.hostname,
++            port: targetUrl.port || (isHttps ? 443 : 80),
++            // Foundry: the path as sent (the container's base URL already
++            // carries the Foundry path part).
++            path:
++              provider === 'foundry'
++                ? requestPath
++                : anthropicPrefix + requestPath,
+             method: req.method,
+             headers,
+           } as RequestOptions,
+           (upRes) => {
++            recordProviderResult(provider, { status: upRes.statusCode });
+             res.writeHead(upRes.statusCode!, upRes.headers);
+             upRes.pipe(res);
+           },
+         );
+ 
+         upstream.on('error', (err) => {
++          recordProviderResult(provider, { networkError: true });
+           logger.error(
+-            { err, url: req.url },
++            { err, url: requestPath, provider },
+             'Credential proxy upstream error',
+           );
+           if (!res.headersSent) {
+diff --git a/src/index.ts b/src/index.ts
+index 080c587..136ff4b 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -48,6 +48,7 @@ import {
+   storeMessage,
+ } from './db.js';
+ import { readEnvFile } from './env.js';
++import { setProviderChangeNotifier } from './model-provider.js';
+ import { GroupQueue } from './group-queue.js';
+ import {
+   readGroupTemplate,
+@@ -1149,6 +1150,13 @@ async function main(): Promise<void> {
+     notify: (text) => sendDeadLetterAlert(text),
+     logProblem: logDeliveryProblem,
+   });
++  // A model provider change (failover or return) goes to the operator.
++  // Fire-and-forget: a failed alert must not affect the run that caused it.
++  setProviderChangeNotifier((text) => {
++    sendDeadLetterAlert(text).catch((err) =>
++      logger.error({ err }, 'Model provider change alert send failed'),
++    );
++  });
+   queue.setProcessMessagesFn(processGroupMessages);
+   // Surface silent message drops (retries exhausted) to the owner's Telegram DM.
+   queue.setDeadLetterFn((groupJid) => {
+diff --git a/src/model-provider.test.ts b/src/model-provider.test.ts
+new file mode 100644
+index 0000000..a88efb5
+--- /dev/null
++++ b/src/model-provider.test.ts
+@@ -0,0 +1,338 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++const mockEnv: Record<string, string> = {};
++vi.mock('./env.js', () => ({
++  readEnvFile: vi.fn((keys: string[]) =>
++    Object.fromEntries(
++      Object.entries(mockEnv).filter(([k]) => keys.includes(k)),
++    ),
++  ),
++}));
++
++vi.mock('./logger.js', () => ({
++  logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
++}));
++
++import { logger } from './logger.js';
++import {
++  DEFAULT_FAILOVER_COOLDOWN_MS,
++  DEFAULT_FAILOVER_THRESHOLD,
++  failureReason,
++  isProviderInCooldown,
++  loadModelProviderConfig,
++  readFoundrySettings,
++  recordProviderResult,
++  resetModelProviderState,
++  selectProvider,
++  setProviderChangeNotifier,
++} from './model-provider.js';
++
++const FOUNDRY_ENV = {
++  ANTHROPIC_FOUNDRY_RESOURCE: 'unit-resource',
++  ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
++};
++const BOTH = {
++  MODEL_PROVIDERS: 'anthropic,foundry',
++  ANTHROPIC_API_KEY: 'sk-ant-real-key',
++  ...FOUNDRY_ENV,
++};
++
++function setEnv(env: Record<string, string>) {
++  for (const key of Object.keys(mockEnv)) delete mockEnv[key];
++  Object.assign(mockEnv, env);
++  resetModelProviderState();
++}
++
++beforeEach(() => {
++  vi.useFakeTimers();
++  vi.setSystemTime(new Date('2026-11-19T12:00:00Z'));
++  vi.clearAllMocks();
++  setEnv({});
++});
++
++afterEach(() => {
++  vi.useRealTimers();
++});
++
++describe('model provider settings', () => {
++  it('with no settings: one provider, anthropic, and no credential check', () => {
++    expect(loadModelProviderConfig()).toEqual({
++      order: ['anthropic'],
++      threshold: DEFAULT_FAILOVER_THRESHOLD,
++      cooldownMs: DEFAULT_FAILOVER_COOLDOWN_MS,
++    });
++    expect(DEFAULT_FAILOVER_THRESHOLD).toBe(3);
++    expect(DEFAULT_FAILOVER_COOLDOWN_MS).toBe(30 * 60 * 1000);
++    expect(selectProvider()).toBe('anthropic');
++  });
++
++  it('with no settings, failures never change the provider or notify', () => {
++    const notify = vi.fn();
++    setProviderChangeNotifier(notify);
++    for (let i = 0; i < 10; i++)
++      recordProviderResult('anthropic', { status: 500 });
++    expect(selectProvider()).toBe('anthropic');
++    expect(notify).not.toHaveBeenCalled();
++  });
++
++  it('reads the order as written, so Foundry can be primary', () => {
++    setEnv({ ...BOTH, MODEL_PROVIDERS: ' Foundry , anthropic ' });
++    expect(loadModelProviderConfig().order).toEqual(['foundry', 'anthropic']);
++    expect(selectProvider()).toBe('foundry');
++  });
++
++  it('builds the Foundry base URL from the resource name', () => {
++    setEnv(BOTH);
++    const { foundry } = loadModelProviderConfig();
++    expect(foundry!.baseUrl.href).toBe(
++      'https://unit-resource.services.ai.azure.com/anthropic',
++    );
++    expect(foundry!.keyHeader).toBe('api-key');
++  });
++
++  it('prefers an explicit Foundry base URL and reads the optional settings', () => {
++    setEnv({
++      ...BOTH,
++      ANTHROPIC_FOUNDRY_BASE_URL: 'https://other.example.edu/anthropic/',
++      FOUNDRY_KEY_HEADER: 'X-Api-Key',
++      FOUNDRY_AGENT_MODEL: 'agent-deploy',
++      FOUNDRY_HAIKU_MODEL: 'claude-haiku-5-5',
++      MODEL_FAILOVER_THRESHOLD: '5',
++      MODEL_FAILOVER_COOLDOWN_MS: '60000',
++    });
++    const cfg = loadModelProviderConfig();
++    expect(cfg.foundry!.baseUrl.host).toBe('other.example.edu');
++    expect(cfg.foundry!.keyHeader).toBe('x-api-key');
++    expect(cfg.foundry!.agentModel).toBe('agent-deploy');
++    expect(cfg.foundry!.haikuModel).toBe('claude-haiku-5-5');
++    expect(cfg.threshold).toBe(5);
++    expect(cfg.cooldownMs).toBe(60000);
++  });
++
++  it.each([
++    [
++      'foundry listed without a resource or base URL',
++      { ...BOTH, ANTHROPIC_FOUNDRY_RESOURCE: '' },
++      /lists foundry.*ANTHROPIC_FOUNDRY_RESOURCE or ANTHROPIC_FOUNDRY_BASE_URL/,
++    ],
++    [
++      'foundry listed without a key',
++      { ...BOTH, ANTHROPIC_FOUNDRY_API_KEY: '' },
++      /lists foundry.*ANTHROPIC_FOUNDRY_API_KEY/,
++    ],
++    [
++      'a resource that is a URL, not a name',
++      { ...BOTH, ANTHROPIC_FOUNDRY_RESOURCE: 'https://x.example' },
++      /resource name only/,
++    ],
++    [
++      'anthropic listed without a credential',
++      { MODEL_PROVIDERS: 'anthropic,foundry', ...FOUNDRY_ENV },
++      /lists anthropic.*ANTHROPIC_API_KEY/,
++    ],
++    [
++      'an unknown provider',
++      { ...BOTH, MODEL_PROVIDERS: 'anthropic,bedrock' },
++      /unknown provider "bedrock"/,
++    ],
++    [
++      'a provider listed twice',
++      { ...BOTH, MODEL_PROVIDERS: 'anthropic,anthropic' },
++      /listed twice/,
++    ],
++    ['an empty list', { ...BOTH, MODEL_PROVIDERS: ' , ' }, /names no provider/],
++    [
++      'a bad key header',
++      { ...BOTH, FOUNDRY_KEY_HEADER: 'authorization' },
++      /FOUNDRY_KEY_HEADER/,
++    ],
++    [
++      'a bad threshold',
++      { ...BOTH, MODEL_FAILOVER_THRESHOLD: '0' },
++      /MODEL_FAILOVER_THRESHOLD/,
++    ],
++    [
++      'a bad cooldown',
++      { ...BOTH, MODEL_FAILOVER_COOLDOWN_MS: '30m' },
++      /MODEL_FAILOVER_COOLDOWN_MS/,
++    ],
++  ])('fails clearly on %s', (_name, env, message) => {
++    // The mock drops empty values the way the real parser does.
++    setEnv(Object.fromEntries(Object.entries(env).filter(([, v]) => v)));
++    expect(() => loadModelProviderConfig()).toThrow(message);
++    expect(() => selectProvider()).toThrow(message);
++  });
++
++  it('an error message never contains a key', () => {
++    setEnv({ ...BOTH, FOUNDRY_KEY_HEADER: 'nope' });
++    try {
++      loadModelProviderConfig();
++      throw new Error('expected a throw');
++    } catch (err) {
++      expect((err as Error).message).not.toContain('foundry-real-key');
++      expect((err as Error).message).not.toContain('sk-ant-real-key');
++    }
++  });
++
++  it('readFoundrySettings works without MODEL_PROVIDERS and throws when incomplete', () => {
++    setEnv(FOUNDRY_ENV);
++    expect(readFoundrySettings().apiKey).toBe('foundry-real-key');
++    setEnv({ ANTHROPIC_FOUNDRY_RESOURCE: 'unit-resource' });
++    expect(() => readFoundrySettings()).toThrow(/ANTHROPIC_FOUNDRY_API_KEY/);
++  });
++});
++
++describe('failureReason', () => {
++  it('counts network errors, 401, 403, 429 and 5xx; nothing else', () => {
++    expect(failureReason({ networkError: true })).toBe('network error');
++    expect(failureReason({ status: 401 })).toBe('auth error (401)');
++    expect(failureReason({ status: 403 })).toBe('auth error (403)');
++    expect(failureReason({ status: 429 })).toBe('rate limited (429)');
++    expect(failureReason({ status: 500 })).toBe('server error (5xx)');
++    expect(failureReason({ status: 529 })).toBe('server error (5xx)');
++    for (const status of [200, 204, 301, 400, 404, 413])
++      expect(failureReason({ status })).toBeNull();
++  });
++});
++
++describe('circuit breaker', () => {
++  beforeEach(() => setEnv(BOTH));
++
++  it.each([
++    ['401', { status: 401 }],
++    ['429', { status: 429 }],
++    ['5xx', { status: 503 }],
++    ['a network error', { networkError: true }],
++  ])('trips at the threshold on %s, not before', (_name, result) => {
++    recordProviderResult('anthropic', result);
++    recordProviderResult('anthropic', result);
++    expect(isProviderInCooldown('anthropic')).toBe(false);
++    expect(selectProvider()).toBe('anthropic');
++    recordProviderResult('anthropic', result);
++    expect(isProviderInCooldown('anthropic')).toBe(true);
++    expect(selectProvider()).toBe('foundry');
++  });
++
++  it('a 400 or 404 does not count', () => {
++    for (let i = 0; i < 10; i++) {
++      recordProviderResult('anthropic', { status: 400 });
++      recordProviderResult('anthropic', { status: 404 });
++    }
++    expect(selectProvider()).toBe('anthropic');
++  });
++
++  it('a 2xx resets the count', () => {
++    recordProviderResult('anthropic', { status: 500 });
++    recordProviderResult('anthropic', { status: 500 });
++    recordProviderResult('anthropic', { status: 200 });
++    recordProviderResult('anthropic', { status: 500 });
++    recordProviderResult('anthropic', { status: 500 });
++    expect(selectProvider()).toBe('anthropic');
++    recordProviderResult('anthropic', { status: 500 });
++    expect(selectProvider()).toBe('foundry');
++  });
++
++  it('returns to the first provider when the cooldown ends', () => {
++    for (let i = 0; i < 3; i++)
++      recordProviderResult('anthropic', { status: 500 });
++    expect(selectProvider()).toBe('foundry');
++    vi.advanceTimersByTime(DEFAULT_FAILOVER_COOLDOWN_MS - 1);
++    expect(selectProvider()).toBe('foundry');
++    vi.advanceTimersByTime(1);
++    expect(selectProvider()).toBe('anthropic');
++  });
++
++  it('half-open: one failure after the cooldown trips it again at once', () => {
++    for (let i = 0; i < 3; i++)
++      recordProviderResult('anthropic', { status: 500 });
++    vi.advanceTimersByTime(DEFAULT_FAILOVER_COOLDOWN_MS);
++    expect(selectProvider()).toBe('anthropic');
++    recordProviderResult('anthropic', { status: 429 });
++    expect(selectProvider()).toBe('foundry');
++  });
++
++  it('half-open: a 2xx after the cooldown restores the full threshold', () => {
++    for (let i = 0; i < 3; i++)
++      recordProviderResult('anthropic', { status: 500 });
++    vi.advanceTimersByTime(DEFAULT_FAILOVER_COOLDOWN_MS);
++    recordProviderResult('anthropic', { status: 200 });
++    recordProviderResult('anthropic', { status: 500 });
++    recordProviderResult('anthropic', { status: 500 });
++    expect(selectProvider()).toBe('anthropic');
++  });
++
++  it('failures during the cooldown do not extend it', () => {
++    for (let i = 0; i < 3; i++)
++      recordProviderResult('anthropic', { status: 500 });
++    vi.advanceTimersByTime(DEFAULT_FAILOVER_COOLDOWN_MS - 1000);
++    for (let i = 0; i < 5; i++)
++      recordProviderResult('anthropic', { status: 500 });
++    vi.advanceTimersByTime(1000);
++    expect(selectProvider()).toBe('anthropic');
++  });
++
++  it('when every provider is in cooldown, selects the first', () => {
++    for (let i = 0; i < 3; i++) {
++      recordProviderResult('anthropic', { status: 500 });
++      recordProviderResult('foundry', { networkError: true });
++    }
++    expect(selectProvider()).toBe('anthropic');
++  });
++
++  it('uses the configured threshold and cooldown', () => {
++    setEnv({
++      ...BOTH,
++      MODEL_FAILOVER_THRESHOLD: '1',
++      MODEL_FAILOVER_COOLDOWN_MS: '5000',
++    });
++    recordProviderResult('anthropic', { status: 401 });
++    expect(selectProvider()).toBe('foundry');
++    vi.advanceTimersByTime(5000);
++    expect(selectProvider()).toBe('anthropic');
++  });
++});
++
++describe('provider change notice', () => {
++  beforeEach(() => setEnv(BOTH));
++
++  it('notifies once per change, naming old, new and the status class', () => {
++    const notify = vi.fn();
++    setProviderChangeNotifier(notify);
++    expect(selectProvider()).toBe('anthropic');
++    expect(notify).not.toHaveBeenCalled();
++
++    for (let i = 0; i < 3; i++)
++      recordProviderResult('anthropic', { status: 503 });
++    selectProvider();
++    selectProvider();
++    selectProvider();
++    expect(notify).toHaveBeenCalledTimes(1);
++    expect(notify.mock.calls[0][0]).toContain('anthropic → foundry');
++    expect(notify.mock.calls[0][0]).toContain('server error (5xx)');
++    expect(logger.warn).toHaveBeenCalledWith(
++      {
++        from: 'anthropic',
++        to: 'foundry',
++        reason: 'anthropic: server error (5xx)',
++      },
++      'Model provider changed',
++    );
++
++    vi.advanceTimersByTime(DEFAULT_FAILOVER_COOLDOWN_MS);
++    selectProvider();
++    selectProvider();
++    expect(notify).toHaveBeenCalledTimes(2);
++    expect(notify.mock.calls[1][0]).toContain('foundry → anthropic');
++    expect(notify.mock.calls[1][0]).toContain('cooldown ended');
++  });
++
++  it('a throwing notifier does not break selection', () => {
++    setProviderChangeNotifier(() => {
++      throw new Error('alert channel down');
++    });
++    for (let i = 0; i < 3; i++)
++      recordProviderResult('anthropic', { status: 500 });
++    expect(selectProvider()).toBe('foundry');
++    expect(logger.error).toHaveBeenCalled();
++  });
++});
+diff --git a/src/model-provider.ts b/src/model-provider.ts
+new file mode 100644
+index 0000000..1615440
+--- /dev/null
++++ b/src/model-provider.ts
+@@ -0,0 +1,314 @@
++/**
++ * Model providers for the agent, in a configured order, with a circuit
++ * breaker per provider.
++ *
++ * The credential proxy reports each upstream result here. The container
++ * runner asks `selectProvider()` once per run. With no settings there is one
++ * provider (`anthropic`) and nothing ever switches.
++ *
++ * Settings are read from `.env` (they are secrets or sit beside secrets).
++ * Breaker state is in memory only: a restart forgets it.
++ */
++import { readEnvFile } from './env.js';
++import { logger } from './logger.js';
++
++export type ModelProvider = 'anthropic' | 'foundry';
++
++const PROVIDERS: readonly ModelProvider[] = ['anthropic', 'foundry'];
++export const DEFAULT_FAILOVER_THRESHOLD = 3;
++export const DEFAULT_FAILOVER_COOLDOWN_MS = 30 * 60 * 1000;
++export const DEFAULT_FOUNDRY_KEY_HEADER = 'api-key';
++const FOUNDRY_KEY_HEADERS = ['api-key', 'x-api-key'];
++
++export interface FoundrySettings {
++  /** Real base URL, e.g. https://name.services.ai.azure.com/anthropic */
++  baseUrl: URL;
++  apiKey: string;
++  /** Header that carries the key when the caller sent no key header. */
++  keyHeader: string;
++  /** Deployment names. Each is optional. */
++  agentModel?: string;
++  gateModel?: string;
++  opusModel?: string;
++  sonnetModel?: string;
++  haikuModel?: string;
++}
++
++export interface ModelProviderConfig {
++  order: ModelProvider[];
++  foundry?: FoundrySettings;
++  threshold: number;
++  cooldownMs: number;
++}
++
++const FOUNDRY_KEYS = [
++  'ANTHROPIC_FOUNDRY_RESOURCE',
++  'ANTHROPIC_FOUNDRY_BASE_URL',
++  'ANTHROPIC_FOUNDRY_API_KEY',
++  'FOUNDRY_KEY_HEADER',
++  'FOUNDRY_AGENT_MODEL',
++  'FOUNDRY_GATE_MODEL',
++  'FOUNDRY_OPUS_MODEL',
++  'FOUNDRY_SONNET_MODEL',
++  'FOUNDRY_HAIKU_MODEL',
++];
++
++function parseFoundry(env: Record<string, string>): FoundrySettings {
++  const resource = env.ANTHROPIC_FOUNDRY_RESOURCE;
++  const rawBase = env.ANTHROPIC_FOUNDRY_BASE_URL;
++  if (!resource && !rawBase)
++    throw new Error(
++      'Foundry needs ANTHROPIC_FOUNDRY_RESOURCE or ANTHROPIC_FOUNDRY_BASE_URL in .env',
++    );
++  if (!env.ANTHROPIC_FOUNDRY_API_KEY)
++    throw new Error('Foundry needs ANTHROPIC_FOUNDRY_API_KEY in .env');
++  if (!rawBase && !/^[a-z0-9][a-z0-9-]*$/i.test(resource))
++    throw new Error(
++      'ANTHROPIC_FOUNDRY_RESOURCE must be the resource name only (letters, digits, hyphens)',
++    );
++  let baseUrl: URL;
++  try {
++    baseUrl = new URL(
++      rawBase || `https://${resource}.services.ai.azure.com/anthropic`,
++    );
++  } catch {
++    throw new Error('ANTHROPIC_FOUNDRY_BASE_URL is not a valid URL');
++  }
++  if (baseUrl.protocol !== 'https:' && baseUrl.protocol !== 'http:')
++    throw new Error('ANTHROPIC_FOUNDRY_BASE_URL must be an http(s) URL');
++  const keyHeader = (
++    env.FOUNDRY_KEY_HEADER || DEFAULT_FOUNDRY_KEY_HEADER
++  ).toLowerCase();
++  if (!FOUNDRY_KEY_HEADERS.includes(keyHeader))
++    throw new Error('FOUNDRY_KEY_HEADER must be api-key or x-api-key');
++  return {
++    baseUrl,
++    apiKey: env.ANTHROPIC_FOUNDRY_API_KEY,
++    keyHeader,
++    agentModel: env.FOUNDRY_AGENT_MODEL,
++    gateModel: env.FOUNDRY_GATE_MODEL,
++    opusModel: env.FOUNDRY_OPUS_MODEL,
++    sonnetModel: env.FOUNDRY_SONNET_MODEL,
++    haikuModel: env.FOUNDRY_HAIKU_MODEL,
++  };
++}
++
++/**
++ * Foundry settings alone, for a caller that uses Foundry without the
++ * provider order (the reply sensor). Throws when they are incomplete.
++ */
++export function readFoundrySettings(): FoundrySettings {
++  return parseFoundry(readEnvFile(FOUNDRY_KEYS));
++}
++
++/** Base URL path without a trailing slash: '' or e.g. '/anthropic'. */
++export function basePath(url: URL): string {
++  return url.pathname.replace(/\/+$/, '');
++}
++
++function positiveInt(raw: string | undefined, name: string, fallback: number) {
++  if (raw === undefined) return fallback;
++  if (!/^\d+$/.test(raw) || Number(raw) < 1)
++    throw new Error(`${name} must be a positive whole number`);
++  return Number(raw);
++}
++
++/**
++ * Read and check the provider settings. Throws with a clear message when a
++ * listed provider lacks its settings: a silent skip would leave the unit
++ * believing it has a backup.
++ */
++export function loadModelProviderConfig(): ModelProviderConfig {
++  const env = readEnvFile([
++    'MODEL_PROVIDERS',
++    'MODEL_FAILOVER_THRESHOLD',
++    'MODEL_FAILOVER_COOLDOWN_MS',
++    'ANTHROPIC_API_KEY',
++    'CLAUDE_CODE_OAUTH_TOKEN',
++    'ANTHROPIC_AUTH_TOKEN',
++    ...FOUNDRY_KEYS,
++  ]);
++  const threshold = positiveInt(
++    env.MODEL_FAILOVER_THRESHOLD,
++    'MODEL_FAILOVER_THRESHOLD',
++    DEFAULT_FAILOVER_THRESHOLD,
++  );
++  const cooldownMs = positiveInt(
++    env.MODEL_FAILOVER_COOLDOWN_MS,
++    'MODEL_FAILOVER_COOLDOWN_MS',
++    DEFAULT_FAILOVER_COOLDOWN_MS,
++  );
++
++  // Unset: exactly the behaviour before this module existed. One provider,
++  // and no new check on its credentials.
++  if (env.MODEL_PROVIDERS === undefined)
++    return { order: ['anthropic'], threshold, cooldownMs };
++
++  const order: ModelProvider[] = [];
++  for (const raw of env.MODEL_PROVIDERS.split(',')) {
++    const name = raw.trim().toLowerCase();
++    if (!name) continue;
++    if (!PROVIDERS.includes(name as ModelProvider))
++      throw new Error(
++        `MODEL_PROVIDERS: unknown provider "${name}" (use anthropic, foundry)`,
++      );
++    if (order.includes(name as ModelProvider))
++      throw new Error(`MODEL_PROVIDERS: "${name}" is listed twice`);
++    order.push(name as ModelProvider);
++  }
++  if (order.length === 0)
++    throw new Error('MODEL_PROVIDERS is set but names no provider');
++
++  if (
++    order.includes('anthropic') &&
++    !env.ANTHROPIC_API_KEY &&
++    !env.CLAUDE_CODE_OAUTH_TOKEN &&
++    !env.ANTHROPIC_AUTH_TOKEN
++  )
++    throw new Error(
++      'MODEL_PROVIDERS lists anthropic, but .env has no ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN',
++    );
++
++  let foundry: FoundrySettings | undefined;
++  if (order.includes('foundry')) {
++    try {
++      foundry = parseFoundry(env);
++    } catch (err) {
++      throw new Error(
++        `MODEL_PROVIDERS lists foundry, but its settings are incomplete: ${(err as Error).message}`,
++      );
++    }
++  }
++  return { order, foundry, threshold, cooldownMs };
++}
++
++// --- State -----------------------------------------------------------------
++
++interface BreakerState {
++  failures: number;
++  /** Unhealthy until this time (ms). 0 = never tripped, or reset by a 2xx. */
++  openUntil: number;
++  /** Tripped and not yet proven healthy: one failure trips it again. */
++  tripped: boolean;
++  lastReason: string;
++}
++
++let config: ModelProviderConfig | null = null;
++const breakers = new Map<ModelProvider, BreakerState>();
++let lastSelected: ModelProvider | null = null;
++let notifier: ((text: string) => void) | null = null;
++
++/** The checked settings, read once per process. Throws as the loader does. */
++export function getModelProviderConfig(): ModelProviderConfig {
++  if (!config) config = loadModelProviderConfig();
++  return config;
++}
++
++/** Called on a provider change with a short text. It must not throw. */
++export function setProviderChangeNotifier(
++  fn: ((text: string) => void) | null,
++): void {
++  notifier = fn;
++}
++
++/** Tests only: forget settings, breaker state and the notifier. */
++export function resetModelProviderState(): void {
++  config = null;
++  breakers.clear();
++  lastSelected = null;
++  notifier = null;
++}
++
++function breaker(provider: ModelProvider): BreakerState {
++  let state = breakers.get(provider);
++  if (!state) {
++    state = { failures: 0, openUntil: 0, tripped: false, lastReason: '' };
++    breakers.set(provider, state);
++  }
++  return state;
++}
++
++export interface UpstreamResult {
++  /** HTTP status from the upstream, when it answered. */
++  status?: number;
++  /** True when the upstream could not be reached. */
++  networkError?: boolean;
++}
++
++/**
++ * Why a result counts as a failure, as a status class only. Null when it
++ * does not count. Never includes request or response content.
++ */
++export function failureReason(result: UpstreamResult): string | null {
++  if (result.networkError) return 'network error';
++  const s = result.status;
++  if (s === 401 || s === 403) return `auth error (${s})`;
++  if (s === 429) return 'rate limited (429)';
++  if (s !== undefined && s >= 500 && s <= 599) return 'server error (5xx)';
++  return null;
++}
++
++/** The proxy reports each upstream result for the provider it used. */
++export function recordProviderResult(
++  provider: ModelProvider,
++  result: UpstreamResult,
++): void {
++  const state = breaker(provider);
++  const reason = failureReason(result);
++  if (reason === null) {
++    const s = result.status;
++    if (s !== undefined && s >= 200 && s <= 299) {
++      state.failures = 0;
++      state.openUntil = 0;
++      state.tripped = false;
++    }
++    return;
++  }
++  const now = Date.now();
++  // In cooldown: results from runs that began before the trip. They neither
++  // extend the cooldown nor count toward the next one.
++  if (now < state.openUntil) return;
++  const { threshold, cooldownMs } = getModelProviderConfig();
++  state.failures += 1;
++  state.lastReason = reason;
++  if (state.tripped || state.failures >= threshold) {
++    state.tripped = true;
++    state.failures = 0;
++    state.openUntil = now + cooldownMs;
++    logger.warn(
++      { provider, reason, cooldownMs },
++      'Model provider marked unhealthy',
++    );
++  }
++}
++
++export function isProviderInCooldown(provider: ModelProvider): boolean {
++  return Date.now() < breaker(provider).openUntil;
++}
++
++/**
++ * The provider for the next run: the first in the configured order that is
++ * not in cooldown; when all are, the first. Logs and notifies on a change.
++ */
++export function selectProvider(): ModelProvider {
++  const { order } = getModelProviderConfig();
++  const chosen = order.find((p) => !isProviderInCooldown(p)) ?? order[0];
++  const previous = lastSelected ?? order[0];
++  lastSelected = chosen;
++  if (chosen !== previous) {
++    const reason = isProviderInCooldown(previous)
++      ? `${previous}: ${breaker(previous).lastReason || 'unhealthy'}`
++      : `${chosen}: cooldown ended`;
++    logger.warn(
++      { from: previous, to: chosen, reason },
++      'Model provider changed',
++    );
++    const text = `⚠️ Model provider changed: ${previous} → ${chosen} (${reason}). New agent runs use ${chosen}.`;
++    try {
++      notifier?.(text);
++    } catch (err) {
++      logger.error({ err }, 'Model provider change notifier failed');
++    }
++  }
++  return chosen;
++}

@@ -7,7 +7,7 @@ The code is the source of truth for how the bot runs. This page holds only what 
 - **Start a Docker container for each turn.** The host process (Node) launches the agent in a new container per message. This needs a machine where you control Docker: a laptop, a small server or a cloud virtual machine. Managed "run my web app" services that do not let the app start containers will not work.
 - **Keep a git checkout of your knowledge-base repo** on local disk, with push rights. See `AGENTS.md`, "First start".
 - **Receive HTTPS on one port** if you use email or web chat. Put a reverse proxy with TLS in front, and bind the listener to loopback.
-- **Reach your AI service, your mail provider, Telegram and your git host** on the way out.
+- **Reach your AI service, your mail provider, your git host, and Telegram if you use it** on the way out.
 
 ## Start small
 
@@ -22,7 +22,7 @@ The reference deployment runs on one small virtual machine under a process manag
 
 ## Before real users
 
-- Telegram is set up for the admin, and a test alert arrives. Operator alerts go there.
+- Operator alerts have a route that works. The default route is Telegram for the admin; `ADMIN_ALERT_ROUTE=email` mails them to the operator's address instead, and `telegram,email` does both. A test alert arrives on each route you enabled (`AGENTS.md`, "First start", step 6). The startup log has no `Admin alert setup` error.
 - The reply sensor is off, or its destination is approved for your data.
 - Pull, commit and push work for both writers of the knowledge-base repo.
 - One plain question passes end to end on each channel you enabled.

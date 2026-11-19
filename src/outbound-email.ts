@@ -1325,7 +1325,7 @@ function ensureQueueStarted(): void {
   outbox.compact(getOutboxRetentionMs(), now);
   lastCompactionAt = now;
 
-  for (const lane of ['transactional', 'bulk'] as OutboxLane[]) {
+  for (const lane of ['transactional', 'bulk', 'alert'] as OutboxLane[]) {
     enqueueNextPending(lane, outbox);
   }
 }

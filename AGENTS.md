@@ -45,6 +45,8 @@ Policy comes before setup. Get these answers before you change anything:
 4. **Where does the data live?** The host for the bot, and the git host for the program repo.
 5. **What consent wording do senders see**, if any, and who is on the allowlist.
 6. **Which channels?** Email only is the simplest. Telegram and web chat are optional.
+   Ask also where operator alerts should go: Telegram (the default), email to the
+   operator's address, or both (`ADMIN_ALERT_ROUTE`; see "Safety items").
 
 ## Placeholders to replace
 
@@ -92,7 +94,8 @@ and say so.
 | Delivery gate and audit log | In production in K-ai | Nothing extra |
 | Reminders and scheduled outreach | In production in K-ai | A reminder registry (`docs/reminder-registry.md` is the template); ASK before any schedule goes live |
 | Routed approvals | In production in K-ai | Approver recorded per sender in the allowlist; the institution domain set correctly |
-| Telegram admin channel | In production in K-ai. **Required for operator alerts** (see "Safety items") | Bot token, admin chat ID, **the chat sender allowlist file** |
+| Telegram admin channel | In production in K-ai. The default route for operator alerts (see "Safety items") | Bot token, admin chat ID, **the chat sender allowlist file** |
+| Operator alerts by email (`ADMIN_ALERT_ROUTE=email`) | New in this repo, not in K-ai. Tested here with the mail provider stubbed; **not yet run against a live provider** | `OPERATOR_CC_EMAIL` set to one person's address, the outbound provider key |
 | Behaviour sensor and evaluation scripts | In production in K-ai | Ground-truth files in the program repo; see "Academic examples" |
 | Web chat | Was in production, later retired there | A secret and a reverse proxy; treat as untested. **No allowlist of people: any caller with the secret is answered** |
 
@@ -102,11 +105,26 @@ and say so.
   everyone (`src/sender-allowlist.ts`). Create it before enabling Telegram.
 - **Listener address:** set `WEBHOOK_HOST=127.0.0.1` and use a reverse proxy. The code
   default listens on all interfaces.
-- **Operator alerts go to Telegram.** Delivery-failure alerts default to the Telegram
-  owner chat (`src/index.ts`), and routed-approval notices and several other alerts
-  call Telegram directly (`pingAdminViaTelegram` in `src/channels/webhook.ts`).
-  Without a bot token these alerts are not delivered. An email-only deployment is
-  not tested. Set up Telegram for the admin, and send a test alert before go-live.
+- **Operator alerts need a route that works.** Every operator alert goes through
+  `src/admin-alert.ts`, which follows `ADMIN_ALERT_ROUTE`: `telegram` (the default),
+  `email`, or `telegram,email`. On the Telegram route, delivery-failure alerts go to the
+  Telegram owner chat (`src/index.ts`) and the webhook's alerts call the Telegram API
+  (`pingAdminViaTelegram` in `src/channels/webhook.ts`); without a bot token they are
+  not delivered. On the email route, each alert is one mail to `OPERATOR_CC_EMAIL`
+  through the outbox and the delivery gate, with an audit entry. The email route has
+  limits; tell the user:
+  - It uses the same mail provider as everything else. When the provider or its key
+    is the thing that failed, the alert about it cannot be mailed either. It is then
+    in the host log only. Use `telegram,email` if the user needs a second path.
+  - An alert about an alert mail (it bounced, or could not be sent) is never mailed
+    again. It goes to Telegram if that route is on; otherwise it is logged and dropped.
+  - Alert mail waits in its own queue (about 30 seconds between mails), and at most
+    a few can wait at once; more are refused and logged.
+  - The operator's reply to an alert mail goes to the bot's address and is handled
+    as ordinary mail from the operator.
+  - Weekly outreach summaries (`OUTREACH_SUMMARY_JID`) do not follow this setting.
+  The bot logs an error at startup for each setting an enabled route lacks. Send a
+  test alert on each enabled route before go-live ("First start", step 6).
 - **Model endpoint must be at the root of its host.** The credential proxy
   (`src/credential-proxy.ts`) uses only the host and port of `ANTHROPIC_BASE_URL`
   and drops any path. `https://gateway.example.edu` works;
@@ -117,8 +135,9 @@ and say so.
   Keep the chat allowlists short, and do not put an automated agent on a chat channel.
 - **Gate coverage and audit coverage differ.** Scheduled and direct chat sends pass the
   delivery gate but get no audit entry and no durable retry. Notices sent by
-  `pingAdminViaTelegram` and web chat's timeout reply skip the gate too. `SPEC.md`
-  sections 6 and 11 have the full list.
+  `pingAdminViaTelegram` and web chat's timeout reply skip the gate too. Operator
+  alerts sent by email pass the gate and are logged; the same alerts on Telegram are
+  not logged. `SPEC.md` sections 6 and 11 have the full list.
 - **Use Telegram with one chat only.** The Telegram handler keeps a single reply
   destination: the chat that wrote most recently (`replyTargets` in
   `src/channels/telegram.ts`). With two chats, a reply meant for one can go to the
@@ -201,6 +220,13 @@ Do these once, in this order, before the first test message:
    or token limited to the program repo. Before the first test message, run a pull,
    a commit and a push as each writer.
 5. Build the container image (`container/build.sh`).
+6. Test the operator alert routes. This sends real messages, so do it only when the
+   user says so. Start the bot once with `ADMIN_ALERT_TEST=1` in the process
+   environment (for example `ADMIN_ALERT_TEST=1 npm start`). It sends one test alert on
+   each route enabled by `ADMIN_ALERT_ROUTE` and logs `Admin alert test delivered` or
+   `Admin alert test NOT delivered` for each. Check that the user received each one,
+   then remove the variable. For the email route, "delivered" means the mail provider
+   accepted the mail; confirm it reached the inbox.
 
 ## Order of work
 

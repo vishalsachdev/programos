@@ -26,6 +26,7 @@ The same contract serves an academic program, a research project, a grant team o
 | Credential proxy | `src/credential-proxy.ts` | The host's own credentials stay out of the container; the host injects them. In OAuth mode the container receives a temporary key from the exchange. Routing through the proxy is a setting, not a network block |
 | Delivery gate and outbox | `src/delivery-gate.ts`, `src/outbound-email*.ts`, `src/delivery-*.ts` | Agent replies and outbound mail pass the gate. Email has a durable outbox with retries; direct chat sends do not |
 | Audit log writer | `src/audit-log.ts` | Host-side; the agent does not write the log |
+| Operator alerts | `src/admin-alert.ts` | One function for every operator alert. The route is a setting: Telegram (default), email to the operator's address, or both |
 | Scheduler and reminders | `src/task-scheduler.ts`, [`docs/reminder-registry.md`](./docs/reminder-registry.md) | Scheduled outreach, with a registry of every job |
 | Routed approvals | `src/routed-approvals.ts` | A request that needs an approver is recorded by the agent and relayed by the host |
 | Sender controls | `src/channels/webhook-allowlist.ts`, `src/channels/sender-quota.ts`, `src/sender-allowlist.ts` | Allowlist, per-sender caps, a separate tier for automated agents |
@@ -113,6 +114,8 @@ The host writes one file per day, `discussions/audit-log/YYYY-MM-DD.md`, for all
 
 Chat entries (Telegram, web chat) keep the first 2,000 characters of each message and mark the rest as truncated. Email is kept in full: the inbound copy is its own file in the program repo, and outbound email has a separate full record.
 
+Operator alerts sent by email (`ADMIN_ALERT_ROUTE` includes `email`) are logged as outbound email entries with the source `admin-alert`. An alert that was not mailed, because its route failed or because it concerned an alert mail, has no entry; it is in the host log.
+
 Not in the log in the current code: Telegram messages from a handle that is not allowed, messages dropped by the chat sender filter, remote-control commands, scheduled and direct chat sends, operator notices on Telegram, and web chat's automatic timeout reply.
 
 The audit log is what survives when a container is destroyed, and it is what a reviewer reads.
@@ -175,11 +178,12 @@ The code is the source of truth. This list names the known places where a rule a
 |---|---|---|
 | Person allowlist | Email, Telegram | Web chat (shared secret only) |
 | Sender caps | Email, within one running process | Telegram, web chat; counters reset on restart |
-| Delivery gate | Agent replies, outbound mail, scheduled and direct chat sends, delivery-failure alerts | Notices the host sends straight to the Telegram API (`pingAdminViaTelegram`); web chat's timeout reply |
+| Delivery gate | Agent replies, outbound mail, scheduled and direct chat sends, delivery-failure alerts, operator alerts sent by email | Notices the host sends straight to the Telegram API (`pingAdminViaTelegram`); web chat's timeout reply |
+| Operator alert delivery | Telegram with a bot token and admin chat ID (the default route); email to the operator's address when `ADMIN_ALERT_ROUTE` includes `email` | An alert about a failed or bounced alert mail is never mailed again: with the email route alone it is logged and dropped. Alert mail uses the same provider as all other mail, so a provider outage also stops the alerts about it. The email route was tested with the provider stubbed, not against a live one. (Row added 2026-11-19; this code is this repo's own, not from the source deployment) |
 | Telegram reply destination | One chat in use at a time | Two or more chats: the host keeps one reply destination, the latest chat to write. A reply prepared for one chat can be sent to another. Use Telegram for the admin's single chat only until the source fixes this |
-| Durable send with retry | Email outbox; ordinary replies | Scheduled and direct chat sends |
-| Audit entry | Accepted inbound messages, replies, mail delivery events | The paths listed in section 6 |
-| Recipient from allowlist or inbound mail | Normal email | The courtesy reply to a blocked colleague; the operator address added to mail for a peer agent |
+| Durable send with retry | Email outbox (operator alert mail included); ordinary replies | Scheduled and direct chat sends |
+| Audit entry | Accepted inbound messages, replies, mail delivery events, operator alerts sent by email | The paths listed in section 6 |
+| Recipient from allowlist or inbound mail | Normal email | The courtesy reply to a blocked colleague; the operator address added to mail for a peer agent; operator alert mail, which goes to the configured operator address only, whether or not it is on the allowlist |
 | Address check in body text | Email | Chat; saved email deliveries from an older format |
 | Protected files | The agent's file-editing tools; git authorship check | Shell commands in the container |
 | Model traffic through the proxy | The agent, by setting | The reply sensor (calls the provider directly); remote control (a process on the host) |

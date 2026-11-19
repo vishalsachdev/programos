@@ -26,6 +26,7 @@ After `--apply`:
 
 1. Update the version in `UPSTREAM.md`.
    Reapply `scripts/upstream-sync/prompt-audit-2026-11-15.patch` with `git apply --check` followed by `git apply`. If it no longer applies, reconcile its prompt safeguards against the new export before continuing; do not silently discard them. The patch includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`.
+   Reapply `scripts/upstream-sync/chat-allowlist-fail-closed-2026-11-19.patch` the same way. It makes a missing, unreadable or invalid chat sender allowlist deny every sender (`src/sender-allowlist.ts` and its test) and adds `config-examples/sender-allowlist.json`. If it no longer applies, check whether the new export already fails closed; if not, redo the change by hand. Drop the patch once the source carries it.
 2. Run `npx tsc --noEmit` and `npx vitest run`. All tests must pass with none skipped.
 3. Run a secret scan (`gitleaks detect --no-git -s .`).
 4. Read the diff. New files need the closest look: a new file can carry names that no rule covers yet.

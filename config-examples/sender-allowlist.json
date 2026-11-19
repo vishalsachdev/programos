@@ -1,0 +1,13 @@
+{
+  "default": {
+    "allow": [],
+    "mode": "trigger"
+  },
+  "chats": {
+    "tg-program@program": {
+      "allow": ["tg:000000001"],
+      "mode": "trigger"
+    }
+  },
+  "logDenied": true
+}

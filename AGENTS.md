@@ -98,8 +98,13 @@ and say so.
 
 ## Safety items you must handle
 
-- **Chat sender allowlist:** if the file is missing, the chat trigger check allows
-  everyone (`src/sender-allowlist.ts`). Create it before enabling Telegram.
+- **Chat sender allowlist:** if `~/.config/nanoclaw/sender-allowlist.json` is missing,
+  unreadable or invalid, the chat trigger check allows nobody and the host logs the
+  path once (`src/sender-allowlist.ts`). It applies to every group registered with
+  a required trigger, except the main group. Senders are matched exactly on the id the channel
+  reports: for Telegram `tg:<numeric user id>`, not the `@handle`. The Telegram
+  handle list in the program repo is a separate, earlier check. Start from
+  `config-examples/sender-allowlist.json` ("First start", step 3).
 - **Listener address:** set `WEBHOOK_HOST=127.0.0.1` and use a reverse proxy. The code
   default listens on all interfaces.
 - **Operator alerts go to Telegram.** Delivery-failure alerts default to the Telegram
@@ -185,14 +190,22 @@ Do these once, in this order, before the first test message:
 2. Copy `config-examples/mount-allowlist.json` to `~/.config/nanoclaw/mount-allowlist.json`
    and set the real program repo path. The host reads only that location
    (`MOUNT_ALLOWLIST_PATH` in `src/config.ts`). Without it, every extra mount is refused.
-3. Register each channel group. Registration creates the database. Email must be
+3. If a chat channel is used, copy `config-examples/sender-allowlist.json` to
+   `~/.config/nanoclaw/sender-allowlist.json` (`SENDER_ALLOWLIST_PATH` in
+   `src/config.ts`). `default` covers chats with no entry of their own; keep its
+   `allow` list empty. Under `chats`, the key is the registered group id
+   (`tg-program@program` for Telegram) and `allow` lists sender ids
+   (`tg:<numeric user id>`; ASK the user for the admin's). `"allow": "*"` admits everyone in
+   that chat. `mode` is `trigger` (store the message, do not act) or `drop`
+   (discard it). The file is read again for each message, so an edit needs no restart.
+4. Register each channel group. Registration creates the database. Email must be
    registered with the id `webhook-email@program` (the router looks for that exact
    id in `src/index.ts`) and with the program repo as a read-write extra mount.
    `npx tsx setup/index.ts --step register` registers a group but does not set
    mounts. `seed-db.cjs` shows the full row with `additionalMounts`; it needs the
    database to exist first, and its host path is a placeholder. Read both, then
    register the email group, the main group and (if used) the Telegram group.
-4. Clone the program repo at the mounted path. Two writers use it, and both need
+5. Clone the program repo at the mounted path. Two writers use it, and both need
    file ownership and git credentials that work: the host's repository operations
    and the agent inside the container. When the host process runs as root, its
    repository operations run as user and group 1000 with home `/home/ubuntu`
@@ -200,7 +213,7 @@ Do these once, in this order, before the first test message:
    container does not get the operator's SSH agent or home folder. Use a deploy key
    or token limited to the program repo. Before the first test message, run a pull,
    a commit and a push as each writer.
-5. Build the container image (`container/build.sh`).
+6. Build the container image (`container/build.sh`).
 
 ## Order of work
 

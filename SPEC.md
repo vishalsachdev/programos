@@ -150,7 +150,7 @@ A test (`src/channel-claude-sync.test.ts`) checks that the required phrases are 
 - [ ] Replace the bot's name, the program name, the operator, the mail domains.
 - [ ] Create the program repo, the allowlist and the governance file.
 - [ ] Fill in `.env` from [`config/instance.env.example`](./config/instance.env.example).
-- [ ] Create the chat sender allowlist before enabling a chat channel.
+- [ ] Create the chat sender allowlist before enabling a chat channel. Without the file, no chat sender can trigger the agent.
 - [ ] Bind the listener to loopback; put a reverse proxy in front.
 - [ ] List every scheduled job in the reminder registry.
 - [ ] Adapt the academic examples, or turn the reply sensor off and say so.

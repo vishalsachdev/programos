@@ -117,6 +117,8 @@ Not in the log in the current code: Telegram messages from a handle that is not 
 
 The audit log is what survives when a container is destroyed, and it is what a reviewer reads.
 
+The log and the mail copies are files in the program repo: anyone who can read that repo can read them, the code never deletes them, and git history keeps what a later commit removes. [`docs/data-handling.md`](./docs/data-handling.md) covers access, retention, and every outside service that message text reaches.
+
 ## 6.5. Governance
 
 The coordinator reads mail and writes to a shared record, so its rules must hold when the model is wrong. Rules live in three places: code on the host (the agent cannot skip these), gates the agent must run with a machine log of each run, and written practice in the prompts and the program repo.
@@ -162,6 +164,8 @@ A test (`src/channel-claude-sync.test.ts`) checks that the required phrases are 
 - Autonomous skill creation or self-modification of runtime code.
 - Grade or learning-system integration.
 - Serving several programs from one instance.
+
+Leaving out student-facing channels does not keep student information out of the record: staff mail that mentions a student is stored and sent on like any other mail, and the code has no filter for kinds of data. [`docs/data-handling.md`](./docs/data-handling.md) says where it goes and gives a conservative default for a first pilot.
 
 ## 10. Reference implementation
 

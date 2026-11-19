@@ -28,11 +28,13 @@ class InsideTest(unittest.TestCase):
 
 class OwnedTest(unittest.TestCase):
     def test_owned_paths(self):
-        for p in ('README.md', 'templates/program-repo/CLAUDE.md', 'docs/design/x.md', 'scripts/upstream-sync/export.py'):
+        for p in ('README.md', 'templates/program-repo/CLAUDE.md', 'docs/design/x.md', 'scripts/upstream-sync/export.py',
+                  'docs/data-handling.md', 'docs/illinois/data-handling.md'):
             self.assertTrue(export.owned(p), p)
 
     def test_exported_paths(self):
-        for p in ('src/index.ts', 'docs/reminder-registry.md', 'scripts/deploy.sh', 'README.md.bak'):
+        for p in ('src/index.ts', 'docs/reminder-registry.md', 'scripts/deploy.sh', 'README.md.bak',
+                  'docs/data-handling.md.bak', 'docs/illinois-notes.md'):
             self.assertFalse(export.owned(p), p)
 
 

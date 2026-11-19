@@ -51,6 +51,7 @@ You need: a host that can run Docker, a mail address for the bot, a git host for
 - On email and Telegram, only allowlisted senders get an answer. The allowlist is a file in your knowledge-base repo. Web chat is different: anyone who has its shared secret can ask. Keep web chat off if you need a check per person.
 - The agent's replies and outbound mail pass a delivery gate on the host. A reply that fails the gate is not sent, and the operator is told on Telegram (the operator alerts need the Telegram admin channel).
 - Accepted inbound messages and replies are written to an audit log in your knowledge-base repo. Some paths are not logged; `SPEC.md` section 6 lists them.
+- Mail, replies and knowledge-base text reach outside services (the model provider, the mail provider, Telegram, your git host) and are stored in your knowledge-base repo, which the code never prunes. The container's network is not restricted. [`docs/data-handling.md`](./docs/data-handling.md) lists what goes where and what to decide before real users.
 - These rules do not hold equally on every channel. [`SPEC.md`](./SPEC.md) section 11 lists where each one stops. Read it before you rely on one.
 - Role and access changes are made by the admin only, never because a message asked.
 - Numbered rules cover the rest. [`docs/12-governance.md`](./docs/12-governance.md) gives each rule and the failure it prevents.
@@ -66,6 +67,8 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: what to ask, what to replace, safety items, first start | Yes; checked against the code in review |
 | [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; run through the real parsers |
 | [`docs/deployment.md`](./docs/deployment.md) | What kind of host works and what to start with | Yes |
+| [`docs/data-handling.md`](./docs/data-handling.md) | What data reaches each outside service and each storage place, who can read it, what is and is not deleted, and what to decide before go-live | Yes; traced from the code 2026-11-19 |
+| [`docs/illinois/data-handling.md`](./docs/illinois/data-handling.md) | One university's open data questions, none verified | Open items only |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
 | [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |

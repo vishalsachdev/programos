@@ -267,10 +267,10 @@ index 9a18a26..32dc8bf 100644
        logger.warn(
 diff --git a/src/container-runner-provider.test.ts b/src/container-runner-provider.test.ts
 new file mode 100644
-index 0000000..199bfd8
+index 0000000..834f00d
 --- /dev/null
 +++ b/src/container-runner-provider.test.ts
-@@ -0,0 +1,348 @@
+@@ -0,0 +1,351 @@
 +/**
 + * Container runner: what the container is given for each model provider.
 + * The invariant: no real credential in the container args, and the per-run
@@ -468,6 +468,9 @@ index 0000000..199bfd8
 +
 +  it('with no settings, the container env is exactly the Anthropic set', async () => {
 +    const { env } = await runOnce();
++    // HOME is added for some host uids (not root, not 1000); it is not a
++    // model setting.
++    env.delete('HOME');
 +    expect([...env.keys()].sort()).toEqual([
 +      'ANTHROPIC_API_KEY',
 +      'ANTHROPIC_BASE_URL',

@@ -195,6 +195,9 @@ describe('container-runner model provider', () => {
 
   it('with no settings, the container env is exactly the Anthropic set', async () => {
     const { env } = await runOnce();
+    // HOME is added for some host uids (not root, not 1000); it is not a
+    // model setting.
+    env.delete('HOME');
     expect([...env.keys()].sort()).toEqual([
       'ANTHROPIC_API_KEY',
       'ANTHROPIC_BASE_URL',

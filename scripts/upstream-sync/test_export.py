@@ -28,7 +28,7 @@ class InsideTest(unittest.TestCase):
 
 class OwnedTest(unittest.TestCase):
     def test_owned_paths(self):
-        for p in ('README.md', 'templates/program-repo/CLAUDE.md', 'docs/design/x.md', 'scripts/upstream-sync/export.py'):
+        for p in ('README.md', 'templates/program-repo/CLAUDE.md', 'docs/design/x.md', 'docs/illinois/model-foundry.md', 'scripts/upstream-sync/export.py'):
             self.assertTrue(export.owned(p), p)
 
     def test_exported_paths(self):

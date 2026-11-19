@@ -22,7 +22,8 @@ change, and where you must stop and ask.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 1,761 passing tests. One timing test in `src/channels/webhook-ingest-context.test.ts`
+   is 1,824 passing tests (1,761 from the source, 63 for the model provider
+   setting added here). One timing test in `src/channels/webhook-ingest-context.test.ts`
    can fail under load; rerun it alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
 5. Never put real secrets, real people's data, or mail content in this repo.
@@ -33,13 +34,28 @@ Policy comes before setup. Get these answers before you change anything:
 
 1. **Which AI service may this team's mail reach?** The agent sends message text to
    a model. The user's institution may limit this. The code uses Claude through the
-   Claude Agent SDK; `ANTHROPIC_BASE_URL` can point at an approved endpoint that
-   serves Claude. Other model families need a different agent runner (not included).
+   Claude Agent SDK. Other model families need a different agent runner (not included).
+   The destinations the code supports:
+   - the Anthropic API or a Claude subscription (the default);
+   - an endpoint that serves the Anthropic API, set with `ANTHROPIC_BASE_URL`;
+   - Claude on Microsoft Foundry in the user's own Azure subscription
+     (`MODEL_PROVIDERS`, [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md)).
+     Tested here against fake servers only; that page has the live checks.
+
+   `MODEL_PROVIDERS` is an ordered list. A second entry is a backup, and it
+   receives the same mail text when the first fails, so ASK about **every**
+   provider in the list. For Foundry, also ASK which hosting option each
+   deployment has ("Hosted on Azure" or "Hosted on Anthropic"); it decides
+   where prompts are processed. This repo does not record which service any
+   institution has approved, Illinois included: not verified. Get the answer
+   from the user and write down its source and date.
    **There are two model call paths.** The agent goes through the host proxy and
-   follows `ANTHROPIC_BASE_URL`. The reply sensor (`src/behaviour-sensor.ts`) calls
-   the provider's public API directly with its own key and ignores that setting.
-   Keep `BEHAVIOUR_SENSOR_DISABLED=1` unless the user confirms that destination is
-   approved too, or change the sensor to use the approved endpoint.
+   follows `MODEL_PROVIDERS` and `ANTHROPIC_BASE_URL`. The reply sensor
+   (`src/behaviour-sensor.ts`) calls a model API directly with its own key and
+   follows neither. Its destination is `SENSOR_PROVIDER`: the public Anthropic
+   API by default, or `foundry`. It does not fail over.
+   Keep `BEHAVIOUR_SENSOR_DISABLED=1` unless the user confirms the sensor's
+   destination is approved too.
 2. **Who may approve records and access changes?** (the admin and any approvers)
 3. **Which address does the bot send from?** And which mail provider delivers it.
 4. **Where does the data live?** The host for the bot, and the git host for the program repo.
@@ -107,11 +123,20 @@ and say so.
   call Telegram directly (`pingAdminViaTelegram` in `src/channels/webhook.ts`).
   Without a bot token these alerts are not delivered. An email-only deployment is
   not tested. Set up Telegram for the admin, and send a test alert before go-live.
-- **Model endpoint must be at the root of its host.** The credential proxy
-  (`src/credential-proxy.ts`) uses only the host and port of `ANTHROPIC_BASE_URL`
-  and drops any path. `https://gateway.example.edu` works;
-  `https://gateway.example.edu/anthropic` does not. If the approved endpoint has a
-  path prefix, tell the user; the proxy needs a code change (reported to the source).
+- **Model endpoint with a path prefix.** The credential proxy
+  (`src/credential-proxy.ts`) joins a path in `ANTHROPIC_BASE_URL` to the request
+  path: `https://gateway.example.edu/claude` receives `/claude/v1/messages`. The
+  endpoint must still speak the Anthropic API and accept the key in `x-api-key`
+  (or the OAuth exchange). For Claude on Microsoft Foundry use
+  `MODEL_PROVIDERS=foundry`, not `ANTHROPIC_BASE_URL`: Foundry needs its own
+  SDK mode and key header.
+- **A backup model provider is a second data destination.** With two entries in
+  `MODEL_PROVIDERS`, three failures in a row (network error, 401, 403, 429, 5xx)
+  move new runs to the next provider for 30 minutes, and the operator gets an
+  alert. The turn that hit the failure still fails and is retried. The state is
+  in memory, the audit log has no per-turn provider field, and resuming a
+  session on the other provider is untested. Do the live checks in
+  `docs/illinois/model-foundry.md` before the user relies on the backup.
 - **Sender caps exist only on email.** Telegram and web chat have no per-sender
   limit (`src/channels/sender-quota.ts` is called only from the email handler).
   Keep the chat allowlists short, and do not put an automated agent on a chat channel.

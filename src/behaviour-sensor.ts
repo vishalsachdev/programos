@@ -29,6 +29,7 @@ import path from 'path';
 import { TIMEZONE } from './config.js';
 import { stripInternalTags } from './delivery-gate.js';
 import { readEnvFile } from './env.js';
+import { basePath, readFoundrySettings } from './model-provider.js';
 import { logger } from './logger.js';
 import { getRepoReader } from './repo-reader.js';
 import { getProgramRepoPath } from './program-repo.js';
@@ -1044,6 +1045,8 @@ export function gRuleTag(res: { phantom: string[] }): string | null {
  * CRS 572). extractCourseCodes matches any letters+digits pair, so only
  * codes whose PREFIX the canon itself uses are judged — "CRS 999" flags,
  * prose like "top 100" never does. Skips silently when canon unreadable.
+ * program/course_names.md is OPTIONAL (the ProgramOS template does not ship
+ * it): when it is missing, the canon is curriculum.md alone.
  */
 export function checkCourseCodeRefs(
   replyText: string,
@@ -1078,18 +1081,62 @@ export function courseCodeTag(res: { unknown: string[] }): string | null {
     : null;
 }
 
+/** Where the sensor posts, and the header that carries its key. */
+export interface SensorTarget {
+  url: string;
+  keyHeader: string;
+  apiKey: string;
+}
+
+/**
+ * The sensor's destination. It is explicit and does not fail over:
+ * SENSOR_PROVIDER is `anthropic` (default) or `foundry`. With `foundry`,
+ * SENSOR_MODEL is a deployment name; name the deployment by its model ID,
+ * because sensorRequestShape keys off the name. Returns an error reason
+ * when the settings for the chosen provider are missing.
+ */
+export function resolveSensorTarget(): SensorTarget | { error: string } {
+  const provider = (
+    process.env.SENSOR_PROVIDER ||
+    readEnvFile(['SENSOR_PROVIDER']).SENSOR_PROVIDER ||
+    'anthropic'
+  ).toLowerCase();
+  if (provider === 'foundry') {
+    try {
+      const foundry = readFoundrySettings();
+      return {
+        url: `${foundry.baseUrl.origin}${basePath(foundry.baseUrl)}/v1/messages`,
+        keyHeader: foundry.keyHeader,
+        apiKey: foundry.apiKey,
+      };
+    } catch {
+      return { error: 'no-foundry-settings' };
+    }
+  }
+  if (provider !== 'anthropic') return { error: 'unknown-sensor-provider' };
+  const apiKey =
+    process.env.ANTHROPIC_API_KEY ||
+    readEnvFile(['ANTHROPIC_API_KEY']).ANTHROPIC_API_KEY;
+  if (!apiKey) return { error: 'no-api-key' };
+  return {
+    url: 'https://api.anthropic.com/v1/messages',
+    keyHeader: 'x-api-key',
+    apiKey,
+  };
+}
+
 async function callSensorModel(
   prompt: string,
-  apiKey: string,
+  target: SensorTarget,
 ): Promise<string> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SENSOR_TIMEOUT_MS);
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch(target.url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': apiKey,
+        [target.keyHeader]: target.apiKey,
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
@@ -1333,17 +1380,17 @@ export async function evaluateBehaviourReply(
     );
   }
 
-  const apiKey =
-    process.env.ANTHROPIC_API_KEY ||
-    readEnvFile(['ANTHROPIC_API_KEY']).ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  const target = resolveSensorTarget();
+  if ('error' in target) {
     return evaluation(
       {
-        annotation: '[sensor: error: no-api-key]',
+        annotation: `[sensor: error: ${target.error}]`,
         isFail: false,
-        desc: 'no-api-key',
+        desc: target.error,
       },
-      '(not evaluated — no API key)',
+      target.error === 'no-api-key'
+        ? '(not evaluated — no API key)'
+        : `(not evaluated — ${target.error})`,
     );
   }
 
@@ -1388,7 +1435,7 @@ export async function evaluateBehaviourReply(
       cappedRequestContext(options.requestContext),
     );
     try {
-      baseVerdict = parseVerdict(await callSensorModel(prompt, apiKey));
+      baseVerdict = parseVerdict(await callSensorModel(prompt, target));
     } catch (err) {
       if (!(err instanceof SensorStopError)) throw err;
       logger.warn(

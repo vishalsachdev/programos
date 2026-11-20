@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   isSenderAllowed,
@@ -10,6 +10,7 @@ import {
   SenderAllowlistConfig,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { logger } from './logger.js';
 
 let tmpDir: string;
 
@@ -32,11 +33,57 @@ afterEach(() => {
 });
 
 describe('loadSenderAllowlist', () => {
-  it('returns allow-all defaults when file is missing', () => {
+  it('denies everyone when file is missing', () => {
     const cfg = loadSenderAllowlist(cfgPath());
-    expect(cfg.default.allow).toBe('*');
+    expect(cfg.default.allow).toEqual([]);
     expect(cfg.default.mode).toBe('trigger');
     expect(cfg.logDenied).toBe(true);
+    expect(isTriggerAllowed('g1', 'anyone', cfg)).toBe(false);
+    expect(shouldDropMessage('g1', cfg)).toBe(false);
+  });
+
+  it('denies everyone when the path cannot be read as a file', () => {
+    const cfg = loadSenderAllowlist(tmpDir);
+    expect(cfg.default.allow).toEqual([]);
+    expect(isSenderAllowed('g1', 'anyone', cfg)).toBe(false);
+  });
+
+  it('logs the path once per failure, and again after a good load', () => {
+    const spy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    try {
+      const p = cfgPath('logged.json');
+      loadSenderAllowlist(p);
+      loadSenderAllowlist(p);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][0]).toMatchObject({
+        path: p,
+        reason: 'file is missing',
+      });
+
+      writeConfig(
+        { default: { allow: ['alice'], mode: 'trigger' } },
+        'logged.json',
+      );
+      expect(loadSenderAllowlist(p).default.allow).toEqual(['alice']);
+      fs.rmSync(p);
+      loadSenderAllowlist(p);
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('the example file loads and denies senders it does not list', () => {
+    const cfg = loadSenderAllowlist(
+      path.resolve('config-examples/sender-allowlist.json'),
+    );
+    expect(cfg.default).toEqual({ allow: [], mode: 'trigger' });
+    expect(Object.keys(cfg.chats)).toEqual(['tg-program@program']);
+    expect(isSenderAllowed('tg-program@program', 'tg:000000001', cfg)).toBe(
+      true,
+    );
+    expect(isSenderAllowed('tg-program@program', 'tg:999', cfg)).toBe(false);
+    expect(isSenderAllowed('other@program', 'tg:000000001', cfg)).toBe(false);
   });
 
   it('loads allow=* config', () => {
@@ -79,17 +126,23 @@ describe('loadSenderAllowlist', () => {
     expect(cfg.chats['group-a'].mode).toBe('drop');
   });
 
-  it('returns allow-all on invalid JSON', () => {
+  it('denies everyone on invalid JSON', () => {
     const p = cfgPath();
     fs.writeFileSync(p, '{ not valid json }}}');
     const cfg = loadSenderAllowlist(p);
-    expect(cfg.default.allow).toBe('*');
+    expect(cfg.default.allow).toEqual([]);
   });
 
-  it('returns allow-all on invalid schema', () => {
+  it('denies everyone on invalid schema', () => {
     const p = writeConfig({ default: { oops: true } });
     const cfg = loadSenderAllowlist(p);
-    expect(cfg.default.allow).toBe('*');
+    expect(cfg.default.allow).toEqual([]);
+  });
+
+  it('denies everyone when the JSON is not an object', () => {
+    const p = cfgPath();
+    fs.writeFileSync(p, 'null');
+    expect(loadSenderAllowlist(p).default.allow).toEqual([]);
   });
 
   it('rejects non-string allow array items', () => {
@@ -98,7 +151,7 @@ describe('loadSenderAllowlist', () => {
       chats: {},
     });
     const cfg = loadSenderAllowlist(p);
-    expect(cfg.default.allow).toBe('*'); // falls back to default
+    expect(cfg.default.allow).toEqual([]); // falls back to deny-all
   });
 
   it('skips invalid per-chat entries', () => {

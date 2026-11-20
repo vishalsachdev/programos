@@ -13,6 +13,7 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - **The code is the source of truth** (Vishal, 2026-11-14). A doc here covers only what the code cannot say: contract, reasons, decisions, host needs. Do not add a doc that restates code.
 - `docs/design/` holds ideas that are not implemented; each file says so in its first lines.
 - Every doc is listed in the README docs table.
+- **Keep `AGENTS.md` current** (Vishal, 2026-11-20). Any change that adds or changes a setup option, a setting, a channel or a safety limit updates `AGENTS.md` in the same PR: the entry in part 5 ("Every choice you will be asked to make"), the path in part 4 it belongs to, and the table in `docs/setup-reference.md`. Write for an agent that is guiding a person who is not technical: plain meaning, options, default, pilot recommendation, what was not tested. `scripts/upstream-sync/test_setup_docs.py` fails when a key in `config/instance.env.example` is named in neither file; its allowlist (`UNDOCUMENTED`) is empty and should stay short. `docs/start-here.md` is the same content for the person; change it when the three paths or the MVP change.
 - The live per-channel prompts are in `groups/`.
 
 ## Delegating to other agent sessions

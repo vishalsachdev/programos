@@ -39,16 +39,8 @@ interface PathCommitAuthor {
   email: string;
 }
 
-/**
- * The mirror bootstrap takes its clone URL from the live checkout, whose
- * .git/config is container-writable, and runs the clone as root. Accept only
- * the real repository (any credential prefix), so a planted value cannot pick
- * the source or smuggle a git option or ext:: transport.
- * PROGRAM_ORIGIN_PATTERN overrides the pattern (tests).
- */
-export function isExpectedOrigin(url: string): boolean {
-  const pattern = process.env.PROGRAM_ORIGIN_PATTERN;
-  if (pattern) return !url.startsWith('-') && new RegExp(pattern).test(url);
+/** True for the origin of the placeholder repo, example-org/program-repo. */
+function isPlaceholderOrigin(url: string): boolean {
   if (/^git@github\.com:example-org\/program-repo(\.git)?$/.test(url))
     return true;
   // Parse, don't pattern-match: "https://evil?@github.com/..." must not pass.
@@ -69,6 +61,80 @@ export function isExpectedOrigin(url: string): boolean {
     !url.includes('#') &&
     /^\/example-org\/program-repo(\.git)?$/.test(u.pathname)
   );
+}
+
+/**
+ * The mirror bootstrap takes its clone URL from the live checkout, whose
+ * .git/config is container-writable, and runs the clone as root. Accept only
+ * the real repository (any credential prefix), so a planted value cannot pick
+ * the source or smuggle a git option or ext:: transport.
+ * PROGRAM_ORIGIN_PATTERN overrides the pattern (tests).
+ */
+export function isExpectedOrigin(url: string): boolean {
+  const pattern = process.env.PROGRAM_ORIGIN_PATTERN;
+  if (pattern) return !url.startsWith('-') && new RegExp(pattern).test(url);
+  return isPlaceholderOrigin(url);
+}
+
+function readMirrorPath(): string {
+  return process.env.PROGRAM_READ_MIRROR || '/srv/repos/program-repo-read.git';
+}
+
+/** Origin URL of the live checkout, read as the checkout owner. */
+function checkoutOriginUrl(): string {
+  // As the checkout owner, never root: the checkout's .git/config is
+  // container-writable (see program-repo.ts).
+  return execFileSync('git', ['remote', 'get-url', 'origin'], {
+    ...checkoutGitOptions(),
+    cwd: getProgramRepoPath(),
+    encoding: 'utf-8',
+    timeout: 10_000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+/** Origin URL of the read mirror (host-owned, so read as the host user). */
+function mirrorOriginUrl(): string {
+  return execFileSync(
+    'git',
+    ['--git-dir', readMirrorPath(), 'config', '--get', 'remote.origin.url'],
+    { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] },
+  ).trim();
+}
+
+/**
+ * Why this host counts as serving a real program repo, or null when it
+ * serves the placeholder (a fresh clone before adaptation, the tests).
+ *
+ * Real means either of:
+ *  - PROGRAM_ORIGIN_PATTERN is set: the operator named their own origin;
+ *  - the read mirror or the live checkout has an origin that is not the
+ *    placeholder repo's. This covers a mirror that was cloned by hand, which
+ *    needs no PROGRAM_ORIGIN_PATTERN.
+ * A repo that is missing or has no origin does not count.
+ *
+ * The reason never includes the URL, which can carry a token.
+ */
+export function realProgramRepoReason(): string | null {
+  if (process.env.PROGRAM_ORIGIN_PATTERN) {
+    return 'PROGRAM_ORIGIN_PATTERN is set';
+  }
+  const sources: Array<[string, () => string]> = [
+    ['read mirror', mirrorOriginUrl],
+    ['program repo checkout', checkoutOriginUrl],
+  ];
+  for (const [name, read] of sources) {
+    let url: string;
+    try {
+      url = read();
+    } catch {
+      continue;
+    }
+    if (url && !isPlaceholderOrigin(url)) {
+      return `the origin of the ${name} is not the placeholder example-org/program-repo`;
+    }
+  }
+  return null;
 }
 
 export class RepoReader {
@@ -614,9 +680,7 @@ let singleton: RepoReader | null = null;
 /** Process-wide reader over the program-repo read mirror. */
 export function getRepoReader(): RepoReader {
   if (!singleton) {
-    const mirror =
-      process.env.PROGRAM_READ_MIRROR || '/srv/repos/program-repo-read.git';
-    singleton = new RepoReader(mirror);
+    singleton = new RepoReader(readMirrorPath());
     singleton.init();
   }
   return singleton;

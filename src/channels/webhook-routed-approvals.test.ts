@@ -19,10 +19,11 @@ import {
 // the email, a GitHub push of the Routed Approvals entry starts the scan, and
 // the host relays to the approver from the sender's allowlist row.
 
-const TEST_PORT = 39344;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 
 vi.hoisted(() => {
-  process.env.WEBHOOK_PORT = '39344';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
 });
 
@@ -97,6 +98,7 @@ vi.mock('../outbound-email.js', async (importOriginal) => {
 });
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { flushAuditLog } from '../audit-log.js';
 import {
   _closeDatabase,
@@ -163,7 +165,7 @@ describe('routed approvals at the webhook', () => {
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
   });
 
   beforeEach(() => {

@@ -7,6 +7,8 @@
 #
 # Retention:
 #   Session JSONLs + tool-results:  7 days  (active session always kept)
+#   If the active sessions cannot be read (sqlite3 missing, query fails), no
+#   session file is pruned; group logs still are. The last line says so.
 #   Debug logs:                     3 days
 #   Todo files:                     3 days
 #   Telemetry:                      7 days
@@ -79,7 +81,21 @@ if [ ! -f "$STORE_DB" ]; then
   exit 1
 fi
 
-ACTIVE_IDS=$(sqlite3 "$STORE_DB" "SELECT session_id FROM sessions;" 2>/dev/null || true)
+# Fail safe: the active session ids are the only thing that protects a live
+# session's files below. When they cannot be read (no sqlite3 command, or the
+# query fails), no session file is pruned and the summary line says why. An
+# empty list from a query that worked is a real answer and prunes as usual.
+ACTIVE_IDS=""
+SESSION_PRUNE_SKIPPED=""
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  SESSION_PRUNE_SKIPPED="the sqlite3 command is not installed, so the active sessions cannot be read"
+elif ! ACTIVE_IDS=$(sqlite3 "$STORE_DB" "SELECT session_id FROM sessions;" 2>/dev/null); then
+  ACTIVE_IDS=""
+  SESSION_PRUNE_SKIPPED="the active sessions could not be read from $STORE_DB"
+fi
+if [ -n "$SESSION_PRUNE_SKIPPED" ]; then
+  log "WARNING: session files not pruned: $SESSION_PRUNE_SKIPPED" >&2
+fi
 
 is_active() {
   echo "$ACTIVE_IDS" | grep -qF "$1"
@@ -88,6 +104,7 @@ is_active() {
 # --- Prune session JSONLs and tool-results dirs ---
 
 for group_dir in "$SESSIONS_DIR"/*/; do
+  [ -z "$SESSION_PRUNE_SKIPPED" ] || break
   [ -d "$group_dir" ] || continue
   jsonl_dir="$group_dir/.claude/projects/-workspace-group"
   if [ -L "$group_dir/.claude" ] || [ -L "$group_dir/.claude/projects" ] ||
@@ -118,6 +135,7 @@ done
 # --- Prune debug logs (>3 days, skip files named after active sessions) ---
 
 for group_dir in "$SESSIONS_DIR"/*/; do
+  [ -z "$SESSION_PRUNE_SKIPPED" ] || break
   debug_dir="$group_dir/.claude/debug"
   [ -L "$group_dir/.claude" ] || [ -L "$debug_dir" ] && continue
   [ -d "$debug_dir" ] || continue
@@ -131,6 +149,7 @@ done
 # --- Prune todo files (>3 days, skip files named after active sessions) ---
 
 for group_dir in "$SESSIONS_DIR"/*/; do
+  [ -z "$SESSION_PRUNE_SKIPPED" ] || break
   todos_dir="$group_dir/.claude/todos"
   [ -L "$group_dir/.claude" ] || [ -L "$todos_dir" ] && continue
   [ -d "$todos_dir" ] || continue
@@ -149,6 +168,7 @@ done
 # --- Prune telemetry (>7 days, skip files named after active sessions) ---
 
 for group_dir in "$SESSIONS_DIR"/*/; do
+  [ -z "$SESSION_PRUNE_SKIPPED" ] || break
   telem_dir="$group_dir/.claude/telemetry"
   [ -L "$group_dir/.claude" ] || [ -L "$telem_dir" ] && continue
   [ -d "$telem_dir" ] || continue
@@ -174,8 +194,11 @@ done
 
 # --- Summary ---
 
+NOTE=""
+[ -z "$SESSION_PRUNE_SKIPPED" ] ||
+  NOTE="; session files NOT pruned: $SESSION_PRUNE_SKIPPED"
 if $DRY_RUN; then
-  log "DRY RUN complete — would free ~${TOTAL_FREED}K"
+  log "DRY RUN complete — would free ~${TOTAL_FREED}K$NOTE"
 else
-  log "Done — freed ~${TOTAL_FREED}K"
+  log "Done — freed ~${TOTAL_FREED}K$NOTE"
 fi

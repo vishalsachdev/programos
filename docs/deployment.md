@@ -99,7 +99,7 @@ ssh-keygen -t ed25519 -N "" -C programos-host -f ~/.ssh/program_repo
 cat ~/.ssh/program_repo.pub
 ```
 
-Add the public key to the program repo at your git host as a deploy key **with write access**. A deploy key reaches that one repo only. Then put these three lines in `~/.ssh/config`:
+Add the public key to the program repo at your git host as a deploy key **with write access**, registered by the organisation's account and not by one person's own login ([`service-ownership.md`](./service-ownership.md)). A deploy key reaches that one repo only. Then put these three lines in `~/.ssh/config`:
 
 ```
 Host github.com
@@ -222,6 +222,7 @@ Checked: steps 4 and 5 ran against local repositories, with a read mirror presen
 
 Go through this list at the end of the recipe.
 
+- Every account and secret has an owner role, not a person, and the table in [`service-ownership.md`](./service-ownership.md) is filled in. That page also says how to rotate each secret and what to do when the builder or operator leaves.
 - The people who approve data use at your institution have seen [`data-handling.md`](./data-handling.md), and its "Decide before go-live" list has an answer on each line.
 - Operator alerts have a route that works. The default route is Telegram for the admin; `ADMIN_ALERT_ROUTE=email` mails them to the operator's address instead, and `telegram,email` does both. A test alert arrives on each route you enabled (`AGENTS.md`, "First start", step 8). The startup log has no `Admin alert setup` error.
 - The reply sensor is off, or its destination is approved for your data.

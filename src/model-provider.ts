@@ -273,26 +273,38 @@ export function failureReason(result: UpstreamResult): string | null {
   return null;
 }
 
-/** The proxy reports each upstream result for the provider it used. */
+/**
+ * The proxy reports each upstream result for the provider it used.
+ *
+ * `modelCall: false` marks a request that is not a model call (the OAuth key
+ * exchange, the model list, a connectivity check). Its failure counts like
+ * any other, but its 2xx proves nothing about model calls and resets nothing:
+ * in OAuth mode every new container makes a successful key exchange before
+ * its first model request, and that success must not wipe the failures of
+ * the model requests around it.
+ */
 export function recordProviderResult(
   provider: ModelProvider,
   result: UpstreamResult,
+  opts: { modelCall?: boolean } = {},
 ): void {
   const state = breaker(provider);
   const reason = failureReason(result);
+  const now = Date.now();
+  // In cooldown: results from runs that began before the trip. A failure
+  // neither extends the cooldown nor counts toward the next one, and a
+  // success does not end it: new runs stay on the other provider until the
+  // cooldown is over.
+  if (now < state.openUntil) return;
   if (reason === null) {
     const s = result.status;
-    if (s !== undefined && s >= 200 && s <= 299) {
+    if (opts.modelCall !== false && s !== undefined && s >= 200 && s <= 299) {
       state.failures = 0;
       state.openUntil = 0;
       state.tripped = false;
     }
     return;
   }
-  const now = Date.now();
-  // In cooldown: results from runs that began before the trip. They neither
-  // extend the cooldown nor count toward the next one.
-  if (now < state.openUntil) return;
   const { threshold, cooldownMs } = getModelProviderConfig();
   state.failures += 1;
   state.lastReason = reason;

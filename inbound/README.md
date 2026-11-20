@@ -31,7 +31,7 @@ Add the domain to Cloudflare, then enable Email Routing for it. Cloudflare sets 
 
 ### 3. Create the GitHub token
 
-Create a fine-grained personal access token (or a GitHub App installation token) with:
+Create a fine-grained personal access token with the permissions below. A GitHub App installation token does not work here: it expires after one hour and the worker has no code to renew it.
 
 - repository access: **only** the knowledge-base repo;
 - repository permissions: **Contents: Read and write**. Nothing else.

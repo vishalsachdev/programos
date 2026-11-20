@@ -5,7 +5,8 @@ import path from 'path';
 import { Parser } from 'htmlparser2';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const TEST_PORT = 39341;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 const receivedProbe = vi.hoisted(() => ({
   eml: '',
   readyTimer: undefined as Promise<number> | undefined,
@@ -32,7 +33,7 @@ vi.mock('mailparser', async (importOriginal) => {
 });
 
 vi.hoisted(() => {
-  process.env.WEBHOOK_PORT = '39341';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
 });
 
@@ -74,6 +75,7 @@ vi.mock('../repo-reader.js', () => ({
 }));
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { inboundEmailAddressesInHtml } from '../inbound-html-addresses.js';
 import { resolveChannelDeliveryContext } from '../channel-delivery.js';
 import { resolveEmailGateContext } from '../email-gate-context.js';
@@ -135,7 +137,7 @@ describe('webhook inbound delivery context', () => {
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
 
     const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
       method: 'POST',
@@ -246,7 +248,7 @@ describe('webhook inbound delivery context', () => {
       });
       if (!channel) throw new Error('missing webhook');
       disconnect = () => channel.disconnect();
-      await channel.connect();
+      TEST_PORT = await connectOnFreePort(channel);
       const subject = 'Please confirm subject-only@example.org';
       const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
         method: 'POST',
@@ -321,7 +323,7 @@ describe('webhook inbound delivery context', () => {
       registeredGroups: () => ({}),
     })!;
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
     const html = '<span>'.repeat(64_000) + '</div>'.repeat(64_000);
     const raw = `From: person@example.edu\r\nTo: program@example.org\r\nSubject: Evidence\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="deep-html"\r\n\r\n--deep-html\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nOrdinary received text.\r\n--deep-html\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}\r\n--deep-html--\r\n`;
     const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
@@ -368,7 +370,7 @@ describe('webhook inbound delivery context', () => {
     });
     if (!channel) throw new Error('missing webhook');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
     receivedProbe.eml = `From: person@example.edu\r\nTo: program@example.org\r\nSubject: Evidence\r\n\r\n${'['.repeat(128_000)}person@example.edu`;
     const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
       method: 'POST',
@@ -406,7 +408,7 @@ describe('webhook inbound delivery context', () => {
     });
     if (!channel) throw new Error('missing webhook');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
     receivedProbe.eml =
       'From: person@example.edu\r\nTo: "__header-contact@example.org__" <program@example.org>\r\nSubject: Confirm __subject-contact@example.org__\r\n\r\nPlease confirm:\n```\ninbound-only@example.org\n```\nContact __wrapped-contact@example.org__ and genuine_@example.org.';
     const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
@@ -576,7 +578,7 @@ describe('webhook inbound delivery context', () => {
       });
       if (!channel) throw new Error('missing webhook');
       disconnect = () => channel.disconnect();
-      await channel.connect();
+      TEST_PORT = await connectOnFreePort(channel);
       receivedProbe.eml = `From: person@example.edu\r\nTo: program@example.org\r\n${includeCc ? `Cc:${foldedCc ? '\r\n ' : ' '}${bareCc ? actualAddress : `<${actualAddress}>`}\r\n` : ''}Subject: Contact\r\n\r\n${receivedBody}`;
       const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
         method: 'POST',
@@ -802,7 +804,7 @@ describe('webhook inbound delivery context', () => {
         registeredGroups: () => ({}),
       })!;
       disconnect = () => channel.disconnect();
-      await channel.connect();
+      TEST_PORT = await connectOnFreePort(channel);
       const raw = `From: person@example.edu\r\nTo: program@example.org\r\nSubject: HTML contact\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="html-contact"\r\n\r\n--html-contact\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nPlease use the Advisor contact link.\r\n--html-contact\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}\r\n--html-contact--\r\n`;
       const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
         method: 'POST',

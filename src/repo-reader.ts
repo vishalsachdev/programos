@@ -54,6 +54,14 @@ function mirrorErrorText(err: any): string {
 }
 
 /** Benign "the file/revision just isn't there" stderr patterns from git. */
+/** `user:password` as [user, password]; the password may hold a colon. */
+function splitUserinfo(userinfo: string): [string, string?] {
+  const colon = userinfo.indexOf(':');
+  return colon < 0
+    ? [userinfo]
+    : [userinfo.slice(0, colon), userinfo.slice(colon + 1)];
+}
+
 const BENIGN_MISSING_RE =
   /does not exist in|Not a valid object name|bad revision|path .* does not exist/i;
 
@@ -183,6 +191,10 @@ export class RepoReader {
         {
           timeout: 120_000,
           env: mirrorGitEnv(),
+          // git's own stderr is kept out of the host's: on a refused login
+          // it names the URL it used, with a token written as the user name.
+          // The text still reaches the log below, through mirrorErrorText.
+          stdio: ['ignore', 'pipe', 'pipe'],
         },
       );
       logger.info(
@@ -205,9 +217,11 @@ export class RepoReader {
 
   /**
    * A mirror made by an earlier version, or cloned by hand, can hold the
-   * origin's token in its config. When PROGRAM_ORIGIN_URL is that same URL,
-   * the stored one is rewritten without the credential (git then reads it
-   * from the setting). Otherwise the config is the credential's only home:
+   * origin's token in its config. When PROGRAM_ORIGIN_URL names the same
+   * address with a credential of its own (the same one, or a newer one after
+   * a rotation), the stored URL is rewritten without the credential (git
+   * then reads it from the setting). The setting is taken as the current
+   * one. Otherwise the config is the credential's only home:
    * it is left as it is, made readable by its owner only, and a warning
    * says how to move it. Never throws.
    */
@@ -232,7 +246,30 @@ export class RepoReader {
           'RepoReader: the read mirror config holds a credential and was readable by other users; now private to its owner',
         );
       }
-      if (stored === (process.env.PROGRAM_ORIGIN_URL || '')) {
+      // The stored credential is not needed when the setting names the same
+      // address and carries a credential of its own. That covers a token
+      // rotated before this start, in both forms (`user:token@` and the
+      // token written as the user name, `token@`): git would go on using the
+      // stored one, because the rewrite from the setting matches the bare
+      // address only. One case is kept apart: the setting has a user name
+      // and no password, and the stored URL has that same user name with a
+      // password. The setting then holds no secret at all and the stored
+      // password is the only one, so it stays.
+      const setting = process.env.PROGRAM_ORIGIN_URL || '';
+      const fromSetting = splitOriginCredential(setting);
+      const fromStored = splitOriginCredential(stored);
+      const [settingUser, settingPass = ''] = splitUserinfo(
+        fromSetting.userinfo,
+      );
+      const [storedUser, storedPass = ''] = splitUserinfo(fromStored.userinfo);
+      const settingLacksStoredPassword =
+        !settingPass && Boolean(storedPass) && settingUser === storedUser;
+      if (
+        stored === setting ||
+        (fromSetting.userinfo !== '' &&
+          fromStored.bare === fromSetting.bare &&
+          !settingLacksStoredPassword)
+      ) {
         execFileSync(
           'git',
           [
@@ -313,7 +350,12 @@ export class RepoReader {
           'origin',
           '+refs/heads/main:refs/heads/main',
         ],
-        { timeout: 30_000, env: mirrorGitEnv() },
+        {
+          timeout: 30_000,
+          env: mirrorGitEnv(),
+          // As for the clone: git's stderr can name the URL with a token.
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
       );
     } catch (err: any) {
       logger.warn(
@@ -446,7 +488,11 @@ export class RepoReader {
       );
       const [sha, author] = history.trim().split('\n')[0].split('\0');
       // A delayed webhook must never select a later agent-authored version.
-      if (!/^[0-9a-f]{40}$/.test(sha) || author !== INTAKE_GIT_AUTHOR_EMAIL)
+      // The setting is stored in lower case; git keeps the author's case.
+      if (
+        !/^[0-9a-f]{40}$/.test(sha) ||
+        (author ?? '').toLowerCase() !== INTAKE_GIT_AUTHOR_EMAIL
+      )
         return null;
       const { stdout } = await execFileAsync(
         'git',

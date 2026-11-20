@@ -261,6 +261,42 @@ describe('circuit breaker', () => {
     expect(selectProvider()).toBe('anthropic');
   });
 
+  // Review finding on PR 26 (Codex and Bugbot): a late 2xx ended the cooldown.
+  it('a 2xx during the cooldown does not end it', () => {
+    for (let i = 0; i < 3; i++)
+      recordProviderResult('anthropic', { status: 500 });
+    expect(selectProvider()).toBe('foundry');
+    // A request that began before the trip answers now.
+    recordProviderResult('anthropic', { status: 200 });
+    expect(isProviderInCooldown('anthropic')).toBe(true);
+    expect(selectProvider()).toBe('foundry');
+    vi.advanceTimersByTime(DEFAULT_FAILOVER_COOLDOWN_MS - 1);
+    expect(selectProvider()).toBe('foundry');
+    vi.advanceTimersByTime(1);
+    expect(selectProvider()).toBe('anthropic');
+    // Still half-open after it: the late 2xx did not prove the provider.
+    recordProviderResult('anthropic', { status: 500 });
+    expect(selectProvider()).toBe('foundry');
+  });
+
+  // Review finding on PR 26 (Codex): the OAuth key exchange reset the count.
+  it('a 2xx from a request that is not a model call resets nothing', () => {
+    for (let i = 0; i < 2; i++) {
+      recordProviderResult('anthropic', { status: 200 }, { modelCall: false });
+      recordProviderResult('anthropic', { status: 429 });
+    }
+    expect(selectProvider()).toBe('anthropic');
+    recordProviderResult('anthropic', { status: 200 }, { modelCall: false });
+    recordProviderResult('anthropic', { status: 429 });
+    expect(selectProvider()).toBe('foundry');
+  });
+
+  it('a failure of a request that is not a model call still counts', () => {
+    for (let i = 0; i < 3; i++)
+      recordProviderResult('anthropic', { status: 401 }, { modelCall: false });
+    expect(selectProvider()).toBe('foundry');
+  });
+
   it('failures during the cooldown do not extend it', () => {
     for (let i = 0; i < 3; i++)
       recordProviderResult('anthropic', { status: 500 });

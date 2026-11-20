@@ -20,11 +20,12 @@ import {
 // changes. The messages are the synthetic fixtures of `inbound/`; the `auth`
 // field is what the intake worker would send (`inbound/src/auth.ts`).
 
-const TEST_PORT = 39348;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 
 const hoisted = vi.hoisted(() => {
   const dir = `${process.env.TMPDIR || '/tmp'}/programos-email-auth-${process.pid}`;
-  process.env.WEBHOOK_PORT = '39348';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
   process.env.INSTITUTION_DOMAIN = 'example.edu';
   // The real reader is used, pointed at a mirror this test creates.
@@ -86,6 +87,7 @@ vi.mock('../audit-log.js', async (importOriginal) => ({
 }));
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { flushAuditLog } from '../audit-log.js';
 import { _closeDatabase, _initTestDatabase } from '../db.js';
 import { getChannelFactory } from './registry.js';
@@ -313,7 +315,7 @@ describe('sender authentication on inbound email', () => {
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
   });
 
   beforeEach(() => {

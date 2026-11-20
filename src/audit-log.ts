@@ -846,7 +846,22 @@ async function runSyncWithPending(
       'Audit log: commit or push failed; entries stay pending',
     );
   } else if (count > 0) {
-    logger.info({ entries: count }, 'Audit log: committed and pushed');
+    // Say what this run did. A run with no failure may still have committed
+    // nothing (the host repo is waiting for the origin's history, or an
+    // earlier run already committed the files) or pushed nothing (no origin
+    // is set, or the origin already has the commit).
+    if (result.committed && result.pushed)
+      logger.info({ entries: count }, 'Audit log: committed and pushed');
+    else if (result.committed)
+      logger.info(
+        { entries: count },
+        'Audit log: committed in the host repo; nothing was pushed in this run',
+      );
+    else
+      logger.info(
+        { entries: count, pushed: result.pushed },
+        'Audit log: this run made no new commit (an earlier run committed the entries, or the host repo is waiting for the origin and they stay as files)',
+      );
   }
   return result;
 }

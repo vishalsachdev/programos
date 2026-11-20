@@ -26,11 +26,12 @@ import {
 // committed the way the worker commits them: both files in one commit, by
 // the author in `contract.json`.
 
-const TEST_PORT = 39345;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 
 const hoisted = vi.hoisted(() => {
   const dir = `${process.env.TMPDIR || '/tmp'}/programos-inbound-intake-${process.pid}`;
-  process.env.WEBHOOK_PORT = '39345';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
   // The real reader is used, pointed at a mirror this test creates.
   process.env.PROGRAM_READ_MIRROR = `${dir}/mirror.git`;
@@ -78,6 +79,7 @@ vi.mock('../outbound-email.js', async (importOriginal) => {
 });
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { flushAuditLog } from '../audit-log.js';
 import {
   _closeDatabase,
@@ -237,7 +239,7 @@ describe('mail filed by the intake worker in inbound/', () => {
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
   });
 
   beforeEach(() => {

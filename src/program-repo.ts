@@ -29,12 +29,19 @@ export interface CheckoutOwner {
   home: string;
 }
 
+const MAX_OWNER_ID = 2 ** 31 - 1;
+
 function ownerId(name: string, raw: string | undefined, dflt: number): number {
   if (!raw) return dflt;
   // Refuse rather than fall back: a typo must not silently pick another user,
   // and 0 would run git in a container-writable tree as root.
   if (!/^[1-9][0-9]{0,9}$/.test(raw))
     throw new Error(`${name} must be a positive whole number, got "${raw}"`);
+  // Node takes a uid or gid for a child process as a signed 32-bit number
+  // only. A larger id would load here and then fail at the first git or file
+  // operation in the checkout, so it is refused at start.
+  if (Number(raw) > MAX_OWNER_ID)
+    throw new Error(`${name} must be at most ${MAX_OWNER_ID}, got "${raw}"`);
   return Number(raw);
 }
 

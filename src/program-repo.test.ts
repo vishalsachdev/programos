@@ -86,6 +86,22 @@ describe('readCheckoutOwner', () => {
     ).toEqual({ uid: 1001, gid: 1002, home: '/home/svc' });
   });
 
+  // Review finding on PR 29 (Codex): Node accepts a uid or gid up to
+  // 2^31 - 1 only; a larger one failed at the first checkout operation.
+  it('refuses an owner id above what a child process can take', () => {
+    expect(readCheckoutOwner({ CHECKOUT_OWNER_UID: '2147483647' }).uid).toBe(
+      2147483647,
+    );
+    for (const bad of ['2147483648', '4294967295', '9999999999']) {
+      expect(() => readCheckoutOwner({ CHECKOUT_OWNER_UID: bad })).toThrow(
+        /CHECKOUT_OWNER_UID must be at most 2147483647/,
+      );
+      expect(() => readCheckoutOwner({ CHECKOUT_OWNER_GID: bad })).toThrow(
+        /CHECKOUT_OWNER_GID must be at most 2147483647/,
+      );
+    }
+  });
+
   it('refuses root, a non-number or a relative home instead of guessing', () => {
     for (const bad of ['0', '-1', '1000x', ' 1000', '1e3', 'ubuntu', '01']) {
       expect(() => readCheckoutOwner({ CHECKOUT_OWNER_UID: bad })).toThrow(

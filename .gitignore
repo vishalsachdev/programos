@@ -21,6 +21,9 @@ groups/*
 groups/*/*
 !groups/*/CLAUDE.md
 
+# The adopter's record of setup answers (AGENTS.md, part 3). Not pushed.
+setup-decisions.md
+
 # Secrets
 *.keys.json
 .env

@@ -6,7 +6,7 @@ Fixes, adapters and doc corrections are welcome. This page says how the repo tak
 
 **Exported code.** `src/`, `container/`, `groups/`, `setup/`, `scripts/` (outside `scripts/upstream-sync/`), `package.json`, `setup.sh` and most other files are an export from the reference deployment. `UPSTREAM.md` records the version. The next export writes these paths again from the source.
 
-**Owned files.** The paths in `OWNED` in [`scripts/upstream-sync/export.py`](./scripts/upstream-sync/export.py) belong to this repo: `README.md`, `AGENTS.md`, `SPEC.md`, `ARCHITECTURE.md`, `docs/12-governance.md`, `docs/deployment.md`, `docs/design/`, `config/`, `templates/`, `site/`, `scripts/upstream-sync/`, `.github/` templates and CI, and this file. An export never writes or deletes them. That list in the code is the exact one.
+**Owned files.** The paths in `OWNED` in [`scripts/upstream-sync/export.py`](./scripts/upstream-sync/export.py) belong to this repo: `README.md`, `AGENTS.md`, `SPEC.md`, `ARCHITECTURE.md`, `docs/12-governance.md`, `docs/deployment.md`, `docs/start-here.md`, `docs/setup-reference.md`, `docs/design/`, `config/`, `templates/`, `site/`, `scripts/upstream-sync/`, `.github/` templates and CI, and this file. An export never writes or deletes them. That list in the code is the exact one.
 
 ## The patch-file rule
 
@@ -41,6 +41,7 @@ CI runs the same six, the tests of `inbound/` and a secret scan. The baseline is
 - A doc covers what the code cannot say: the contract, the reasons, the decisions and what the host needs. Do not add a doc that restates code.
 - Where a doc and the code differ, fix the doc, or open a "Template or docs fix" issue.
 - List every new doc in the README docs table.
+- **A change that adds or changes a setup option, a setting, a channel or a safety limit updates `AGENTS.md` in the same pull request:** the entry in part 5 ("Every choice you will be asked to make"), the path it belongs to in part 4, and the table in `docs/setup-reference.md`. `AGENTS.md` is what an adopter's agent reads to a person who is not technical, so say what the option means in plain words, what the default is, and what was not tested. `scripts/upstream-sync/test_setup_docs.py` fails when a key in `config/instance.env.example` is named in neither file.
 - Facts on the public page (`site/public/index.html`) repeat `README.md` or `SPEC.md`. Change the page in the same commit.
 - `docs/design/` holds ideas that are not implemented. Each file says so in its first lines.
 - The prompts and code cite numbered rules (G6, G39 and so on). To change a rule, follow the change protocol in `docs/12-governance.md`; do not edit a rule in one prompt only.

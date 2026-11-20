@@ -98,6 +98,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) | One university's open questions about that provider | Pointer and open items; not verified |
 | [`docs/design/microsoft-path.md`](./docs/design/microsoft-path.md) | Which parts can move onto Microsoft services (Copilot Studio, Foundry, Graph mail, Teams, SharePoint), what each keeps or loses, and one recommended Microsoft-first path | Design note; not implemented. Microsoft facts from public pages fetched 2026-11-20 |
 | [`docs/illinois/microsoft-path.md`](./docs/illinois/microsoft-path.md) | One university's open questions about that path | Open items only; not verified |
+| [`docs/design/hermes-base-review.md`](./docs/design/hermes-base-review.md) | Whether to use Hermes Agent instead of NanoClaw as the base: what each provides, the section 11 guarantees on each, the options, a recommendation with its confidence | Design note; not implemented. Hermes facts from its public docs and source read 2026-11-20 |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
 | [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |
 | [`site/`](./site/) | The public page and its deploy script | Yes |

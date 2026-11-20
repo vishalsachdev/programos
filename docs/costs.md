@@ -9,6 +9,7 @@ Your agent follows `AGENTS.md`, rule 6 in part 3: it does not state a price of i
 | Line | What you pay for | Vendor page (read 2026-11-20) | What the page said |
 |---|---|---|---|
 | Virtual machine | One always-on Linux machine that runs Docker ([`cloud-vm.md`](./cloud-vm.md)) | Azure: [Linux Virtual Machines pricing](https://azure.microsoft.com/en-us/pricing/details/virtual-machines/linux/); the page's table did not render as text. Microsoft's public [retail price list](https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20%27Virtual%20Machines%27%20and%20armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27Standard_B2s%27%20and%20priceType%20eq%20%27Consumption%27) | `Standard_B2s` (2 vCPUs, 4 GiB) in `eastus`, pay-as-you-go: 0.0416 USD per hour for the row without a Windows licence. Microsoft marks the B-series v1 sizes "End of Life" ([Bv1 size series](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/bv1-series)): for a new machine, check the current price of a current size. Another cloud provider: check its current pricing. |
+| Disk | The machine's operating-system disk, and any data disk for Docker images and the knowledge-base repo, which grows with every mail filed | Azure: [Managed Disks pricing](https://azure.microsoft.com/en-us/pricing/details/managed-disks/) (not read for this page) | No price was read: check current pricing. The machine price above does not include its disk. |
 | Model usage | The text of each message, the files the agent reads, and each reply, billed per token (a token is a few characters of text) | Anthropic: [Pricing](https://platform.claude.com/docs/en/about-claude/pricing) | In USD per million tokens (input / output): Claude Opus 5.5 $4 / $20; Claude Sonnet 5.5 $2 / $10; Claude Haiku 5.5 $0.10 / $0.50 for prompts up to 100,000 tokens. "For Claude 4.6 and later models, using `inference_geo: "us"` applies a 1.1x pricing multiplier." |
 | Model usage on Microsoft Foundry | The same, billed through Azure | Anthropic: [Pricing](https://platform.claude.com/docs/en/about-claude/pricing), "Claude in Microsoft Foundry pricing"; Microsoft: [Claude consumption units (CCU) billing](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models-billing) | "Anthropic rates your token usage in USD at standard per-model, per-feature rates, applies any negotiated discount, converts the result to CCUs at $0.01 USD per CCU". The US Data Zone Standard deployment type "applies the same 1.1x pricing multiplier". |
 | Outbound mail | The service that delivers the bot's replies (choice 6) | Resend: [Pricing](https://resend.com/pricing) | Free: $0 a month, 3,000 mails a month, "limited to 100 emails per day". Pro: $20 a month, 50,000 mails a month. With SMTP through an institution's mail system (`OUTBOUND_MAIL_PROVIDER=smtp`) the cost, if any, is the institution's to state. |
@@ -29,7 +30,7 @@ This is arithmetic on the prices above, not a measurement. No deployment's token
 - each turn sends 50,000 input tokens to the model (the message, the instructions and the files the agent reads) and gets 2,000 output tokens back. This figure is a guess; read your provider's usage page after the first week and replace it;
 - the agent's default model, Claude Opus 5.5 (`claude-opus-5-5` in `container/agent-runner/src/index.ts`), at the base price, with no prompt-caching discount and no regional multiplier;
 - not counted: the gate reviewer's model calls inside a turn, the reply sensor (off in a pilot), retries and failover;
-- the virtual machine runs 730 hours a month (an assumption: 24 hours × about 30.4 days);
+- the virtual machine runs 730 hours a month (an assumption: 24 hours × about 30.4 days); its disk is a separate charge and is not counted;
 - fewer than 100 mails a day, so Resend's free plan, and the intake worker within Cloudflare's free limits.
 
 | Line | Arithmetic | Per month (USD) |
@@ -40,8 +41,9 @@ This is arithmetic on the prices above, not a measurement. No deployment's token
 | Outbound mail (Resend Free) | | 0 |
 | Inbound intake (Cloudflare free limits) | | 0 |
 | Telegram, GitHub Free | | 0 |
+| Disk (OS disk and any data disk) | check current pricing | not counted |
 | Domain | check current pricing | not counted |
-| **Total, before the domain** | | **102.37** |
+| **Total, before the disk and the domain** | | **102.37** |
 
 **General track:** the table as it stands. A different cloud provider, a different machine size or region, or Resend Pro ($20) changes it.
 

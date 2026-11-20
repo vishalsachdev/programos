@@ -13,6 +13,7 @@ import {
   TIMEZONE,
   DATA_DIR,
 } from './config.js';
+import { assertAdminIdentitiesConfigured } from './admin-identity-check.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -866,6 +867,8 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
+  // Before anything starts: a real program repo needs real admin identities.
+  assertAdminIdentitiesConfigured();
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');

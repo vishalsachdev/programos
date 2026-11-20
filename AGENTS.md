@@ -60,7 +60,7 @@ Search for each placeholder (include tests; exclude `node_modules`):
 | `example.org` | The bot's own mail domain: the default bot address, the Message-ID domain, and the bot's git author `program-bot@example.org` | Setting: `BOT_MAIL_DOMAIN` in `.env`. Prompts in `groups/` and skills in `container/skills/` name the git author as text; change them to match. The site address `program-repo.example.org` in `src/behaviour-sensor.ts` is not covered by the setting |
 | `email-inbox@example.org` | The git author of the inbound mail intake service (see "Inbound mail") | Setting: `INTAKE_GIT_AUTHOR_EMAIL` in `.env` |
 | `Avery Morgan`, `avery@example.edu`, `tg-avery@program` | The operator (admin). Outreach, routed approvals and admin checks name this person | `src/config.ts`, `src/outreach-recipient-roster.ts`, `src/routed-approvals.ts`, `src/channels/webhook.ts`, prompts |
-| `ADMIN_AUTHOR_EMAILS` (`avery@example.edu`, `avery.personal@gmail.com`, a `users.noreply.github.com` address) | The git author identities allowed to change protected governance files | Setting: `ADMIN_AUTHOR_EMAILS` in `.env`, separated by commas. Use the admin's real commit identities. The setting replaces the placeholder list; until it is set, the placeholder identities count as admin |
+| `ADMIN_AUTHOR_EMAILS` (`avery@example.edu`, `avery.personal@gmail.com`, a `users.noreply.github.com` address) | The git author identities allowed to change protected governance files | Setting: `ADMIN_AUTHOR_EMAILS` in `.env`, separated by commas. **Required for a real program repo.** Use the admin's real commit identities. The setting replaces the placeholder list. With a real program repo the host refuses to start when the setting is missing or names a placeholder address (`src/admin-identity-check.ts`); the placeholders count as admin only with the placeholder repo |
 | `/^greta\b/i` | A one-person exception in the outreach roster (a departed owner whose section is skipped) | `src/outreach-recipient-roster.ts`, near `unmatchedOwners`. Remove it or replace it with your own case. |
 | Other synthetic people (in `OWNER_ALIASES` in `src/outreach-recipient-roster.ts`) | A short-name table for the team | Replace with the user's team or empty it |
 | `PeerAgent`, `averybot@gmail.com` | A second automated agent that also mails the bot | `src/config.ts` (`AGENT_INBOX_ADDRESSES`); empty the list if the user has none |
@@ -203,6 +203,11 @@ Do these once, in this order, before the first test message:
    or token limited to the program repo. Before the first test message, run a pull,
    a commit and a push as each writer.
 5. Build the container image (`container/build.sh`).
+6. Set `ADMIN_AUTHOR_EMAILS` in `.env` to the admin's real git author emails
+   before the first start with the real program repo. The host refuses to start
+   without it, or with a placeholder address in it, once the repo is a real one:
+   `PROGRAM_ORIGIN_PATTERN` is set, or the origin of the checkout or the read
+   mirror is not `example-org/program-repo`. The error names the setting.
 
 ## Order of work
 

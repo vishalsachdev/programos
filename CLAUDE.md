@@ -6,7 +6,7 @@ Notes for Claude (and future maintainers) working on this repo. Adopter-facing d
 
 ProgramOS is a **clonable implementation** (since 2026-11-14; before that it was a spec only). Adopters clone this repo and their coding agent follows `AGENTS.md`. The code in `src/`, `container/`, `groups/`, `setup/` and `scripts/` is an export from the reference deployment; `UPSTREAM.md` records the version. Do not hand-edit exported code here without recording it: fix it at the source and re-export, or run `python3 scripts/upstream-sync/repo_patch.py` after the edit and commit the consolidated patch it rewrites (`scripts/upstream-sync/repo-changes-2026-11-20.patch`; never edited by hand, no other per-PR patch files). CI runs the same script with `--check`. The authoritative list of files this repo owns is `OWNED` in `scripts/upstream-sync/export.py`, including `scripts/upstream-sync/` itself; exports never overwrite those paths. `inbound/` (the mail intake worker) is owned: it was written here, has its own `package.json`, and is edited here.
 
-Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup guidance lives in `docs/09-illinois-quickstart.md`. The optional palette for the Illinois public site lives in `site/themes/illinois.css`.
+Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup guidance lives in `docs/illinois/` (the Illinois track, `docs/illinois/README.md`); the general track's entry is `docs/general/README.md`. The optional palette for the Illinois public site lives in `site/themes/illinois.css`.
 
 ## Editing conventions
 
@@ -50,7 +50,7 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - [x] Public site at programos.illinihunt.org
 - [ ] Finalize `docs/12-governance.md`
 - [ ] SMTP outbound provider: send through a real mail server once (never done), then answer the questions in `docs/illinois/institutional-address.md` with the institution
-- [ ] Rewrite `docs/09-illinois-quickstart.md` (campus mail and cloud path)
+- [x] Rewrite the Illinois email quickstart (now `docs/illinois/email-quickstart.md`); its claims about the university's mail system still need written answers from the central IT office
 - [x] A neutral inbound mail intake service: `inbound/` (Cloudflare Email Worker; owned by this repo, not exported)
 - [ ] Run `inbound/` against a live Cloudflare domain and mailbox (never done; `inbound/README.md`, "Not verified"). The host test for `inbound/` is exported code and is held in the consolidated patch
 - [ ] Proof numbers on the site, each from a dated query, in one data file

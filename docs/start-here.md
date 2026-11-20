@@ -74,21 +74,23 @@ This repo does not know what your institution allows, and it does not say.
 
 1. Clone this repo and open it with your coding agent.
 2. Say: "Read `AGENTS.md` and help me set this up. I am not technical."
-3. Your agent explains the three ways to start and asks which you want.
+3. Your agent asks whether you are setting this up at the University of Illinois or somewhere else. That only picks which set of pages it uses with you: [`illinois/`](./illinois/README.md) or [`general/`](./general/README.md). The bot is the same.
+4. Your agent explains the three ways to start and asks which you want.
 
 ## What your agent will ask you
 
 One question at a time, each with an explanation and a recommendation. You can always answer "I do not know"; the agent then helps you find who does. It writes your answers in a file named `setup-decisions.md` that you can read.
 
-1. Which way to start.
-2. Which AI service your team's mail may reach, and who said so.
-3. Who the admin is, and who approves for each colleague.
-4. Which address the bot sends from.
-5. Where the bot runs and where the record is kept.
-6. Who is on the allowlist, and what they are told about where their mail goes.
-7. How people reach the bot, and how the operator is alerted (Telegram, email, or both).
-8. Whether the bot sends any reminders on a schedule. For a first pilot: none.
-9. Whether the bot may search the web or reach the internet from its workspace. For a first pilot: no.
+1. Whether you are at the University of Illinois or somewhere else (it picks the pages, not the code).
+2. Which way to start.
+3. Which AI service your team's mail may reach, and who said so.
+4. Who the admin is, and who approves for each colleague.
+5. Which address the bot sends from.
+6. Where the bot runs and where the record is kept.
+7. Who is on the allowlist, and what they are told about where their mail goes.
+8. How people reach the bot, and how the operator is alerted (Telegram, email, or both).
+9. Whether the bot sends any reminders on a schedule. For a first pilot: none.
+10. Whether the bot may search the web or reach the internet from its workspace. For a first pilot: no.
 
 Your agent does the file changes and the tests. Only you can create accounts, approve a cost, ask your IT office for something, or say "go live". The agent asks you before anything that costs money, sends mail, or goes live.
 
@@ -106,5 +108,6 @@ In steps, not hours; how long each takes depends on your accounts and your insti
 
 - [`AGENTS.md`](../AGENTS.md): what your agent follows, including every choice and its options.
 - [`data-handling.md`](./data-handling.md): where messages go and what is kept. Take it to the people who approve data use.
-- [`deployment.md`](./deployment.md): the server recipe.
+- [`deployment.md`](./deployment.md): the server recipe; [`cloud-vm.md`](./cloud-vm.md): what machine to ask for.
+- [`costs.md`](./costs.md): each monthly cost, with the vendor's pricing page and the date it was read.
 - [`setup-reference.md`](./setup-reference.md): every setting.

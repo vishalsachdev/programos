@@ -34,7 +34,7 @@ python3 -B -m unittest discover scripts/upstream-sync
 python3 scripts/upstream-sync/repo_patch.py --check
 ```
 
-CI runs the same six, the tests of `inbound/` and a secret scan. The baseline is 1,761 passing tests. One timing test in `src/channels/webhook-ingest-context.test.ts` can fail on a busy machine; run it alone before you treat it as real. Do not skip, delete or weaken a test to get green. Placeholders live in code and tests together, so a renamed placeholder needs both.
+CI runs the same six, the tests of `inbound/` and a secret scan. The baseline is 1,761 passing tests. One timing test in `src/channels/webhook-ingest-context.test.ts` can fail on a busy machine; run it alone before you treat it as real. The SMTP provider tests start a local mail server and make its certificate with the `openssl` command, which must be installed. Do not skip, delete or weaken a test to get green. Placeholders live in code and tests together, so a renamed placeholder needs both.
 
 ## Docs
 

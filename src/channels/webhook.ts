@@ -85,6 +85,7 @@ import {
   saveExtraction,
 } from '../document-extractor.js';
 import { isAutoReplyEml } from '../email-loop-detection.js';
+import { getOutboundMailProvider } from '../outbound-email-smtp.js';
 import { sendAdminAlert, type AdminAlertResult } from '../admin-alert.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { safeAttachmentName } from '../attachment-safety.js';
@@ -1716,7 +1717,7 @@ registerChannel('webhook', (opts) => {
     ) {
       const meta = emailMetadata.get(jid);
 
-      if (!resendEnv.RESEND_API_KEY) {
+      if (!resendEnv.RESEND_API_KEY && getOutboundMailProvider() !== 'smtp') {
         logger.warn({ jid }, 'RESEND_API_KEY not set, reply not sent');
         return {
           status: 'failed' as const,

@@ -57,7 +57,7 @@ For **Try it**:
 For a **Pilot**, also:
 
 - a small server that is always on, from a cloud provider or your institution (check the provider's current pricing);
-- an account with the mail delivery service the bot uses to send, Resend (check its current pricing);
+- an account with the mail delivery service the bot uses to send, Resend (check its current pricing), and a domain you control to send from. The bot can instead send through a mail server that accepts a login (SMTP), which is the way to use an address on your institution's own domain if its mail administrators allow that; this second way is new and has not run against a real mail server;
 - a mail address for the bot, on an internet domain where you, or your IT office for you, can add settings (DNS records);
 - a way to receive mail for that address. The one in this repo uses a Cloudflare account;
 - the names and addresses of the first colleagues, and who approves requests for each;

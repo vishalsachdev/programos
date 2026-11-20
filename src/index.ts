@@ -14,6 +14,7 @@ import {
   DATA_DIR,
 } from './config.js';
 import { assertIdentitySettingsConfigured } from './identity-settings-check.js';
+import { assertOutboundMailConfigured } from './outbound-email-smtp.js';
 import {
   ensureHostRepo,
   hostRepoPlacementProblem,
@@ -896,6 +897,9 @@ async function main(): Promise<void> {
   // .env holds every secret: one clear error when other users of this
   // machine can read it; a refusal only with REQUIRE_PRIVATE_ENV_FILE=true.
   checkEnvFilePermissions();
+
+  // OUTBOUND_MAIL_PROVIDER=smtp: only an encrypted, authenticated submission.
+  assertOutboundMailConfigured();
 
   // The host-owned repository must not sit inside the agent's checkout.
   const hostRepoProblem = hostRepoPlacementProblem();

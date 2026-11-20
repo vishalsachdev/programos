@@ -81,6 +81,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | The same recipe on a university virtual machine: open questions | Stub; not verified |
 | [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
+| [`docs/illinois/institutional-address.md`](./docs/illinois/institutional-address.md) | One university: what sending as a campus address needs, and the questions to ask its central IT office | Open items only; not verified |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
 | [`docs/dependency-audit.md`](./docs/dependency-audit.md) | Each `npm audit` finding: fixed, not reachable (and why), or accepted (risk and owner); counts before and after | Yes; run 2026-11-20 |
 | [`docs/service-ownership.md`](./docs/service-ownership.md) | Every credential and account a deployment holds: its owner role, where it is stored, how to rotate it, what breaks meanwhile, the handover checklist, the minimum for a pilot | Yes; traced from the code 2026-11-20. Provider screens and live rotation not verified |

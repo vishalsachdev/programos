@@ -55,17 +55,18 @@ Search for each placeholder (include tests; exclude `node_modules`):
 | `Coordinator` (also `Co-ordinator`, `co[\s-]?ordinator` in patterns) | The bot's name | `ASSISTANT_NAME` in `.env`, prompts in `groups/`, several `src/` files and patterns that recognise the name |
 | `Program`, `program-email`, `program-telegram`, `web-chat-program`, `tg-program` | The program or project name and its channel group names | `groups/` folder names, `seed-db.cjs`, `src/index.ts`, `src/task-scheduler.ts` and others |
 | `program-repo`, `/workspace/extra/program-repo` | The knowledge-base repo and its mount point in the container | `PROGRAM_REPO` (process environment), `src/program-repo.ts`, prompts, container skills |
-| `example-org/program-repo` | The git origin the host accepts for the program repo. A different origin is refused and the read mirror is not created. | `isExpectedOrigin` in `src/repo-reader.ts`; set `PROGRAM_ORIGIN_PATTERN` or change the patterns |
-| `example.edu` | The institution mail domain. It is used in logic: the "access closed" courtesy reply (`INSTITUTION_DOMAIN` in `src/channels/webhook.ts`) and approver addresses in `src/routed-approvals.ts` | about 10 `src/` files |
-| `example.org` | The bot's own mail domain and site | `src/config.ts` (default bot address), others |
+| `example-org/program-repo` | The git origin the host accepts for the program repo. A different origin is refused and the read mirror is not created. | `isExpectedOrigin` in `src/repo-reader.ts`; set `PROGRAM_ORIGIN_PATTERN` (process environment). Any git host works, including a GitHub Enterprise host; `config/instance.env.example` has example patterns |
+| `example.edu` | The institution mail domain. It is used in logic: the "access closed" courtesy reply (`src/channels/webhook.ts`) and approver addresses in `src/routed-approvals.ts` | Setting: `INSTITUTION_DOMAIN` in `.env`. The operator's address, the shared mailbox in `src/trusted-body-mailboxes.ts`, prompts and tests still hold `example.edu` as text |
+| `example.org` | The bot's own mail domain: the default bot address, the Message-ID domain, and the bot's git author `program-bot@example.org` | Setting: `BOT_MAIL_DOMAIN` in `.env`. Prompts in `groups/` and skills in `container/skills/` name the git author as text; change them to match. The site address `program-repo.example.org` in `src/behaviour-sensor.ts` is not covered by the setting |
+| `email-inbox@example.org` | The git author of the inbound mail intake service (see "Inbound mail") | Setting: `INTAKE_GIT_AUTHOR_EMAIL` in `.env` |
 | `Avery Morgan`, `avery@example.edu`, `tg-avery@program` | The operator (admin). Outreach, routed approvals and admin checks name this person | `src/config.ts`, `src/outreach-recipient-roster.ts`, `src/routed-approvals.ts`, `src/channels/webhook.ts`, prompts |
-| `ADMIN_AUTHOR_EMAILS` (`avery@example.edu`, `avery.personal@gmail.com`, a `users.noreply.github.com` address) | The git author identities allowed to change protected governance files | `src/governance-protection.ts`. Use the admin's real commit identities. |
+| `ADMIN_AUTHOR_EMAILS` (`avery@example.edu`, `avery.personal@gmail.com`, a `users.noreply.github.com` address) | The git author identities allowed to change protected governance files | Setting: `ADMIN_AUTHOR_EMAILS` in `.env`, separated by commas. Use the admin's real commit identities. The setting replaces the placeholder list; until it is set, the placeholder identities count as admin |
 | `/^greta\b/i` | A one-person exception in the outreach roster (a departed owner whose section is skipped) | `src/outreach-recipient-roster.ts`, near `unmatchedOwners`. Remove it or replace it with your own case. |
 | Other synthetic people (in `OWNER_ALIASES` in `src/outreach-recipient-roster.ts`) | A short-name table for the team | Replace with the user's team or empty it |
 | `PeerAgent`, `averybot@gmail.com` | A second automated agent that also mails the bot | `src/config.ts` (`AGENT_INBOX_ADDRESSES`); empty the list if the user has none |
 | `CRS`, `ELC`, `LAB` plus three digits | Course-code prefixes | See "Academic examples" below |
 
-Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. `start.sh` and `ecosystem.config.cjs` hold a fixed path from the reference deployment; change them.
+Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `PROGRAM_ORIGIN_PATTERN`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. `start.sh` and `ecosystem.config.cjs` hold a fixed path from the reference deployment; change them.
 
 ## Academic examples
 
@@ -173,9 +174,10 @@ For each inbound message it must:
    from `raw_email` or `inbound_text` in the payload, or from an `.eml` file the
    service committed (`eml_file_path`; the default raw path is `discussions/raw/<filename>`).
    When the host reads the committed `.eml`, it accepts only a file first committed
-   by the git author `email-inbox@example.org`. That address is fixed in
-   `src/repo-reader.ts` (search for it) and in `src/channels/github-push-events.ts`.
-   Use that author for the service, or change both places together.
+   by the intake service's git author. Set `INTAKE_GIT_AUTHOR_EMAIL` in `.env` to
+   the author email on the service's commits (the default is the placeholder
+   `email-inbox@example.org`). `src/repo-reader.ts` and
+   `src/channels/github-push-events.ts` both read that one setting.
 4. After setup, test one routed-approval exchange, not only a plain question.
 
 Read the handler in `src/channels/webhook.ts` (search for `Missing filename or subject`)

@@ -77,6 +77,7 @@ import { readFromCheckoutBuffer } from '../checkout-fs.js';
 import { deriveEmailChatJid, parseEmailIdentity } from './webhook-threading.js';
 import { logger } from '../logger.js';
 import { readEnvFile } from '../env.js';
+import { INSTITUTION_DOMAIN } from '../instance-identity.js';
 import { Channel, PreparedDelivery } from '../types.js';
 import {
   extractEmailAttachments,
@@ -628,7 +629,9 @@ registerChannel('webhook', (opts) => {
   // skip obvious automated addresses + set Auto-Submitted so we don't loop
   // with the recipient's own autoresponder.
   // ───────────────────────────────────────────────────────────────────────
-  const INSTITUTION_DOMAIN = 'example.edu';
+  const institutionAddressRe = new RegExp(
+    `^[^\\s@<>,;]+@([a-z0-9-]+\\.)*${INSTITUTION_DOMAIN.replace(/\./g, '\\.')}$`,
+  );
   const blockedNotified = new Set<string>();
   const MAX_BLOCKED_NOTIFIED = 1000;
 
@@ -655,7 +658,7 @@ registerChannel('webhook', (opts) => {
     if (from.includes(',') || from.includes(';')) return null;
     const angle = from.match(/<([^>]+)>/);
     const addr = (angle ? angle[1] : from).trim().toLowerCase();
-    if (!/^[^\s@<>,;]+@([a-z0-9-]+\.)*example\.edu$/.test(addr)) return null;
+    if (!institutionAddressRe.test(addr)) return null;
     return addr;
   }
 

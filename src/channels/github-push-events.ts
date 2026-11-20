@@ -13,6 +13,10 @@ import {
   isAdminAuthorEmail,
   protectedGovernanceRule,
 } from '../governance-protection.js';
+import {
+  BOT_GIT_AUTHOR_EMAIL,
+  INTAKE_GIT_AUTHOR_EMAIL,
+} from '../instance-identity.js';
 
 const execFileP = promisify(execFile);
 
@@ -25,10 +29,7 @@ const execFileP = promisify(execFile);
 // host; containers pull it themselves at task start.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BOT_AUTHORS = new Set([
-  'program-bot@example.org',
-  'email-inbox@example.org',
-]);
+const BOT_AUTHORS = new Set([BOT_GIT_AUTHOR_EMAIL, INTAKE_GIT_AUTHOR_EMAIL]);
 
 const KB_INCLUDE_PREFIXES = [
   'discussions/DECISIONS.md',

@@ -17,6 +17,7 @@ import {
 import { channelFromJid, webChatSessionIdFromJid } from './channel-utils.js';
 import { logger } from './logger.js';
 import { TIMEZONE } from './config.js';
+import { BOT_GIT_AUTHOR_EMAIL } from './instance-identity.js';
 import { localDateYmd, localTimeHms } from './timezone.js';
 import { checkoutGitOptions, getProgramRepoPath } from './program-repo.js';
 import { appendToCheckout, checkoutHasLine } from './checkout-fs.js';
@@ -705,7 +706,7 @@ export async function runAuditCommit(
       'commit',
       '-m',
       `Audit log: ${count} entries`,
-      '--author=Coordinator <program-bot@example.org>',
+      `--author=Coordinator <${BOT_GIT_AUTHOR_EMAIL}>`,
       '--no-verify',
     ]);
   } catch (err) {

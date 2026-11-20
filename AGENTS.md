@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,004 passing tests (1,761 from the source, 243 added here). One timing test
+   is 2,014 passing tests (1,761 from the source, 253 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -242,11 +242,15 @@ matching choice in part 5.
    from the user and write down its source and date.
    **There are two model call paths.** The agent goes through the host proxy and
    follows `MODEL_PROVIDERS` and `ANTHROPIC_BASE_URL`. The reply sensor
-   (`src/behaviour-sensor.ts`) calls a model API directly with its own key and
-   follows neither. Its destination is `SENSOR_PROVIDER`: the public Anthropic
-   API by default, or `foundry`. It does not fail over.
-   Keep `BEHAVIOUR_SENSOR_DISABLED=1` unless the user confirms the sensor's
-   destination is approved too.
+   (`src/behaviour-sensor.ts`) calls a model API directly from the host, with
+   its own API key, but it goes to the same place as the agent's first choice:
+   the first provider in `MODEL_PROVIDERS` (or `anthropic`), and on `anthropic`
+   the host in `ANTHROPIC_BASE_URL` when that is set. `SENSOR_PROVIDER`
+   overrides the provider. It does not fail over, and it needs an API key (a
+   subscription token cannot call it); with no usable key it does nothing. The
+   host logs the provider and host it sends to. Still keep
+   `BEHAVIOUR_SENSOR_DISABLED=1` unless the user confirms that destination is
+   approved. Not tested against a live endpoint.
 2. **Who may approve records and access changes?** (the admin and any approvers)
 3. **Which address does the bot send from?** And which mail provider delivers it.
 4. **Where does the data live?** The host for the bot, and the git host for the program repo.
@@ -301,13 +305,17 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Plain words:* a second check that compares a reply with the facts that must
   not be wrong (the ground-truth files). It makes its own call to an AI service,
   separate from the bot's.
-- *Options:* off; on with the public Anthropic API; on with Foundry.
+- *Options:* off; on, following the agent's first provider (the public
+  Anthropic API, the endpoint in `ANTHROPIC_BASE_URL`, or Foundry); on with a
+  provider chosen on its own.
 - *Code default:* on, when a key and the ground-truth file exist. It checks chat
   replies (Telegram and web chat), not email replies (`docs/data-handling.md`).
 - *First pilot:* off. Turn it on only when its destination is approved for your
   data and the ground-truth files fit your project (part 8).
 - *Settings:* `BEHAVIOUR_SENSOR_DISABLED=1` (process), `SENSOR_PROVIDER`
-  (`anthropic` or `foundry`; .env or process), `SENSOR_MODEL` (process).
+  (`anthropic` or `foundry`; .env or process; unset follows the first entry of
+  `MODEL_PROVIDERS`), `SENSOR_MODEL` (process). It also reads
+  `ANTHROPIC_BASE_URL` and `MODEL_PROVIDERS` (.env).
 - *Detail:* policy question 1; part 8; `docs/data-handling.md`.
 
 **3. Channels: email, Telegram, web chat**

@@ -1665,10 +1665,10 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..21d220a448a248da5dc017041ce994ca
    } catch (err) {
 diff --git a/src/behaviour-sensor-provider.test.ts b/src/behaviour-sensor-provider.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..4716112eff5db0b8ce1bd7f6ea2b378d41a597d9
+index 0000000000000000000000000000000000000000..333392dabe85ab7d34f607f70f9515fe1c7752f9
 --- /dev/null
 +++ b/src/behaviour-sensor-provider.test.ts
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,280 @@
 +/** Reply sensor: the URL and key header for each SENSOR_PROVIDER. */
 +import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 +
@@ -1715,6 +1715,7 @@ index 0000000000000000000000000000000000000000..4716112eff5db0b8ce1bd7f6ea2b378d
 +    vi.clearAllMocks();
 +    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
 +    delete process.env.SENSOR_PROVIDER;
++    delete process.env.ANTHROPIC_BASE_URL;
 +    delete process.env.ANTHROPIC_API_KEY;
 +    delete process.env.BEHAVIOUR_SENSOR_DISABLED;
 +  });
@@ -1726,6 +1727,7 @@ index 0000000000000000000000000000000000000000..4716112eff5db0b8ce1bd7f6ea2b378d
 +  it('default: the Anthropic API with x-api-key', () => {
 +    mockEnv.ANTHROPIC_API_KEY = 'sk-ant-real-key';
 +    expect(resolveSensorTarget()).toEqual({
++      provider: 'anthropic',
 +      url: 'https://api.anthropic.com/v1/messages',
 +      keyHeader: 'x-api-key',
 +      apiKey: 'sk-ant-real-key',
@@ -1748,6 +1750,7 @@ index 0000000000000000000000000000000000000000..4716112eff5db0b8ce1bd7f6ea2b378d
 +      ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
 +    });
 +    expect(resolveSensorTarget()).toEqual({
++      provider: 'foundry',
 +      url: 'https://unit-resource.services.ai.azure.com/anthropic/v1/messages',
 +      keyHeader: 'api-key',
 +      apiKey: 'foundry-real-key',
@@ -1762,6 +1765,7 @@ index 0000000000000000000000000000000000000000..4716112eff5db0b8ce1bd7f6ea2b378d
 +      FOUNDRY_KEY_HEADER: 'x-api-key',
 +    });
 +    expect(resolveSensorTarget()).toEqual({
++      provider: 'foundry',
 +      url: 'https://gw.example.edu/unit/anthropic/v1/messages',
 +      keyHeader: 'x-api-key',
 +      apiKey: 'foundry-real-key',
@@ -1817,20 +1821,151 @@ index 0000000000000000000000000000000000000000..4716112eff5db0b8ce1bd7f6ea2b378d
 +    });
 +    expect(JSON.stringify(init)).not.toContain('sk-ant-real-key');
 +  });
++
++  describe('follows the approved endpoint', () => {
++    const FOUNDRY = {
++      ANTHROPIC_FOUNDRY_RESOURCE: 'unit-resource',
++      ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
++    };
++
++    it('ANTHROPIC_BASE_URL without a path: same host, default path', () => {
++      Object.assign(mockEnv, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        ANTHROPIC_BASE_URL: 'https://gw.example.edu',
++      });
++      expect(resolveSensorTarget()).toEqual({
++        provider: 'anthropic',
++        url: 'https://gw.example.edu/v1/messages',
++        keyHeader: 'x-api-key',
++        apiKey: 'sk-ant-real-key',
++      });
++    });
++
++    it('ANTHROPIC_BASE_URL with a path prefix: joined before /v1/messages', () => {
++      Object.assign(mockEnv, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        ANTHROPIC_BASE_URL: 'https://gw.example.edu/unit/anthropic/',
++      });
++      expect(resolveSensorTarget()).toMatchObject({
++        url: 'https://gw.example.edu/unit/anthropic/v1/messages',
++      });
++    });
++
++    it('the live request goes to the base URL host', async () => {
++      Object.assign(mockEnv, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        ANTHROPIC_BASE_URL: 'https://gw.example.edu/unit',
++      });
++      mockFetch.mockResolvedValue(modelReply('PASS'));
++      await evaluateBehaviourReply(REPLY, stubReader, { refresh: false });
++      expect(mockFetch.mock.calls[0][0]).toBe(
++        'https://gw.example.edu/unit/v1/messages',
++      );
++    });
++
++    it('an invalid ANTHROPIC_BASE_URL is an error, not api.anthropic.com', async () => {
++      Object.assign(mockEnv, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        ANTHROPIC_BASE_URL: 'not a url',
++      });
++      expect(resolveSensorTarget()).toEqual({ error: 'invalid-base-url' });
++      mockEnv.ANTHROPIC_BASE_URL = 'ftp://gw.example.edu';
++      expect(resolveSensorTarget()).toEqual({ error: 'invalid-base-url' });
++      const result = await evaluateBehaviourReply(REPLY, stubReader);
++      expect(result.annotation).toBe('[sensor: error: invalid-base-url]');
++      expect(mockFetch).not.toHaveBeenCalled();
++    });
++
++    it('MODEL_PROVIDERS starting with anthropic, or unset: anthropic', () => {
++      Object.assign(mockEnv, FOUNDRY, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        MODEL_PROVIDERS: 'anthropic,foundry',
++      });
++      expect(resolveSensorTarget()).toMatchObject({ provider: 'anthropic' });
++    });
++
++    it('MODEL_PROVIDERS=foundry,anthropic with SENSOR_PROVIDER unset: Foundry', async () => {
++      Object.assign(mockEnv, FOUNDRY, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        MODEL_PROVIDERS: 'foundry,anthropic',
++      });
++      mockFetch.mockResolvedValue(modelReply('PASS'));
++      await evaluateBehaviourReply(REPLY, stubReader, { refresh: false });
++      expect(mockFetch).toHaveBeenCalledTimes(1);
++      const [url, init] = mockFetch.mock.calls[0];
++      expect(url).toBe(
++        'https://unit-resource.services.ai.azure.com/anthropic/v1/messages',
++      );
++      expect(init.headers['api-key']).toBe('foundry-real-key');
++      expect(JSON.stringify(init)).not.toContain('sk-ant-real-key');
++    });
++
++    it('an explicit SENSOR_PROVIDER wins, in both directions', () => {
++      Object.assign(mockEnv, FOUNDRY, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        MODEL_PROVIDERS: 'foundry,anthropic',
++        SENSOR_PROVIDER: 'anthropic',
++      });
++      expect(resolveSensorTarget()).toMatchObject({
++        provider: 'anthropic',
++        url: 'https://api.anthropic.com/v1/messages',
++      });
++      Object.assign(mockEnv, {
++        MODEL_PROVIDERS: 'anthropic,foundry',
++        SENSOR_PROVIDER: 'foundry',
++      });
++      expect(resolveSensorTarget()).toMatchObject({ provider: 'foundry' });
++    });
++
++    it('foundry first with incomplete Foundry settings: error, no request to any host', async () => {
++      Object.assign(mockEnv, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        MODEL_PROVIDERS: 'foundry,anthropic',
++      });
++      const result = await evaluateBehaviourReply(REPLY, stubReader);
++      expect(result.annotation).toBe('[sensor: error: no-foundry-settings]');
++      expect(mockFetch).not.toHaveBeenCalled();
++    });
++
++    it('anthropic followed with only a subscription token: no key, no request', async () => {
++      Object.assign(mockEnv, {
++        CLAUDE_CODE_OAUTH_TOKEN: 'oauth-real-token',
++        ANTHROPIC_BASE_URL: 'https://gw.example.edu',
++      });
++      expect(resolveSensorTarget()).toEqual({ error: 'no-api-key' });
++      const result = await evaluateBehaviourReply(REPLY, stubReader);
++      expect(result.annotation).toBe('[sensor: error: no-api-key]');
++      expect(mockFetch).not.toHaveBeenCalled();
++    });
++
++    it('an unknown first provider is an error, not a fallback', () => {
++      Object.assign(mockEnv, FOUNDRY, {
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        MODEL_PROVIDERS: 'bedrock,anthropic',
++      });
++      expect(resolveSensorTarget()).toEqual({
++        error: 'unknown-sensor-provider',
++      });
++    });
++  });
 +});
 diff --git a/src/behaviour-sensor.ts b/src/behaviour-sensor.ts
-index 9a18a264f903ae6593d5238a0a612223b4c7cce7..254e07344457ce039383e3256ed5dbb624c4a666 100644
+index 9a18a264f903ae6593d5238a0a612223b4c7cce7..8997e331b7b34c5b65c734fe8c4a59ca3a464ae2 100644
 --- a/src/behaviour-sensor.ts
 +++ b/src/behaviour-sensor.ts
-@@ -29,6 +29,7 @@ import path from 'path';
+@@ -29,6 +29,11 @@ import path from 'path';
  import { TIMEZONE } from './config.js';
  import { stripInternalTags } from './delivery-gate.js';
  import { readEnvFile } from './env.js';
-+import { basePath, readFoundrySettings } from './model-provider.js';
++import {
++  messagesUrl,
++  readFoundrySettings,
++  readPrimaryProviderName,
++} from './model-provider.js';
  import { logger } from './logger.js';
  import { getRepoReader } from './repo-reader.js';
  import { getProgramRepoPath } from './program-repo.js';
-@@ -1044,6 +1045,8 @@ export function gRuleTag(res: { phantom: string[] }): string | null {
+@@ -1044,6 +1049,8 @@ export function gRuleTag(res: { phantom: string[] }): string | null {
   * CRS 572). extractCourseCodes matches any letters+digits pair, so only
   * codes whose PREFIX the canon itself uses are judged — "CRS 999" flags,
   * prose like "top 100" never does. Skips silently when canon unreadable.
@@ -1839,38 +1974,51 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..254e07344457ce039383e3256ed5dbb6
   */
  export function checkCourseCodeRefs(
    replyText: string,
-@@ -1078,18 +1081,62 @@ export function courseCodeTag(res: { unknown: string[] }): string | null {
+@@ -1078,18 +1085,101 @@ export function courseCodeTag(res: { unknown: string[] }): string | null {
      : null;
  }
  
 +/** Where the sensor posts, and the header that carries its key. */
 +export interface SensorTarget {
++  provider: 'anthropic' | 'foundry';
 +  url: string;
 +  keyHeader: string;
 +  apiKey: string;
 +}
 +
 +/**
-+ * The sensor's destination. It is explicit and does not fail over:
-+ * SENSOR_PROVIDER is `anthropic` (default) or `foundry`. With `foundry`,
-+ * SENSOR_MODEL is a deployment name; name the deployment by its model ID,
-+ * because sensorRequestShape keys off the name. Returns an error reason
-+ * when the settings for the chosen provider are missing.
++ * The sensor's destination. It does not fail over.
++ *
++ * Provider: SENSOR_PROVIDER (`anthropic` or `foundry`) when set; otherwise the
++ * first provider in MODEL_PROVIDERS; otherwise `anthropic`. So the sensor
++ * sends reply text where the agent's primary provider sends it.
++ *
++ * Anthropic: ANTHROPIC_BASE_URL when set (its host, and its path prefix
++ * joined before /v1/messages as the credential proxy does), else
++ * api.anthropic.com. The key is ANTHROPIC_API_KEY; a subscription token
++ * cannot call the Messages API. Foundry: SENSOR_MODEL is a deployment name;
++ * name the deployment by its model ID, because sensorRequestShape keys off
++ * the name.
++ *
++ * Returns an error reason when the settings for the chosen provider are
++ * missing; it never picks another destination instead.
 + */
 +export function resolveSensorTarget(): SensorTarget | { error: string } {
 +  const provider = (
 +    process.env.SENSOR_PROVIDER ||
 +    readEnvFile(['SENSOR_PROVIDER']).SENSOR_PROVIDER ||
++    readPrimaryProviderName() ||
 +    'anthropic'
 +  ).toLowerCase();
 +  if (provider === 'foundry') {
 +    try {
 +      const foundry = readFoundrySettings();
-+      return {
-+        url: `${foundry.baseUrl.origin}${basePath(foundry.baseUrl)}/v1/messages`,
++      return logTarget({
++        provider,
++        url: messagesUrl(foundry.baseUrl),
 +        keyHeader: foundry.keyHeader,
 +        apiKey: foundry.apiKey,
-+      };
++      });
 +    } catch {
 +      return { error: 'no-foundry-settings' };
 +    }
@@ -1880,11 +2028,37 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..254e07344457ce039383e3256ed5dbb6
 +    process.env.ANTHROPIC_API_KEY ||
 +    readEnvFile(['ANTHROPIC_API_KEY']).ANTHROPIC_API_KEY;
 +  if (!apiKey) return { error: 'no-api-key' };
-+  return {
-+    url: 'https://api.anthropic.com/v1/messages',
-+    keyHeader: 'x-api-key',
-+    apiKey,
-+  };
++  // .env only, as the credential proxy reads it: the sensor must go where
++  // the agent goes.
++  const rawBase = readEnvFile(['ANTHROPIC_BASE_URL']).ANTHROPIC_BASE_URL;
++  let url = 'https://api.anthropic.com/v1/messages';
++  if (rawBase) {
++    try {
++      const base = new URL(rawBase);
++      if (base.protocol !== 'https:' && base.protocol !== 'http:')
++        return { error: 'invalid-base-url' };
++      url = messagesUrl(base);
++    } catch {
++      return { error: 'invalid-base-url' };
++    }
++  }
++  return logTarget({ provider, url, keyHeader: 'x-api-key', apiKey });
++}
++
++let loggedDestination = '';
++
++/** Log where the sensor sends data, once per provider and host. Never the key or the path. */
++function logTarget(target: SensorTarget): SensorTarget {
++  const host = new URL(target.url).host;
++  const id = `${target.provider} ${host}`;
++  if (id !== loggedDestination) {
++    loggedDestination = id;
++    logger.info(
++      { provider: target.provider, host },
++      'Behaviour sensor sends reply text to this provider',
++    );
++  }
++  return target;
 +}
 +
  async function callSensorModel(
@@ -1905,7 +2079,18 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..254e07344457ce039383e3256ed5dbb6
          'anthropic-version': '2023-06-01',
        },
        body: JSON.stringify({
-@@ -1333,17 +1380,17 @@ export async function evaluateBehaviourReply(
+@@ -1101,7 +1191,9 @@ async function callSensorModel(
+     });
+     if (!resp.ok) {
+       const errText = await resp.text();
+-      throw new Error(`API ${resp.status}: ${errText.slice(0, 200)}`);
++      throw new Error(
++        `API ${resp.status} (${target.provider}): ${errText.slice(0, 200)}`,
++      );
+     }
+     const data = (await resp.json()) as AnthropicResponse;
+     const text = data.content
+@@ -1333,17 +1425,17 @@ export async function evaluateBehaviourReply(
      );
    }
  
@@ -1930,7 +2115,7 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..254e07344457ce039383e3256ed5dbb6
      );
    }
  
-@@ -1388,7 +1435,7 @@ export async function evaluateBehaviourReply(
+@@ -1388,11 +1480,15 @@ export async function evaluateBehaviourReply(
        cappedRequestContext(options.requestContext),
      );
      try {
@@ -1939,6 +2124,15 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..254e07344457ce039383e3256ed5dbb6
      } catch (err) {
        if (!(err instanceof SensorStopError)) throw err;
        logger.warn(
+-        { stopReason: err.stopReason, model: SENSOR_MODEL },
++        {
++          stopReason: err.stopReason,
++          model: SENSOR_MODEL,
++          provider: target.provider,
++        },
+         'Behaviour sensor: model returned no verdict',
+       );
+       baseVerdict = {
 diff --git a/src/channels/github-push-bot-authors.test.ts b/src/channels/github-push-bot-authors.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..eaf5b02069a0ef7b9e6e2f82a051b4ac4bdfa22d
@@ -5881,10 +6075,10 @@ index 0000000000000000000000000000000000000000..a88efb50127164c849bdee1d1b6a9539
 +});
 diff --git a/src/model-provider.ts b/src/model-provider.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..16154404c1a9045c783c149e5ac6c24a9224df4a
+index 0000000000000000000000000000000000000000..9a5633d48939b9082b34d2fb707e6fe6719bdd6d
 --- /dev/null
 +++ b/src/model-provider.ts
-@@ -0,0 +1,314 @@
+@@ -0,0 +1,339 @@
 +/**
 + * Model providers for the agent, in a configured order, with a circuit
 + * breaker per provider.
@@ -5991,6 +6185,31 @@ index 0000000000000000000000000000000000000000..16154404c1a9045c783c149e5ac6c24a
 +/** Base URL path without a trailing slash: '' or e.g. '/anthropic'. */
 +export function basePath(url: URL): string {
 +  return url.pathname.replace(/\/+$/, '');
++}
++
++/**
++ * The Messages API URL under a base URL: its origin, its path prefix (if
++ * any), then /v1/messages. The credential proxy joins request paths with the
++ * same prefix rule, so the sensor and the agent reach the same place.
++ */
++export function messagesUrl(base: URL): string {
++  return `${base.origin}${basePath(base)}/v1/messages`;
++}
++
++/**
++ * The first provider named in MODEL_PROVIDERS, or null when it is unset. This
++ * reads the list only: it does not check credentials or throw on an
++ * incomplete provider, which `loadModelProviderConfig()` does. An unknown
++ * name comes back as written, so the caller can refuse it.
++ */
++export function readPrimaryProviderName(): string | null {
++  const raw = readEnvFile(['MODEL_PROVIDERS']).MODEL_PROVIDERS;
++  if (raw === undefined) return null;
++  const first = raw
++    .split(',')
++    .map((n) => n.trim().toLowerCase())
++    .find((n) => n);
++  return first ?? null;
 +}
 +
 +function positiveInt(raw: string | undefined, name: string, fallback: number) {

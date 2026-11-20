@@ -19,6 +19,7 @@ import {
 } from './web-chat-session.js';
 import { logger } from '../logger.js';
 import { readEnvFile } from '../env.js';
+import { bearerMatches } from '../secret-compare.js';
 import { Channel, PreparedDelivery } from '../types.js';
 
 registerChannel('web-chat', (opts) => {
@@ -132,7 +133,7 @@ registerChannel('web-chat', (opts) => {
 
     // Check auth
     const authHeader = (req.headers['authorization'] || '') as string;
-    if (authHeader !== `Bearer ${secret}`) {
+    if (!bearerMatches(authHeader, secret)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;

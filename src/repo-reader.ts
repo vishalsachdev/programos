@@ -1,8 +1,15 @@
 import { execFile, execFileSync } from 'child_process';
+import fs from 'fs';
 import { promisify } from 'util';
 import path from 'path';
 
 import { logger } from './logger.js';
+import {
+  hasOriginCredential,
+  originCredentialEnv,
+  redactOriginCredential,
+  splitOriginCredential,
+} from './origin-credential.js';
 import {
   checkoutOriginUrl,
   isExpectedOrigin,
@@ -27,6 +34,25 @@ const execFileAsync = promisify(execFile);
  * fail stale after that (fetch failure keeps the last-good SHA — stale beats
  * half-pulled). Both paths log loudly.
  */
+/**
+ * The environment of a git process that talks to the origin for the mirror:
+ * the host's own, plus the credential of PROGRAM_ORIGIN_URL when it has one.
+ * The mirror's config and the command line name the origin without it.
+ */
+function mirrorGitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...originCredentialEnv(process.env.PROGRAM_ORIGIN_URL, process.env),
+  };
+}
+
+/** An error's message for a log line, without the origin's credential. */
+function mirrorErrorText(err: any): string {
+  return redactOriginCredential(String(err?.message ?? err), [
+    process.env.PROGRAM_ORIGIN_URL,
+  ]);
+}
+
 /** Benign "the file/revision just isn't there" stderr patterns from git. */
 const BENIGN_MISSING_RE =
   /does not exist in|Not a valid object name|bad revision|path .* does not exist/i;
@@ -107,6 +133,7 @@ export class RepoReader {
     if (!this.sha && this.bootstrapMirror()) {
       this.sha = this.resolveSha();
     }
+    if (this.sha) this.secureStoredOrigin();
     if (this.sha) {
       this.reconcileAllowlistSha(this.sha);
     }
@@ -145,25 +172,96 @@ export class RepoReader {
       );
       return false;
     }
+    // The mirror's config and this command line get the URL without its
+    // credential; git reads the credential from its environment
+    // (origin-credential.ts). Logged: the URL without it.
+    const origin = splitOriginCredential(originUrl).bare;
     try {
       execFileSync(
         'git',
-        ['clone', '--mirror', '--', originUrl, this.mirrorPath],
+        ['clone', '--mirror', '--', origin, this.mirrorPath],
         {
           timeout: 120_000,
+          env: mirrorGitEnv(),
         },
       );
       logger.info(
-        { originUrl, mirror: this.mirrorPath },
+        { originUrl: origin, mirror: this.mirrorPath },
         'RepoReader: bootstrapped read mirror from PROGRAM_ORIGIN_URL',
       );
       return true;
     } catch (err: any) {
       logger.warn(
-        { err: err?.message, originUrl, mirror: this.mirrorPath },
+        {
+          err: mirrorErrorText(err),
+          originUrl: origin,
+          mirror: this.mirrorPath,
+        },
         'RepoReader: mirror bootstrap clone failed',
       );
       return false;
+    }
+  }
+
+  /**
+   * A mirror made by an earlier version, or cloned by hand, can hold the
+   * origin's token in its config. When PROGRAM_ORIGIN_URL is that same URL,
+   * the stored one is rewritten without the credential (git then reads it
+   * from the setting). Otherwise the config is the credential's only home:
+   * it is left as it is, made readable by its owner only, and a warning
+   * says how to move it. Never throws.
+   */
+  private secureStoredOrigin(): void {
+    try {
+      const stored = execFileSync(
+        'git',
+        ['-C', this.mirrorPath, 'config', '--get', 'remote.origin.url'],
+        {
+          encoding: 'utf-8',
+          timeout: 10_000,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ).trim();
+      if (!hasOriginCredential(stored)) return;
+      const configFile = path.join(this.mirrorPath, 'config');
+      const st = fs.lstatSync(configFile);
+      if (!st.isSymbolicLink() && (st.mode & 0o077) !== 0) {
+        fs.chmodSync(configFile, 0o600);
+        logger.warn(
+          { path: configFile, was: (st.mode & 0o777).toString(8) },
+          'RepoReader: the read mirror config holds a credential and was readable by other users; now private to its owner',
+        );
+      }
+      if (stored === (process.env.PROGRAM_ORIGIN_URL || '')) {
+        execFileSync(
+          'git',
+          [
+            '-C',
+            this.mirrorPath,
+            'config',
+            'remote.origin.url',
+            splitOriginCredential(stored).bare,
+          ],
+          { timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+        logger.warn(
+          { mirror: this.mirrorPath },
+          'RepoReader: the read mirror stored the origin URL with a credential; it was rewritten without it. ' +
+            'The credential is now read from PROGRAM_ORIGIN_URL at each fetch.',
+        );
+      } else {
+        logger.warn(
+          { mirror: this.mirrorPath },
+          'RepoReader: the read mirror config holds a credential in its origin URL. ' +
+            'To take it out of the file, set PROGRAM_ORIGIN_URL to the same URL and restart, ' +
+            'or use an SSH deploy key.',
+        );
+      }
+    } catch (err: any) {
+      logger.debug(
+        { err: mirrorErrorText(err), mirror: this.mirrorPath },
+        'RepoReader: stored origin of the read mirror not checked',
+      );
     }
   }
 
@@ -215,11 +313,15 @@ export class RepoReader {
           'origin',
           '+refs/heads/main:refs/heads/main',
         ],
-        { timeout: 30_000 },
+        { timeout: 30_000, env: mirrorGitEnv() },
       );
     } catch (err: any) {
       logger.warn(
-        { err: err?.message, mirror: this.mirrorPath, lastGood: this.sha },
+        {
+          err: mirrorErrorText(err),
+          mirror: this.mirrorPath,
+          lastGood: this.sha,
+        },
         'RepoReader: fetch failed; serving last-good SHA',
       );
       return { advanced: false, sha: this.sha };
@@ -253,11 +355,15 @@ export class RepoReader {
           'origin',
           '+refs/heads/main:refs/heads/main',
         ],
-        { timeout: 30_000 },
+        { timeout: 30_000, env: mirrorGitEnv() },
       );
     } catch (err: any) {
       logger.warn(
-        { err: err?.message, mirror: this.mirrorPath, lastGood: this.sha },
+        {
+          err: mirrorErrorText(err),
+          mirror: this.mirrorPath,
+          lastGood: this.sha,
+        },
         'RepoReader: async fetch failed; serving last-good SHA',
       );
       return { advanced: false, sha: this.sha };

@@ -9,6 +9,7 @@ import path from 'path';
 
 import { STORE_DIR } from '../src/config.ts';
 import { initDatabase, setRegisteredGroup } from '../src/db.ts';
+import { writeEnvFile } from '../src/env.ts';
 import { isValidGroupFolder, seedGroupFolder } from '../src/group-folder.ts';
 import { readFileInTree, writeFileInTree } from '../src/host-fs-safety.ts';
 import { logger } from '../src/logger.ts';
@@ -183,9 +184,9 @@ export async function run(args: string[]): Promise<void> {
       } else {
         envContent += `\nASSISTANT_NAME="${parsed.assistantName}"`;
       }
-      fs.writeFileSync(envFile, envContent);
+      writeEnvFile(envFile, envContent);
     } else {
-      fs.writeFileSync(envFile, `ASSISTANT_NAME="${parsed.assistantName}"\n`);
+      writeEnvFile(envFile, `ASSISTANT_NAME="${parsed.assistantName}"\n`);
     }
     logger.info('Set ASSISTANT_NAME in .env');
     nameUpdated = true;

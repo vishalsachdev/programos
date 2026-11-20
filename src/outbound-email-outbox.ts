@@ -80,11 +80,26 @@ export interface OutboxRow {
   terminalAt?: string;
   claimPid?: number;
   claimExpiresAt?: string;
-  /** Send attempts finalized so far (drives the retry budget). */
+  /**
+   * Send attempts started so far (drives the retry budget). Counted by
+   * `beginAttempt` before the delivery is handed to the provider, so a crash
+   * or a failed later write can only leave it too high, never too low.
+   */
   attempts?: number;
   /** Earliest time a retryable row may be claimed again (backoff). */
   nextAttemptAt?: string;
 }
+
+/**
+ * What `beginAttempt` found. `started`: the attempt is counted and the row is
+ * claimed; `row.attempts` includes this attempt. `spent`: the budget was
+ * already used up; the row is claimed so the caller can dead-letter it, and
+ * the count is unchanged. `not-sendable`: the row is missing or terminal.
+ */
+export type BeginAttemptResult =
+  | { outcome: 'started'; row: OutboxRow }
+  | { outcome: 'spent'; row: OutboxRow }
+  | { outcome: 'not-sendable'; row?: OutboxRow };
 
 export interface OutboxStore {
   get(deliveryId: string): OutboxRow | undefined;
@@ -115,8 +130,27 @@ export interface OutboxStore {
   ): OutboxRow | undefined;
 
   /**
-   * Compare-and-set a claimed row to a terminal or retriable result, counting
-   * the attempt. `nextAttemptAt` (epoch ms) holds a retryable row out of the
+   * Count one send attempt against a row's budget and claim the row, in one
+   * atomic write, BEFORE the caller hands the delivery to the provider. This
+   * is the only place the attempt count goes up, and it never goes above
+   * `maxAttempts`. The caller sends only after `started` came back; if this
+   * call throws, the caller must not send in that pass.
+   *
+   * A pending, retryable or already claimed row is accepted (the lane claims
+   * a row before it processes it).
+   */
+  beginAttempt(
+    deliveryId: string,
+    now: number,
+    processId: number,
+    leaseMs: number,
+    maxAttempts: number,
+  ): BeginAttemptResult;
+
+  /**
+   * Compare-and-set a claimed row to a terminal or retriable result. It does
+   * not change the attempt count (`beginAttempt` counted the attempt before
+   * the send). `nextAttemptAt` (epoch ms) holds a retryable row out of the
    * claim queue until its backoff elapses.
    * Returns the updated row, or undefined if the row was no longer claimed.
    */
@@ -361,6 +395,32 @@ export class MemoryOutboxStore implements OutboxStore {
     return next;
   }
 
+  beginAttempt(
+    deliveryId: string,
+    now: number,
+    processId: number,
+    leaseMs: number,
+    maxAttempts: number,
+  ): BeginAttemptResult {
+    const row = this.rows.get(deliveryId);
+    const sendable =
+      row &&
+      (row.status === 'pending' ||
+        row.status === 'claimed' ||
+        (row.status === 'failed' &&
+          row.result?.status === 'failed' &&
+          row.result.retryable));
+    if (!row || !sendable) return { outcome: 'not-sendable', row };
+    const attempts = row.attempts ?? 0;
+    const started = attempts < maxAttempts;
+    if (started) row.attempts = attempts + 1;
+    row.status = 'claimed';
+    row.claimPid = processId;
+    row.claimExpiresAt = toIsoString(now + leaseMs);
+    row.updatedAt = toIsoString(now);
+    return { outcome: started ? 'started' : 'spent', row };
+  }
+
   finalize(
     deliveryId: string,
     result: OutboundEmailOutboxOutcome,
@@ -370,7 +430,6 @@ export class MemoryOutboxStore implements OutboxStore {
     const row = this.rows.get(deliveryId);
     if (!row || row.status !== 'claimed') return undefined;
     row.result = result;
-    row.attempts = (row.attempts ?? 0) + 1;
     row.nextAttemptAt = nextAttemptAt ? toIsoString(nextAttemptAt) : undefined;
     if (result.status === 'failed' && result.retryable) {
       row.status = 'failed';
@@ -641,6 +700,62 @@ export class SqliteOutboxStore implements OutboxStore {
     return row ? rowFromDb(row) : undefined;
   }
 
+  beginAttempt(
+    deliveryId: string,
+    now: number,
+    processId: number,
+    leaseMs: number,
+    maxAttempts: number,
+  ): BeginAttemptResult {
+    // Two single statements, each atomic. The first counts the attempt and
+    // claims the row only while budget remains; the count and the claim are
+    // one write, so there is no state in which the row is claimed for a send
+    // that was not counted.
+    const params = {
+      delivery_id: deliveryId,
+      process_id: processId,
+      lease_expires: toIsoString(now + leaseMs),
+      updated_at: toIsoString(now),
+      max_attempts: maxAttempts,
+    };
+    const sendable = `(status = 'pending' OR status = 'claimed'
+            OR (status = 'failed' AND retryable = 1))`;
+    const started = this.db
+      .prepare(
+        `
+        UPDATE outbound_email_outbox
+        SET status = 'claimed',
+            claim_pid = @process_id,
+            claim_expires_at = @lease_expires,
+            updated_at = @updated_at,
+            attempts = attempts + 1
+        WHERE delivery_id = @delivery_id
+          AND ${sendable}
+          AND attempts < @max_attempts
+        RETURNING *
+      `,
+      )
+      .get(params) as Record<string, unknown> | undefined;
+    if (started) return { outcome: 'started', row: rowFromDb(started) };
+    const spent = this.db
+      .prepare(
+        `
+        UPDATE outbound_email_outbox
+        SET status = 'claimed',
+            claim_pid = @process_id,
+            claim_expires_at = @lease_expires,
+            updated_at = @updated_at
+        WHERE delivery_id = @delivery_id
+          AND ${sendable}
+          AND attempts >= @max_attempts
+        RETURNING *
+      `,
+      )
+      .get(params) as Record<string, unknown> | undefined;
+    if (spent) return { outcome: 'spent', row: rowFromDb(spent) };
+    return { outcome: 'not-sendable', row: this.get(deliveryId) };
+  }
+
   nextRetryAt(lane: OutboxLane, now: number): number | undefined {
     const row = this.db
       .prepare(
@@ -687,7 +802,6 @@ export class SqliteOutboxStore implements OutboxStore {
             terminal_at = @terminal_at,
             claim_pid = NULL,
             claim_expires_at = NULL,
-            attempts = attempts + 1,
             next_attempt_at = @next_attempt_at,
             updated_at = @updated_at
         WHERE delivery_id = @delivery_id AND status = 'claimed'

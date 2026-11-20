@@ -29,7 +29,11 @@ import path from 'path';
 import { TIMEZONE } from './config.js';
 import { stripInternalTags } from './delivery-gate.js';
 import { readEnvFile } from './env.js';
-import { basePath, readFoundrySettings } from './model-provider.js';
+import {
+  messagesUrl,
+  readFoundrySettings,
+  readPrimaryProviderName,
+} from './model-provider.js';
 import { logger } from './logger.js';
 import { getRepoReader } from './repo-reader.js';
 import { getProgramRepoPath } from './program-repo.js';
@@ -1083,32 +1087,45 @@ export function courseCodeTag(res: { unknown: string[] }): string | null {
 
 /** Where the sensor posts, and the header that carries its key. */
 export interface SensorTarget {
+  provider: 'anthropic' | 'foundry';
   url: string;
   keyHeader: string;
   apiKey: string;
 }
 
 /**
- * The sensor's destination. It is explicit and does not fail over:
- * SENSOR_PROVIDER is `anthropic` (default) or `foundry`. With `foundry`,
- * SENSOR_MODEL is a deployment name; name the deployment by its model ID,
- * because sensorRequestShape keys off the name. Returns an error reason
- * when the settings for the chosen provider are missing.
+ * The sensor's destination. It does not fail over.
+ *
+ * Provider: SENSOR_PROVIDER (`anthropic` or `foundry`) when set; otherwise the
+ * first provider in MODEL_PROVIDERS; otherwise `anthropic`. So the sensor
+ * sends reply text where the agent's primary provider sends it.
+ *
+ * Anthropic: ANTHROPIC_BASE_URL when set (its host, and its path prefix
+ * joined before /v1/messages as the credential proxy does), else
+ * api.anthropic.com. The key is ANTHROPIC_API_KEY; a subscription token
+ * cannot call the Messages API. Foundry: SENSOR_MODEL is a deployment name;
+ * name the deployment by its model ID, because sensorRequestShape keys off
+ * the name.
+ *
+ * Returns an error reason when the settings for the chosen provider are
+ * missing; it never picks another destination instead.
  */
 export function resolveSensorTarget(): SensorTarget | { error: string } {
   const provider = (
     process.env.SENSOR_PROVIDER ||
     readEnvFile(['SENSOR_PROVIDER']).SENSOR_PROVIDER ||
+    readPrimaryProviderName() ||
     'anthropic'
   ).toLowerCase();
   if (provider === 'foundry') {
     try {
       const foundry = readFoundrySettings();
-      return {
-        url: `${foundry.baseUrl.origin}${basePath(foundry.baseUrl)}/v1/messages`,
+      return logTarget({
+        provider,
+        url: messagesUrl(foundry.baseUrl),
         keyHeader: foundry.keyHeader,
         apiKey: foundry.apiKey,
-      };
+      });
     } catch {
       return { error: 'no-foundry-settings' };
     }
@@ -1118,11 +1135,37 @@ export function resolveSensorTarget(): SensorTarget | { error: string } {
     process.env.ANTHROPIC_API_KEY ||
     readEnvFile(['ANTHROPIC_API_KEY']).ANTHROPIC_API_KEY;
   if (!apiKey) return { error: 'no-api-key' };
-  return {
-    url: 'https://api.anthropic.com/v1/messages',
-    keyHeader: 'x-api-key',
-    apiKey,
-  };
+  // .env only, as the credential proxy reads it: the sensor must go where
+  // the agent goes.
+  const rawBase = readEnvFile(['ANTHROPIC_BASE_URL']).ANTHROPIC_BASE_URL;
+  let url = 'https://api.anthropic.com/v1/messages';
+  if (rawBase) {
+    try {
+      const base = new URL(rawBase);
+      if (base.protocol !== 'https:' && base.protocol !== 'http:')
+        return { error: 'invalid-base-url' };
+      url = messagesUrl(base);
+    } catch {
+      return { error: 'invalid-base-url' };
+    }
+  }
+  return logTarget({ provider, url, keyHeader: 'x-api-key', apiKey });
+}
+
+let loggedDestination = '';
+
+/** Log where the sensor sends data, once per provider and host. Never the key or the path. */
+function logTarget(target: SensorTarget): SensorTarget {
+  const host = new URL(target.url).host;
+  const id = `${target.provider} ${host}`;
+  if (id !== loggedDestination) {
+    loggedDestination = id;
+    logger.info(
+      { provider: target.provider, host },
+      'Behaviour sensor sends reply text to this provider',
+    );
+  }
+  return target;
 }
 
 async function callSensorModel(
@@ -1148,7 +1191,9 @@ async function callSensorModel(
     });
     if (!resp.ok) {
       const errText = await resp.text();
-      throw new Error(`API ${resp.status}: ${errText.slice(0, 200)}`);
+      throw new Error(
+        `API ${resp.status} (${target.provider}): ${errText.slice(0, 200)}`,
+      );
     }
     const data = (await resp.json()) as AnthropicResponse;
     const text = data.content
@@ -1439,7 +1484,11 @@ export async function evaluateBehaviourReply(
     } catch (err) {
       if (!(err instanceof SensorStopError)) throw err;
       logger.warn(
-        { stopReason: err.stopReason, model: SENSOR_MODEL },
+        {
+          stopReason: err.stopReason,
+          model: SENSOR_MODEL,
+          provider: target.provider,
+        },
         'Behaviour sensor: model returned no verdict',
       );
       baseVerdict = {

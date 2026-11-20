@@ -190,7 +190,7 @@ The code is the source of truth. This list names the known places where a rule a
 | Recipient from allowlist or inbound mail | Normal email | The courtesy reply to a blocked colleague; the operator address added to mail for a peer agent; operator alert mail, which goes to the configured operator address only, whether or not it is on the allowlist |
 | Address check in body text | Email | Chat; saved email deliveries from an older format |
 | Protected files | The agent's file-editing tools; git authorship check | Shell commands in the container |
-| Model traffic through the proxy | The agent, by setting | The reply sensor (calls the Anthropic API or Foundry directly, per `SENSOR_PROVIDER`); remote control (a process on the host) |
+| Model traffic through the proxy | The agent, by setting | The reply sensor (calls its provider directly from the host: `SENSOR_PROVIDER`, else the first entry of `MODEL_PROVIDERS`, with `ANTHROPIC_BASE_URL` on Anthropic; it does not fail over); remote control (a process on the host) |
 | Model provider failover | New agent runs, after three failures in a row on the current provider; the change is logged and alerted | The turn that hit the failure (it fails and is retried); the reply sensor; state across a restart (in memory); a per-turn provider field in the audit log (none); a session resumed on the other provider (untested); any live Foundry endpoint (tested with fake servers only) |
 | Gate results logged | What the agent reports | Proof that the gate ran |
 

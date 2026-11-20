@@ -30,9 +30,9 @@ A "real program repo" means `PROGRAM_ORIGIN_PATTERN` is set, or the origin of th
 
 | Key | Read from | When nothing is set | Meaning | Choice |
 |---|---|---|---|---|
-| `ANTHROPIC_API_KEY` | .env | No key | The Anthropic API key for the agent. Use this or the next key, not both. The reply sensor also uses it on the Anthropic route | 1, 2 |
+| `ANTHROPIC_API_KEY` | .env | No key | The Anthropic API key for the agent. Use this or the next key, not both. The reply sensor also uses it when its provider is Anthropic | 1, 2 |
 | `CLAUDE_CODE_OAUTH_TOKEN` | .env | No token | A Claude subscription token for the agent | 1 |
-| `ANTHROPIC_BASE_URL` | .env | The Anthropic API | Another endpoint that serves the Anthropic API, for the agent only. A path prefix is kept | 1 |
+| `ANTHROPIC_BASE_URL` | .env | The Anthropic API | Another endpoint that serves the Anthropic API. The agent uses it, and so does the reply sensor when its provider is Anthropic. A path prefix is kept | 1 |
 | `MODEL_PROVIDERS` | .env | `anthropic` | Ordered list of providers for the agent: `anthropic`, `foundry`. A second entry is the backup. A provider listed without its settings stops the host at startup | 1 |
 | `ANTHROPIC_FOUNDRY_RESOURCE` | .env | None | The Foundry resource name (this or the next key) | 1 |
 | `ANTHROPIC_FOUNDRY_BASE_URL` | .env | None | The full Foundry base URL | 1 |
@@ -46,7 +46,7 @@ A "real program repo" means `PROGRAM_ORIGIN_PATTERN` is set, or the origin of th
 | `NANOCLAW_GATE_MODEL` | process | `opus` | The model of the reviewer that checks knowledge-base writes | 1 |
 | `NANOCLAW_AGENT_EFFORT` | process | `high` | Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max` | 1 |
 | `BEHAVIOUR_SENSOR_DISABLED` | process | The sensor runs | `1` turns the reply sensor off | 2 |
-| `SENSOR_PROVIDER` | .env or process | `anthropic` | The reply sensor's destination: `anthropic` or `foundry`. It does not fail over | 2 |
+| `SENSOR_PROVIDER` | .env or process | First entry of `MODEL_PROVIDERS`, else `anthropic` | The reply sensor's provider: `anthropic` or `foundry`. Unset, it follows the first entry of `MODEL_PROVIDERS`. Setting it overrides that. It does not fail over | 2 |
 | `SENSOR_MODEL` | process | `claude-haiku-5-5` | The reply sensor's model. With Foundry, a deployment name | 2 |
 
 The Foundry path and the failover were tested against fake servers only. [`model-providers.md`](./model-providers.md) has the live checks.

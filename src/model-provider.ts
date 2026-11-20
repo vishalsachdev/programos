@@ -106,6 +106,31 @@ export function basePath(url: URL): string {
   return url.pathname.replace(/\/+$/, '');
 }
 
+/**
+ * The Messages API URL under a base URL: its origin, its path prefix (if
+ * any), then /v1/messages. The credential proxy joins request paths with the
+ * same prefix rule, so the sensor and the agent reach the same place.
+ */
+export function messagesUrl(base: URL): string {
+  return `${base.origin}${basePath(base)}/v1/messages`;
+}
+
+/**
+ * The first provider named in MODEL_PROVIDERS, or null when it is unset. This
+ * reads the list only: it does not check credentials or throw on an
+ * incomplete provider, which `loadModelProviderConfig()` does. An unknown
+ * name comes back as written, so the caller can refuse it.
+ */
+export function readPrimaryProviderName(): string | null {
+  const raw = readEnvFile(['MODEL_PROVIDERS']).MODEL_PROVIDERS;
+  if (raw === undefined) return null;
+  const first = raw
+    .split(',')
+    .map((n) => n.trim().toLowerCase())
+    .find((n) => n);
+  return first ?? null;
+}
+
 function positiveInt(raw: string | undefined, name: string, fallback: number) {
   if (raw === undefined) return fallback;
   if (!/^\d+$/.test(raw) || Number(raw) < 1)

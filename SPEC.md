@@ -122,7 +122,7 @@ Not in the log in the current code: Telegram messages from a handle that is not 
 
 The audit log is what survives when a container is destroyed, and it is what a reviewer reads.
 
-The log and the mail copies are files in the program repo: anyone who can read that repo can read them, the code never deletes them, and git history keeps what a later commit removes. [`docs/data-handling.md`](./docs/data-handling.md) covers access, retention, and every outside service that message text reaches.
+The log and the mail copies are files in the program repo: anyone who can read that repo can read them, the code never deletes them, and git history keeps what a later commit removes. The retention settings (`RETENTION_*_DAYS`, `src/retention.ts`; default off) apply to stores on the host only and never to the log or the program repo: a log that sheds entries cannot show that nothing was removed. [`docs/data-handling.md`](./docs/data-handling.md) covers access, retention, and every outside service that message text reaches.
 
 ## 6.5. Governance
 

@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,264 passing tests (1,761 from the source, 503 added here). One timing test
+   is 2,424 passing tests (1,761 from the source, 663 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -108,7 +108,8 @@ move up without starting again. "First start" means part 14.
   approval by mail; no public address; it stops when the laptop sleeps. It is a look at the
   behaviour, not a service. On a laptop with Docker Desktop the agent container's
   network is open by default (choice 17): what the agent reads can leave the
-  machine unseen. Use test data only.
+  machine unseen. Use test data only. Keep `.env` private on the laptop too
+  (`chmod 600 .env`; choice 18).
 - **Steps that apply:** part 13 steps 1 to 6 with only the model, identity and
   Telegram settings; First start steps 1, 2, 3, 4 (the main group and the Telegram
   group; no email group), 5, 6 and 7. Skip "Inbound mail" and both optional webhooks.
@@ -143,17 +144,20 @@ move up without starting again. "First start" means part 14.
     questions).
 - **What it does NOT give you:** no channel for students or the public; no
   single sign-on; no retention or deletion of old mail (the code never deletes
-  from the program repo); one outbound mail service at a time, with no fallback
-  to another; no web search, web fetch or
+  from the program repo; the bot's own machine keeps its stores forever unless
+  you set a period, choice 14); one outbound mail service at a time, with no
+  fallback to another; no web search, web fetch or
   browsing for the agent unless you turn them on (choice 17). Sender caps are in
   memory and reset on restart. No proof of who sent a message: the allowlist
   matches the From line, and the sender-authentication check only records its
-  result until you name the mail servers and choose `enforce` (choice 18). No second check of email replies by the reply
+  result until you name the mail servers and choose `enforce` (choice 19). No second check of email replies by the reply
   sensor: it is off in the pilot, and when on it checks chat replies only unless
   `SENSOR_EMAIL_REPLIES=1` (choice 2).
 - **Steps that apply:** all of part 13, all of First start, "Inbound mail", and
   the supported hosting recipe in `docs/deployment.md`. Add the two optional
-  webhooks when the machine has its public HTTPS name.
+  webhooks when the machine has its public HTTPS name. The machine is shared with
+  nobody in this path, but do the three items of choice 18 anyway (a private
+  `.env`, a state-signing key of its own, an SSH key for the repo).
 - **Not verified:** the hosting recipe has not been run end to end (each step in
   `docs/deployment.md` says what was checked). The intake worker in `inbound/`
   has never run against a live Cloudflare account, mailbox or GitHub repo. Operator
@@ -205,11 +209,13 @@ the person. The pilot is not done until every line is ticked or has a written re
   - institutional mail. With the worker in `inbound/`, the mail administrators add
     a forwarding rule or alias from an institutional address to the worker's
     address (`inbound/README.md`, step 1). Forwarded mail needs the forwarder
-    settings of choice 18 before its senders can be confirmed; If mail must stay inside the
+    settings of choice 19 before its senders can be confirmed. If mail must stay inside the
     institution's own mail system, you must write the intake service
     (`docs/setup-reference.md`, "Inbound mail");
   - the knowledge-base repo on the institution's git host if it has one, such as
-    a GitHub Enterprise host (choice 7);
+    a GitHub Enterprise host (choice 7). If that host gives the bot an HTTPS
+    token and not an SSH key, and other people have accounts on the bot's
+    machine, read choice 18 with the person who runs the machine;
   - a written sign-off on data handling from the offices that approve it. Take
     them `docs/data-handling.md`.
 - **What it does NOT give you:** no new feature. This repo holds no institution's
@@ -451,6 +457,9 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   and the intake service (a token for that one repo).
 - *Settings:* `PROGRAM_REPO`, `PROGRAM_ORIGIN_URL`, `PROGRAM_ORIGIN_PATTERN`,
   `PROGRAM_READ_MIRROR`, `PROGRAM_HOST_REPO` (process); `GITHUB_PUSH_WEBHOOK_SECRET` (.env or process).
+- *The host's push credential:* prefer an SSH deploy key for that one repo. If the
+  person can only use an HTTPS address with a token in it, see choice 18 for where
+  that token is then kept.
 - *Detail:* part 11; First start, step 5; `docs/illinois/github-enterprise.md`;
   `docs/data-handling.md`, "Who can read the audit log and the raw mail".
 
@@ -545,15 +554,42 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Plain words:* where the team's messages go, who can read them, and how long
   they are kept.
 - *What the code does:* message text reaches the model provider, the mail
-  provider, the intake service, Telegram if used, and the git host. The code
-  never deletes anything from the program repo, and there is no retention setting.
-- *First pilot:* the conservative default in `docs/data-handling.md`: staff
-  senders only, no student records, the reply sensor off, a private repo, web
-  chat off. Take that page to the people who approve data use, and write each
-  answer in `setup-decisions.md`.
-- *Settings:* none for retention. Leave `LOG_LEVEL` unset.
-- *Detail:* `docs/data-handling.md`; `docs/illinois/data-handling.md` (open
-  questions only).
+  provider, the intake service, Telegram if used, and the git host. On the
+  bot's own machine, logs and working files are cleared after 3 to 7 days, and
+  everything else (the full text of every message and reply, files sent on
+  Telegram, old conversation copies) is kept forever unless you set a number
+  of days for it.
+- *Options:* eight settings, one per kind of stored data, each a whole number
+  of days. `0` or absent means keep forever. Above `0`, the bot deletes what is
+  older, once a day. It never deletes something it still has to act on: a
+  message it has not answered, an approval still open, a task still scheduled.
+  The shortest period is one day; a negative number, a fraction or a word
+  stops the bot at startup with a message naming the setting.
+- *What no setting does:* nothing deletes from the program repo or the audit
+  log. Mail copies, attachments' text and the log stay until a person removes
+  them by hand, and a removed file is still in the repo's history. Mail from a
+  sender who is not on the list is stored too. `docs/data-handling.md`,
+  "Retention and deletion", gives the manual steps and what they cost.
+- *Code default:* all eight at `0`. Nothing is deleted.
+- *First pilot:* leave all eight unset until the people who approve data use
+  give a period (ASK; do not pick a number for them). When they do, run
+  `npx tsx scripts/retention-prune.ts` with the values first: it prints how
+  much each would delete and deletes nothing. Otherwise the conservative
+  default in `docs/data-handling.md`: staff senders only, no student records,
+  the reply sensor off, a private repo, web chat off. Take that page to the
+  people who approve data use, and write each answer in `setup-decisions.md`.
+- *Not tested:* the prune has run only against data made by the tests, never
+  on a deployment with real data. Deleting old messages and old conversation
+  copies shortens what the bot can recall; deleting old Telegram files means
+  it can no longer open them. Closed approvals keep an empty record, so an old
+  request is never mailed to an approver twice.
+- *Settings:* `RETENTION_MESSAGES_DAYS`, `RETENTION_ROUTED_APPROVALS_DAYS`,
+  `RETENTION_TASKS_DAYS`, `RETENTION_TRANSCRIPT_ARCHIVE_DAYS`,
+  `RETENTION_UPLOADS_DAYS`, `RETENTION_WORKING_CONTEXT_ARCHIVE_DAYS`,
+  `RETENTION_EVALS_DAYS`, `RETENTION_IPC_ERRORS_DAYS` (.env or the process
+  environment). Leave `LOG_LEVEL` unset.
+- *Detail:* `docs/data-handling.md`; `docs/setup-reference.md`, "Retention";
+  `docs/illinois/data-handling.md` (open questions only).
 
 **15. What senders are told**
 - *Plain words:* the words colleagues see about where their mail goes.
@@ -620,7 +656,65 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Detail:* "Safety items"; First start, step 9; `SPEC.md` sections 2 and 11;
   `docs/data-handling.md`, "The container's network".
 
-**18. Sender authentication for inbound mail**
+**18. Secrets on the host: the `.env` file, the state-signing key, a token in the repo address**
+- *Plain words:* the bot's passwords and keys (its "secrets") sit in files on the
+  machine it runs on. Three small choices decide who else on that machine could
+  read or misuse them. None of them changes what the bot does for the team.
+- *(a) The `.env` file.* It holds every secret. Only the account the bot runs as
+  should be able to read it. **You do this, not the person:** run `chmod 600 .env`
+  at the moment you create the file, and again after any tool rewrites it. The
+  setup steps that write `.env` create it that way and keep an existing file's
+  mode. At each start the host logs one error, with the file and the command to
+  fix it, when anyone else can read the file.
+  - *Options:* warn only, or refuse to start (`REQUIRE_PRIVATE_ENV_FILE=true`).
+  - *Code default:* warn only, so an upgrade never stops a bot that was running.
+  - *First pilot:* set `REQUIRE_PRIVATE_ENV_FILE=true` on a new machine. On a
+    machine that already runs the bot, fix the file's mode first, then set it.
+- *(b) The state-signing key.* While a reply is being delivered the host saves
+  its progress and signs it, so a changed copy is refused.
+  - *Options:* a key of its own (`DELIVERY_STATE_SIGNING_KEY`, a long random
+    value: `openssl rand -hex 32`), or nothing.
+  - *Code default:* nothing set. The host then signs with a secret that exists
+    for another purpose, the first one set of `WEBHOOK_SECRET`,
+    `TELEGRAM_BOT_TOKEN` and `RESEND_API_KEY`, and logs a warning at each start.
+    A leak of that secret then also lets its holder forge saved state, and
+    changing it makes a reply that is in delivery at that moment fail its check:
+    the host records it as a dead letter, alerts the operator and handles the
+    message again.
+  - *First pilot:* set the key. Setting it later is safe: state signed before
+    still loads, because the host keeps accepting the old fallback secret for
+    checking (never for signing). That acceptance has no end date.
+- *(c) A token inside the repo address.* Only when the host reaches the
+  knowledge-base repo over HTTPS with a token written in `PROGRAM_ORIGIN_URL`
+  (choice 7). An SSH deploy key avoids the question, and is the pilot choice.
+  - *What the code does:* it keeps the address without the token in its git
+    files and on every git command line, and hands git the token through that
+    one process's environment. The token is then written in one place only: the
+    service definition that sets `PROGRAM_ORIGIN_URL`. Make that file readable
+    by its owner only (`chmod 600` on the systemd `override.conf`;
+    `docs/deployment.md`, step 6). The host keeps its own repository folder
+    private to the bot's account (mode 0700).
+  - *After an upgrade:* an older version wrote the token into
+    `<PROGRAM_HOST_REPO>/.git/config`, readable by every account on the machine.
+    The first start after the upgrade rewrites that file without the token,
+    makes the folder private and logs both. The read mirror is repaired the same
+    way when `PROGRAM_ORIGIN_URL` holds the same address; a mirror that someone
+    cloned by hand with a token and no `PROGRAM_ORIGIN_URL` keeps it (the host
+    makes that file private and logs how to move the token). Tell the person the
+    old token was readable by other accounts until then; if anyone else has an
+    account on the machine, ASK whether to replace it.
+- *Settings:* `REQUIRE_PRIVATE_ENV_FILE`, `DELIVERY_STATE_SIGNING_KEY` (process,
+  else .env; both read once at start); `PROGRAM_ORIGIN_URL` (process).
+- *Not tested:* the token path has run against a closed local port and a local
+  stand-in HTTPS server only, never a real git host; it needs git 2.31 or later
+  (an older git ignores the token and the fetch fails). The private-folder modes
+  were not run with a real container. The comparison of `WEBHOOK_SECRET` and
+  `WEBCHAT_SECRET` takes the same time for a right and a wrong value by
+  construction; no timing measurement was made.
+- *Detail:* `docs/service-ownership.md`; `docs/deployment.md`, steps 1, 3 and 6;
+  `src/env.ts`, `src/delivery-state.ts`, `src/origin-credential.ts`.
+
+**19. Sender authentication for inbound mail**
 - *Plain words:* the email allowlist looks at the "From" line of a message, and
   anyone can type any name there, the way anyone can write a false return address
   on an envelope. Mail servers can check whether a message really came from the
@@ -762,7 +856,9 @@ and say so.
 - **Accounts, keys and handover:** `docs/service-ownership.md` lists every credential,
   its owner role, where it is stored and how to rotate it, with a handover checklist
   for when the builder or operator leaves. Run `chmod 600 .env` when you create the
-  file (`docs/deployment.md`, step 3); no step in this guide does it for you. Do not
+  file (Order of work, step 4; `docs/deployment.md`, step 3). The host logs an
+  error at each start while other accounts on the machine can read it, and refuses
+  to start only with `REQUIRE_PRIVATE_ENV_FILE=true` (choice 18). Do not
   paste a secret into the chat or into `setup-decisions.md`.
 - **A listed address is not proof of the sender.** The email allowlist matches the
   From line, which a sender can forge. By default the host only records a
@@ -770,7 +866,7 @@ and say so.
   and still processes forged mail from a listed address. Until a trusted mail
   server is named on both the intake worker and the host, every verdict is
   `unknown`. `EMAIL_AUTH_MODE=enforce` drops mail that is not authenticated
-  (choice 18). Tell the user which of the two they are running.
+  (choice 19). Tell the user which of the two they are running.
 - **Listener address:** set `WEBHOOK_HOST=127.0.0.1` and use a reverse proxy. The code
   default listens on all interfaces.
 - **The host runs no git in the agent's checkout.** The agent can write the whole
@@ -900,7 +996,7 @@ the user these four things before they choose it:
 - Mail it files gets no text extraction of PDF, Word or Excel attachments on the
   host. The attachments stay inside the committed `.eml`.
 - It reads sender-authentication results only from mail servers named in its
-  settings, and none is named by default (choice 18).
+  settings, and none is named by default (choice 19).
 - Its git author is a setting in the worker (`GIT_AUTHOR_EMAIL`, default
   `email-inbox@example.org`). The host must hold the same address in
   `INTAKE_GIT_AUTHOR_EMAIL` (`.env`). With a different address on one side,
@@ -930,7 +1026,10 @@ has a public HTTPS name. The steps and checks are in
 2. Ask the policy questions (part 4) and then each choice in part 5 that the
    chosen path needs, one at a time. Write each answer down for the user.
 3. Create the program repo skeleton and the allowlist.
-4. Copy `config/instance.env.example` to `.env`; fill the REQUIRED lines.
+4. Copy `config/instance.env.example` to `.env` and, in the same step, run
+   `chmod 600 .env`: the file will hold every secret, and a copy is created
+   readable by every account on the machine. Then fill the REQUIRED lines. Run
+   `chmod 600 .env` again if you ever recreate the file (choice 18).
 5. Replace placeholders (part 7). Run the tests after each group.
 6. Adapt prompts in `groups/` and skills in `container/skills/`. `src/channel-claude-sync.test.ts`
    checks exact phrases in the prompts; update that test with the prompts.
@@ -963,7 +1062,8 @@ Do these once, in this order, before the first test message:
    database to exist first, and its host path is a placeholder. Read both, then
    register the email group, the main group and (if used) the Telegram group.
 5. Clone the program repo at the mounted path, and set `PROGRAM_ORIGIN_URL` to its
-   origin (process environment). The agent commits in that checkout. The host does
+   origin (process environment). Use an SSH deploy key if you can; for an HTTPS
+   address with a token in it, read choice 18 (c) first. The agent commits in that checkout. The host does
    not run git there. At its first start the host creates its own repository
    (`PROGRAM_HOST_REPO`; default `program-repo-host` beside the read mirror) and
    from then on it alone fetches and pushes, with the host's credential: before

@@ -96,6 +96,7 @@ import { sendAdminAlert, type AdminAlertResult } from '../admin-alert.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { safeAttachmentName } from '../attachment-safety.js';
 import { getLastTaskRunAt } from '../db.js';
+import { bearerMatches } from '../secret-compare.js';
 
 const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3003', 10);
 const WEBHOOK_HOST = process.env.WEBHOOK_HOST || '0.0.0.0';
@@ -833,7 +834,7 @@ registerChannel('webhook', (opts) => {
 
         // Check secret
         const authHeader = req.headers['authorization'];
-        if (authHeader !== `Bearer ${secret}`) {
+        if (!bearerMatches(authHeader, secret)) {
           res.writeHead(401);
           res.end('Unauthorized');
           return;

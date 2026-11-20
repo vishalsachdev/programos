@@ -37,7 +37,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 OWNED = [
     'README.md', 'AGENTS.md', 'CLAUDE.md', 'SPEC.md', 'ARCHITECTURE.md',
     'UPSTREAM.md', 'NOTICE', 'LICENSE', '.gitignore', '.git',
-    'docs/09-illinois-quickstart.md', 'docs/12-governance.md',
+    'docs/12-governance.md', 'docs/general', 'docs/cloud-vm.md', 'docs/costs.md',
     'docs/deployment.md', 'docs/data-handling.md', 'docs/model-providers.md',
     'docs/dependency-audit.md', '.gitleaksignore',
     'docs/service-ownership.md',

@@ -49,7 +49,7 @@ CI runs the same six, the tests of `inbound/` and a secret scan. The baseline is
 ## Keep it neutral and private
 
 - No real names, mail addresses, mail content, tokens or keys in code, tests, fixtures, issues or pull requests. Use the placeholders that `AGENTS.md` lists (`Avery Morgan`, `example.edu`, `example.org`).
-- Keep text free of any one funder or institution. One institution's recipe goes in its own file, as `docs/09-illinois-quickstart.md` does.
+- Keep text free of any one funder or institution. One institution's recipe goes in its own folder, as `docs/illinois/` does.
 
 ## Pull requests
 

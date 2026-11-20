@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# setup.sh — Bootstrap script for ProgramOS (built on the NanoClaw framework)
+# setup.sh — Bootstrap script for ProgramOS
 # Checks Node.js and installs npm dependencies. It does nothing else: the order
 # of work for a new install is in AGENTS.md ("Order of work" and "First start").
 # This is the only bash script in the setup flow.

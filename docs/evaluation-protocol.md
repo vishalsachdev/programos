@@ -39,7 +39,7 @@ to give each one a place it is expected to show up.
 |---|-------|--------------------|-------|---------|-------|
 | L1 | **Golden gate set** | Would the KB gate catch a duplicate written a new way? | ground-truth | per KB-gate change | `store/eval-runs/gates-latest.json` |
 | L2 | **Capability scenarios + units** | Do the production flows still compose correctly? | ground-truth | per push | `store/eval-runs/suite-latest.json` |
-| L3 | **Behaviour sensor + KB gates** | Did a wrong claim actually ship today? | judge | per outbound reply / per KB write | `discussions/audit-log/*.md` |
+| L3 | **Behaviour sensor + KB gates** | Did a wrong claim actually ship today? | judge | per judged reply (chat replies when the sensor is on; email replies only with `SENSOR_EMAIL_REPLIES=1`) / per KB write | `discussions/audit-log/*.md` |
 | L4 | **Agent self-report** | What kind of work is the agent doing, and how sure does it think it is? | self-reported | per reply | `store/evals.db` |
 
 The read-path retrieval set is now specified in §9 (`docs/evals/read-path-v1.json`)

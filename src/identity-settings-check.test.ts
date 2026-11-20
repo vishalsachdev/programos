@@ -195,6 +195,91 @@ describe('real program repo, INSTITUTION_DOMAIN is the placeholder', () => {
   );
 });
 
+describe('real program repo, INSTITUTION_DOMAIN is a subdomain of the placeholder', () => {
+  it.each([
+    ['mail.example.edu', 'mail.example.edu'],
+    ['a.b.mail.example.edu', 'a.b.mail.example.edu'],
+    ['Mail.Example.EDU', 'mail.example.edu'],
+    ['  mail.example.edu  ', 'mail.example.edu'],
+  ])('refuses to start with "%s"', async (value, shown) => {
+    fresh({ pattern: REAL_PATTERN, admins: REAL_ADMINS, domain: value });
+    const assert = await check();
+    expect(assert).toThrow(/is a subdomain of the placeholder domain/);
+    expect(assert).toThrow(`INSTITUTION_DOMAIN ("${shown}")`);
+    expect(assert).toThrow('("example.edu")');
+    expect(assert).toThrow(/A real program repo is configured/);
+    expect(assert).not.toThrow(/ADMIN_AUTHOR_EMAILS/);
+  });
+
+  it('names a subdomain and the admin setting in one error', async () => {
+    fresh({ pattern: REAL_PATTERN, domain: 'mail.example.edu' });
+    const assert = await check();
+    expect(assert).toThrow(/is a subdomain of the placeholder domain/);
+    expect(assert).toThrow(/ADMIN_AUTHOR_EMAILS is not set/);
+  });
+});
+
+describe('real program repo, INSTITUTION_DOMAIN with a trailing dot', () => {
+  // instance-identity.ts refuses a trailing dot as a malformed domain when
+  // the setting is read, for every domain and every repo, so the host stops
+  // before the placeholder check runs.
+  it.each(['example.edu.', 'mail.example.edu.', 'Example.EDU.'])(
+    'refuses to start with %s',
+    async (value) => {
+      fresh({ pattern: REAL_PATTERN, admins: REAL_ADMINS, domain: value });
+      await expect(check()).rejects.toThrow(
+        /INSTITUTION_DOMAIN must be a bare mail domain/,
+      );
+    },
+  );
+});
+
+describe('real program repo, INSTITUTION_DOMAIN only looks like the placeholder', () => {
+  it.each(['myexample.edu', 'example.edu.org', 'MyExample.EDU'])(
+    'starts with %s',
+    async (value) => {
+      fresh({ pattern: REAL_PATTERN, admins: REAL_ADMINS, domain: value });
+      expect(await check()).not.toThrow();
+      const { INSTITUTION_DOMAIN } = await import('./instance-identity.js');
+      expect(INSTITUTION_DOMAIN).toBe(value.toLowerCase());
+    },
+  );
+});
+
+describe('isPlaceholderInstitutionDomain', () => {
+  it.each([
+    'example.edu',
+    'mail.example.edu',
+    'a.b.mail.example.edu',
+    'Example.EDU',
+    'MAIL.Example.Edu',
+    'example.edu.',
+    'mail.example.edu.',
+    '  example.edu  ',
+    ' Mail.Example.edu. ',
+  ])('is true for "%s"', async (value) => {
+    fresh({});
+    const mod = await import('./identity-settings-check.js');
+    expect(mod.isPlaceholderInstitutionDomain(value)).toBe(true);
+  });
+
+  it.each([
+    'myexample.edu',
+    'example.edu.org',
+    'example.edu.org.',
+    'notexample.edu.',
+    'uni.test',
+    'edu',
+    '.edu',
+    'example.edu..',
+    '',
+  ])('is false for "%s"', async (value) => {
+    fresh({});
+    const mod = await import('./identity-settings-check.js');
+    expect(mod.isPlaceholderInstitutionDomain(value)).toBe(false);
+  });
+});
+
 describe('real program repo, INSTITUTION_DOMAIN holds a real domain', () => {
   it('starts, and the setting is the domain in use', async () => {
     fresh({
@@ -266,6 +351,13 @@ describe('placeholder program repo', () => {
   it('starts with INSTITUTION_DOMAIN set to the placeholder domain', async () => {
     fresh({ domain: 'example.edu' });
     expect(await check()).not.toThrow();
+  });
+
+  it('starts with INSTITUTION_DOMAIN set to a subdomain of the placeholder', async () => {
+    fresh({ domain: 'mail.example.edu' });
+    expect(await check()).not.toThrow();
+    const { INSTITUTION_DOMAIN } = await import('./instance-identity.js');
+    expect(INSTITUTION_DOMAIN).toBe('mail.example.edu');
   });
 });
 

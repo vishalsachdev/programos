@@ -71,8 +71,8 @@ export const PLACEHOLDER_INSTITUTION_DOMAIN = 'example.edu';
  * The institution's mail domain. A blocked sender on this domain (or a
  * subdomain) gets the one-time "access closed" reply, and a route named in
  * an allowlist row resolves to `<name>@<this domain>`. With a real program
- * repo the setting is required and must not be the placeholder:
- * identity-settings-check.ts stops the host at startup.
+ * repo the setting is required and must not be the placeholder or a
+ * subdomain of it: identity-settings-check.ts stops the host at startup.
  */
 export const INSTITUTION_DOMAIN = domainSetting(
   'INSTITUTION_DOMAIN',

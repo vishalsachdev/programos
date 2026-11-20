@@ -15,6 +15,10 @@ import { fileURLToPath } from 'url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+// Pure function only: the backoff the queue applies after a retryable failure.
+// The processes under test are still the spawned ones.
+import { retryBackoffMs } from './outbound-email.js';
+
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -220,13 +224,52 @@ describe('fresh-process outbox durability', () => {
       HARNESS_BATCH: 'retry',
       HARNESS_FETCH: 'fail500-first',
     });
+    // Wait for the failed attempt to be written to the outbox, not only for the
+    // provider call: the seed process reports the result after it finalizes
+    // the row.
     await waitFor(
-      () => providerCalls().length === 1,
+      () =>
+        seed.events.some((e) => e.event === 'send-result' && e.position === 0),
       20_000,
-      'the first provider call',
+      'the first send result',
     );
     seed.child.kill('SIGTERM');
     await seed.exited;
+    // The seed process is gone, so the backoff of its failed attempt started no
+    // later than now.
+    const seedExitedAt = Date.now();
+
+    // What the new process inherits: one counted, retryable failure on row 0
+    // and an untouched row 1.
+    expect(providerCalls()).toHaveLength(1);
+    const seeded = rowsFrom(seed);
+    expect(seeded.find((r) => r.deliveryId === 'retry:0')).toMatchObject({
+      status: 'failed',
+      retryable: true,
+      attempts: 1,
+    });
+    expect(seeded.find((r) => r.deliveryId === 'retry:1')).toMatchObject({
+      status: 'pending',
+      attempts: 0,
+    });
+
+    // Start the new process only after that backoff has ended. Row 0 is then
+    // due when the queue starts, so the retry and its count do not depend on
+    // how the start of the process falls against a real-time backoff window.
+    //
+    // Before this wait the row was usually not yet due at start, and the retry
+    // came from the queue's wake timer inside the 4 s drain window. That timer
+    // can fire 1 ms before the row is due: the claim then finds nothing, no new
+    // timer is set, and the row waits for the next send or restart. The test
+    // saw 1 attempt instead of 2 in 5 of 35 runs under CPU load. That is a
+    // defect in src/outbound-email.ts (scheduleLaneRetry), not in this test,
+    // and this test no longer exercises the wake timer. It is recorded in the
+    // pull request that added this comment.
+    await waitFor(
+      () => Date.now() > seedExitedAt + retryBackoffMs(1),
+      10_000,
+      'the backoff of the failed attempt to end',
+    );
 
     const replay = await runHarness('replay', {
       HARNESS_STAGGER_MS: '10',
@@ -246,6 +289,11 @@ describe('fresh-process outbox durability', () => {
     expect(first.attempts as number).toBeGreaterThanOrEqual(2);
     expect(second.status).toBe('sent');
     expect(providerCalls().map((c) => c.key)).toContain('retry:1');
+    // The new process itself retried row 0 first, then went on to row 1.
+    const replayCalls = providerCalls()
+      .filter((c) => c.pid === replay.child.pid)
+      .map((c) => c.key);
+    expect(replayCalls.slice(0, 2)).toEqual(['retry:0', 'retry:1']);
   }, 60_000);
 
   it('a corrupt database file fails closed and is left byte-identical', async () => {

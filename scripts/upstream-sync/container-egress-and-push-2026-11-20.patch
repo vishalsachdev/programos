@@ -1400,7 +1400,7 @@ index f611825..db345b6 100644
            {
              ...(req.headers as Record<string, string>),
 diff --git a/src/index.ts b/src/index.ts
-index e3d2c2a..ffa6752 100644
+index 8f09844..e336dd6 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -13,6 +13,11 @@ import {
@@ -1412,10 +1412,10 @@ index e3d2c2a..ffa6752 100644
 +  setCheckoutPushAlerter,
 +  syncCheckoutBeforeTurn,
 +} from './checkout-sync.js';
+ import { assertIdentitySettingsConfigured } from './identity-settings-check.js';
  import { startCredentialProxy } from './credential-proxy.js';
  import './channels/index.js';
- import {
-@@ -28,7 +33,7 @@ import {
+@@ -29,7 +34,7 @@ import {
  import {
    cleanupOrphans,
    ensureContainerRuntimeRunning,
@@ -1424,7 +1424,7 @@ index e3d2c2a..ffa6752 100644
  } from './container-runtime.js';
  import {
    getAllChats,
-@@ -654,6 +659,9 @@ async function runAgent(
+@@ -655,6 +660,9 @@ async function runAgent(
      if (output.result !== null && output.result !== undefined) {
        sawUsableResult = true;
      }
@@ -1434,7 +1434,7 @@ index e3d2c2a..ffa6752 100644
      if (onOutput) await onOutput(output);
    };
  
-@@ -696,6 +704,7 @@ async function runAgent(
+@@ -697,6 +705,7 @@ async function runAgent(
      .join('\n\n');
  
    try {
@@ -1442,7 +1442,7 @@ index e3d2c2a..ffa6752 100644
      const imageAttachments =
        agentMode === 'normal' ? parseImageReferences(prompt) : [];
  
-@@ -882,7 +891,7 @@ async function main(): Promise<void> {
+@@ -885,7 +894,7 @@ async function main(): Promise<void> {
    // Start credential proxy (containers route API calls through this)
    const proxyServer = await startCredentialProxy(
      CREDENTIAL_PROXY_PORT,
@@ -1451,7 +1451,7 @@ index e3d2c2a..ffa6752 100644
    );
  
    // Graceful shutdown handlers
-@@ -1064,6 +1073,9 @@ async function main(): Promise<void> {
+@@ -1067,6 +1076,9 @@ async function main(): Promise<void> {
      adminShortfallAlerter((text, opts) => sendDeadLetterAlert(text, opts)),
    );
  

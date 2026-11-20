@@ -269,7 +269,7 @@ describe('outbound email lane wake timer', () => {
   });
 
   it('a retryable row with no hold-off time (the exception path) is not left without a timer', async () => {
-    // A send that throws is finalized as retryable with no next attempt time.
+    // A send that throws is finalized as retryable, with the backoff.
     mockFetch.mockReset();
     const realGet = store.get.bind(store);
     let throwOnce = true;
@@ -294,7 +294,11 @@ describe('outbound email lane wake timer', () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(realGet('thrown:0')).toMatchObject({ status: 'failed' });
-    expect(realGet('thrown:0')!.nextAttemptAt).toBeUndefined();
+    // A throw is an attempt like any other: it gets the first backoff.
+    expect(realGet('thrown:0')).toMatchObject({ attempts: 1 });
+    expect(Date.parse(realGet('thrown:0')!.nextAttemptAt!)).toBe(
+      START + retryBackoffMs(1),
+    );
     expect(vi.getTimerCount()).toBe(1);
 
     succeed();
@@ -366,6 +370,104 @@ describe('outbound email lane wake timer', () => {
 // The same hole at the level of the two store queries, for both stores: after
 // an empty claim, the "what is the lane waiting for" query must still return
 // the row, whatever the clock did in between.
+describe('a send that throws counts against the attempt budget', () => {
+  /**
+   * A throw that escapes the send wrapper and reaches the queue's own catch.
+   * The wrapper turns a provider error into a retryable failure result, then
+   * reports the shortfall from its catch block; a throw from that report is
+   * what the queue sees as "the send threw". The dead-letter report, which has
+   * another reason, is left alone.
+   */
+  async function sendThrows(times = Infinity): Promise<void> {
+    const gate = await import('./delivery-gate.js');
+    let left = times;
+    vi.mocked(gate.reportDeliveryShortfall).mockImplementation((a) => {
+      if (a.reason.startsWith('send-exception') && left-- > 0) {
+        throw new Error('local error');
+      }
+    });
+    mockFetch.mockImplementation(() => {
+      throw new Error('bad payload');
+    });
+  }
+
+  it('a send that throws every time is attempted the budgeted number of times, with backoff between, then dead-letters', async () => {
+    await sendThrows();
+    const { reportDeliveryShortfall } = await import('./delivery-gate.js');
+    const first = await sendOutboundEmailResult(EMAIL, {
+      ...OPTIONS,
+      deliveryId: 'throw:dead',
+    });
+    expect(first).toMatchObject({ status: 'failed', retryable: true });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const starts: number[] = [START];
+    for (let n = 1; n < MAX_OUTBOX_ATTEMPTS; n++) {
+      const row = store.get('throw:dead')!;
+      expect(row).toMatchObject({ status: 'failed', attempts: n });
+      // Held off for the backoff, not retried at the next stagger.
+      expect(Date.parse(row.nextAttemptAt!)).toBe(
+        Date.now() + retryBackoffMs(n),
+      );
+      await vi.advanceTimersByTimeAsync(retryBackoffMs(n) - 1);
+      expect(store.get('throw:dead')!.attempts).toBe(n);
+      await vi.advanceTimersByTimeAsync(1);
+      starts.push(Date.now());
+    }
+
+    expect(store.get('throw:dead')).toMatchObject({
+      status: 'dead-letter',
+      attempts: MAX_OUTBOX_ATTEMPTS,
+    });
+    expect(store.get('throw:dead')!.result).toMatchObject({
+      status: 'failed',
+      retryable: false,
+      reason: expect.stringContaining('outbox-max-attempts-exceeded'),
+    });
+    // The delays between attempts are the backoff schedule.
+    expect(starts.slice(1).map((t, i) => t - starts[i])).toEqual(
+      Array.from({ length: MAX_OUTBOX_ATTEMPTS - 1 }, (_, i) =>
+        retryBackoffMs(i + 1),
+      ),
+    );
+    // Same operator alert as the non-throwing path.
+    expect(reportDeliveryShortfall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: expect.stringContaining('outbox-max-attempts-exceeded'),
+      }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    // No further attempts after the dead letter.
+    const calls = mockFetch.mock.calls.length;
+    expect(calls).toBe(MAX_OUTBOX_ATTEMPTS);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(mockFetch.mock.calls.length).toBe(calls);
+  });
+
+  it('a send that throws once and then succeeds is delivered on the second attempt after the first backoff', async () => {
+    await sendThrows(1);
+    const first = await sendOutboundEmailResult(EMAIL, {
+      ...OPTIONS,
+      deliveryId: 'throw:once',
+    });
+    expect(first).toMatchObject({ status: 'failed', retryable: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.get('throw:once')).toMatchObject({
+      status: 'failed',
+      attempts: 1,
+    });
+    succeed();
+
+    await vi.advanceTimersByTimeAsync(retryBackoffMs(1) - 1);
+    expect(store.get('throw:once')!.status).toBe('failed');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.get('throw:once')).toMatchObject({
+      status: 'sent',
+      attempts: 2,
+    });
+  });
+});
+
 describe.each<[string, () => OutboxStore]>([
   ['memory', () => new MemoryOutboxStore()],
   [

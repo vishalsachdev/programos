@@ -10,7 +10,7 @@ This page is for a team at the University of Illinois that runs ProgramOS. It ad
 |---|---|---|---|
 | 1 | Which university data classification applies to staff mail that mentions students (a name with a course, a grade, an accommodation, a conduct or advising matter)? Does the same class apply to the audit log and the raw mail copies that hold that mail? | Not verified | The university's privacy office, and the registrar for student-record questions |
 | 2 | Has the model provider gone through the university's vendor review for that class of data, on the agent path (the endpoint set in `ANTHROPIC_BASE_URL`)? | Not verified | The university's IT security or vendor-review office |
-| 3 | Has the reply sensor's destination been reviewed? It calls the provider's public API directly and ignores `ANTHROPIC_BASE_URL`, so an approval for another endpoint does not cover it. | Not verified | Same |
+| 3 | Has the reply sensor's destination been reviewed? It calls its provider directly from the host, not through the proxy; where it sends is in [`../model-providers.md`](../model-providers.md), "The reply sensor". By default it reads chat replies only. Has reading email replies too (`SENSOR_EMAIL_REPLIES=1`) been reviewed? | Not verified | Same |
 | 4 | Has the outbound mail provider gone through vendor review? | Not verified | Same |
 | 5 | Has the inbound mail intake service, and the provider it runs at, gone through vendor review? If campus mail is used instead, what does that path store? | Not verified | Same, and the campus mail administrators |
 | 6 | Has Telegram gone through vendor review for operator alerts that carry addresses and subject lines? | Not verified | Same |

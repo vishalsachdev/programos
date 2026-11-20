@@ -1,3 +1,4 @@
+import { simpleParser } from 'mailparser';
 import { describe, it, expect } from 'vitest';
 
 import { checkParsedForLoop } from './email-loop-detection.js';
@@ -107,5 +108,96 @@ describe('checkParsedForLoop', () => {
       ['list', { unsubscribe: { mail: 'unsub@example.edu' } }],
     ]);
     expect(checkParsedForLoop({ headers }).isAutoReply).toBe(true);
+  });
+});
+
+// With the SMTP provider a bounce arrives as mail to the sending mailbox.
+// It must never start work or be answered.
+describe('checkParsedForLoop: delivery reports (bounces)', () => {
+  const DSN = [
+    'Return-Path: <>',
+    'From: Mail Delivery Subsystem <MAILER-DAEMON@example.edu>',
+    'To: program@example.org',
+    'Subject: Undeliverable: Test subject',
+    'Content-Type: multipart/report; report-type=delivery-status; boundary="b1"',
+    'MIME-Version: 1.0',
+    '',
+    '--b1',
+    'Content-Type: text/plain',
+    '',
+    'Your message could not be delivered.',
+    '--b1',
+    'Content-Type: message/delivery-status',
+    '',
+    'Final-Recipient: rfc822; person@example.edu',
+    'Action: failed',
+    'Status: 5.1.1',
+    '--b1--',
+    '',
+  ].join('\r\n');
+
+  it('drops a parsed RFC 3464 delivery report', async () => {
+    const result = checkParsedForLoop(await simpleParser(DSN));
+    expect(result.isAutoReply).toBe(true);
+    expect(result.reason).toMatch(/multipart\/report/);
+  });
+
+  it('each bounce marker is enough on its own', async () => {
+    const plainBody = '\r\n\r\nYour message could not be delivered.\r\n';
+    const variants = [
+      'Return-Path: <>\r\nFrom: Notices <notices@example.edu>',
+      'From: Mail Delivery Subsystem <mailer-daemon@example.edu>',
+      'From: postmaster@example.edu',
+      'From: Notices <notices@example.edu>\r\nX-Failed-Recipients: person@example.edu',
+    ];
+    for (const head of variants) {
+      const parsed = await simpleParser(
+        `${head}\r\nTo: program@example.org\r\nSubject: Undeliverable${plainBody}`,
+      );
+      expect(checkParsedForLoop(parsed).isAutoReply, head).toBe(true);
+    }
+  });
+
+  it('detects the markers in hand-built string headers too', () => {
+    expect(
+      checkParsedForLoop(
+        withHeaders({
+          'content-type': 'multipart/report; report-type=delivery-status',
+        }),
+      ).isAutoReply,
+    ).toBe(true);
+    expect(
+      checkParsedForLoop(withHeaders({ 'return-path': '<>' })).isAutoReply,
+    ).toBe(true);
+    expect(
+      checkParsedForLoop(
+        withHeaders({ from: '"Mail System" <MAILER-DAEMON@example.edu>' }),
+      ).isAutoReply,
+    ).toBe(true);
+  });
+
+  it('does not flag ordinary mail: a real return path, a person, other content types', async () => {
+    const parsed = await simpleParser(
+      [
+        'Return-Path: <paige@example.edu>',
+        'From: Paige <paige@example.edu>',
+        'To: program@example.org',
+        'Subject: question about the postmaster@example.edu address',
+        'Content-Type: multipart/mixed; boundary="b2"',
+        '',
+        '--b2',
+        'Content-Type: text/plain',
+        '',
+        'Who reads postmaster@example.edu?',
+        '--b2--',
+        '',
+      ].join('\r\n'),
+    );
+    expect(checkParsedForLoop(parsed).isAutoReply).toBe(false);
+    expect(
+      checkParsedForLoop(
+        withHeaders({ from: 'not-the-postmaster@example.edu' }),
+      ).isAutoReply,
+    ).toBe(false);
   });
 });

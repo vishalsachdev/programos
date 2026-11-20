@@ -59,7 +59,7 @@ As shipped, the agent reaches the model with a Claude subscription token or an A
 
 ## 3. Microsoft Graph for mail, in place of `inbound/` and the outbound provider
 
-**Today.** Intake: the Cloudflare Email Worker in `inbound/` commits a Markdown copy and the original `.eml` to the knowledge-base repo as the intake author, then POSTs to the host webhook ([`../setup-reference.md`](../setup-reference.md), "Inbound mail: the contract"). The host trusts a committed `.eml` only when its first author is `INTAKE_GIT_AUTHOR_EMAIL`. Outbound: one provider, Resend (`src/outbound-email.ts`, `fetch('https://api.resend.com/emails')`), with bounces and complaints coming back by a signed webhook (`src/channels/resend-events.ts`) into the audit log. Resend sends from a domain whose DNS you control, which an institutional domain usually is not (issue 9).
+**Today.** Intake: the Cloudflare Email Worker in `inbound/` commits a Markdown copy and the original `.eml` to the knowledge-base repo as the intake author, then POSTs to the host webhook ([`../setup-reference.md`](../setup-reference.md), "Inbound mail: the contract"). The host trusts a committed `.eml` only when its first author is `INTAKE_GIT_AUTHOR_EMAIL`. Outbound: Resend by default (`src/outbound-email.ts`, `fetch('https://api.resend.com/emails')`), with bounces and complaints coming back by a signed webhook (`src/channels/resend-events.ts`) into the audit log. Resend sends from a domain whose DNS you control, which an institutional domain usually is not (issue 9). Since 2026-11-20 there is a second provider, authenticated SMTP submission (`OUTBOUND_MAIL_PROVIDER=smtp`, `src/outbound-email-smtp.ts`), which needs a mailbox login with a password and gets no bounce reports ([`../setup-reference.md`](../setup-reference.md), "Outbound mail over SMTP"). It is not a Graph sender.
 
 **What Microsoft documents** (fetched 2026-11-20):
 
@@ -70,7 +70,7 @@ As shipped, the agent reaches the model with a Claude subscription token or an A
 
 **What would have to be built.**
 
-- A Graph sender: a second outbound provider behind the same outbox, gate and audit calls (issue 9, option a). Permission: `Mail.Send`, scoped to the bot's shared mailbox by RBAC for Applications.
+- A Graph sender: a second outbound provider behind the same outbox, gate and audit calls (issue 67; issue 9 offered it as option a). Permission: `Mail.Send`, scoped to the bot's shared mailbox by RBAC for Applications.
 - Bounce reporting for that sender. Graph has no equivalent of the Resend events webhook in the pages read: a bounce returns as a non-delivery report into the mailbox. Without parsing those, "delivery events" leave the audit log for this provider.
 - A Graph intake: subscribe to the shared mailbox's inbox (or poll with delta), fetch each new message's MIME, commit the Markdown copy and the `.eml` as the intake author, then POST the existing webhook. Permission: `Mail.Read` (or `Mail.ReadWrite` to move handled mail), scoped the same way. The intake must not send replies or run in the agent container. Issue 57.
 
@@ -132,7 +132,7 @@ Keep the engine and the git knowledge base. Move the model, the host and the mai
 
 | # | Step | Approvals needed (roles) |
 |---|---|---|
-| 0 | Before any approval: build the Graph sender (issue 9, option a), the Graph intake (issue 57), and Entra ID auth for Foundry (issue 58), all against fake servers, as the Foundry provider was. Write the approval request from this page and [`../data-handling.md`](../data-handling.md). | None |
+| 0 | Before any approval: build the Graph sender (issue 67; issue 9 offered it as option a), the Graph intake (issue 57), and Entra ID auth for Foundry (issue 58), all against fake servers, as the Foundry provider was. Write the approval request from this page and [`../data-handling.md`](../data-handling.md). | None |
 | 1 | Get the data-class decision in writing: may staff mail go to Claude on Foundry (which hosting option and region scope), to Exchange Online and to a VM in Azure? | Privacy office; IT security or vendor-review office; unit head signs |
 | 2 | An Azure subscription for the unit, of an eligible type, with a Foundry resource (Hosted on Azure, US Data Zone if that is the approval) and a Linux VM that runs Docker (`docs/deployment.md`). | Institution's cloud services team; unit IT lead; budget owner |
 | 3 | Run the Foundry live checks (`docs/model-providers.md` section 6, issue 24) with `MODEL_PROVIDERS=foundry` and the reply sensor off. | None beyond step 2 |
@@ -155,7 +155,7 @@ Until step 4 is approved, a unit can run steps 2 and 3 with the existing `inboun
 
 ### Follow-up issues
 
-- Issue 9: Graph sender (existing).
+- [Issue 67](https://github.com/vishalsachdev/programos/issues/67): Graph sender (split from issue 9, which built the SMTP provider instead).
 - Issue 11: Teams alert route through a Workflows webhook (existing); note that connector incoming webhooks are retired.
 - Issue 22: service ownership (page on `main`); a unit on this path adds the rows above to its inventory.
 - Issue 24: Foundry live checks (existing).

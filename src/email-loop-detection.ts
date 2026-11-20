@@ -150,7 +150,85 @@ export function checkParsedForLoop(parsed: ParsedHeadersLike): LoopCheckResult {
     }
   }
 
+  // Delivery status notifications (bounces). With the SMTP provider a bounce
+  // comes back as mail to the sending mailbox; not every mail system marks it
+  // Auto-Submitted. RFC 3464 reports are multipart/report, RFC 5321 gives a
+  // bounce an empty return path, and the sender is the mail system itself.
+  const contentType = getHeaderCI(headers, 'content-type');
+  if (/^multipart\/report\b/i.test(contentType.trim())) {
+    return {
+      isAutoReply: true,
+      reason: 'Content-Type multipart/report indicates a delivery report',
+    };
+  }
+  if (headers && hasHeaderCI(headers, 'x-failed-recipients')) {
+    return {
+      isAutoReply: true,
+      reason: 'X-Failed-Recipients header indicates a bounce',
+    };
+  }
+  if (headers && hasHeaderCI(headers, 'return-path')) {
+    const returnPath = addressHeaderText(headerRawCI(headers, 'return-path'));
+    if (returnPath.replace(/[<>\s]/g, '') === '') {
+      return {
+        isAutoReply: true,
+        reason: 'Empty Return-Path indicates a bounce',
+      };
+    }
+  }
+  const fromText = addressHeaderText(headerRawCI(headers, 'from'));
+  if (/(^|[<\s"'])(mailer-daemon|postmaster)@/i.test(fromText)) {
+    return {
+      isAutoReply: true,
+      reason: 'From address is a mail system (bounce or system notice)',
+    };
+  }
+
   return { isAutoReply: false };
+}
+
+function headerRawCI(
+  headers: Map<string, unknown> | undefined,
+  name: string,
+): unknown {
+  if (!headers) return undefined;
+  for (const [key, val] of headers.entries()) {
+    if (typeof key === 'string' && key.toLowerCase() === name) return val;
+  }
+  return undefined;
+}
+
+function hasHeaderCI(headers: Map<string, unknown>, name: string): boolean {
+  for (const key of headers.keys()) {
+    if (typeof key === 'string' && key.toLowerCase() === name) return true;
+  }
+  return false;
+}
+
+/**
+ * Text of an address header. mailparser gives these as
+ * { value: [{ address, name }], text }; hand-built headers are strings.
+ */
+function addressHeaderText(raw: unknown): string {
+  if (raw == null) return '';
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) return raw.map(addressHeaderText).join(', ');
+  if (typeof raw === 'object') {
+    const o = raw as { text?: unknown; value?: unknown; address?: unknown };
+    if (Array.isArray(o.value)) {
+      return o.value
+        .map((v) =>
+          v && typeof v === 'object' && 'address' in v
+            ? `<${String((v as { address?: unknown }).address ?? '')}>`
+            : addressHeaderText(v),
+        )
+        .join(', ');
+    }
+    if (typeof o.address === 'string') return `<${o.address}>`;
+    if (typeof o.text === 'string') return o.text;
+    if (typeof o.value === 'string') return o.value;
+  }
+  return '';
 }
 
 /**

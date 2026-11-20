@@ -56,15 +56,48 @@ vi.mock('./delivery-notes.js', async (importOriginal) => {
   return { ...original, recordDeliveryNote: vi.fn() };
 });
 
-vi.mock('./logger.js', () => {
-  const logger = {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    fatal: vi.fn(),
+// The SMTP provider (OUTBOUND_MAIL_PROVIDER=smtp) hands a delivery over in
+// `submitViaSmtp`. Here that call is the harness's provider, so the same runs
+// go through the queue's SMTP branch. No mail server is contacted.
+const smtp = vi.hoisted(() => ({
+  selected: false,
+  submit: (() => {
+    throw new Error('no SMTP provider in this test');
+  }) as () => Promise<unknown>,
+}));
+vi.mock('./outbound-email-smtp.js', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('./outbound-email-smtp.js')>();
+  return {
+    ...original,
+    getOutboundMailProvider: () => (smtp.selected ? 'smtp' : 'resend'),
+    loadSmtpConfig: () => ({
+      ok: true,
+      config: {
+        host: 'smtp.example.org',
+        port: 587,
+        security: 'starttls',
+        username: 'program@example.org',
+        password: 'not-a-real-password',
+      },
+    }),
+    submitViaSmtp: () => smtp.submit(),
   };
-  return { logger };
+});
+
+// Plain functions, not spies: the runs below log tens of thousands of
+// errors, and a spy would keep every one of them.
+vi.mock('./logger.js', () => {
+  const quiet = (): void => {};
+  return {
+    logger: {
+      debug: quiet,
+      info: quiet,
+      warn: quiet,
+      error: quiet,
+      fatal: quiet,
+    },
+  };
 });
 
 import Database from 'better-sqlite3';
@@ -107,8 +140,26 @@ function makeInner(kind: StoreKind): OutboxStore {
     : new SqliteOutboxStore({ database: new Database(':memory:') });
 }
 
+/**
+ * The exhaustive runs share one store of each kind and empty it before each
+ * run: opening a database for every run is most of the cost of a SQLite run.
+ */
+const shared = new Map<StoreKind, OutboxStore>();
+function sharedInner(kind: StoreKind): OutboxStore {
+  let store = shared.get(kind);
+  if (!store) {
+    store = makeInner(kind);
+    shared.set(kind, store);
+  }
+  store.clear();
+  return store;
+}
+
 /** What the provider does when no fault is planned for the call. */
 type ProviderMode = 'fails-retryably' | 'throws' | 'accepts';
+
+/** Which provider the queue hands the delivery to. */
+type Transport = 'http' | 'smtp';
 
 /**
  * How a planned call fails. `before`/`after`: the call throws, without or
@@ -158,8 +209,9 @@ class Harness implements OutboxStore {
     kind: StoreKind,
     private readonly provider: ProviderMode,
     faults: Fault[],
+    private readonly transport: Transport = 'http',
   ) {
-    this.inner = makeInner(kind);
+    this.inner = sharedInner(kind);
     this.faults = faults;
   }
 
@@ -187,8 +239,8 @@ class Harness implements OutboxStore {
     throw new Error(`injected ${fault.kind} at ${at} (${name})`);
   }
 
-  /** The provider call, as `fetch`. */
-  fetch = (): Promise<unknown> => {
+  /** The provider call: `fetch`, or `submitViaSmtp` for the SMTP provider. */
+  handOver = (): Promise<unknown> => {
     if (this.dead) throw new Error('process stopped (provider)');
     const at = this.trace.push('provider') - 1;
     const fault = this.faults.find((f) => f.at === at);
@@ -207,6 +259,18 @@ class Harness implements OutboxStore {
     else this.uncountedSends++;
     if (fault) throw new Error(`injected ${fault.kind} at ${at} (provider)`);
     if (this.provider === 'throws') throw new Error('bad payload');
+    if (this.transport === 'smtp') {
+      return Promise.resolve(
+        this.provider === 'accepts'
+          ? {
+              kind: 'accepted',
+              providerId: 'smtp-ok',
+              accepted: [EMAIL.to],
+              refused: [],
+            }
+          : { kind: 'failed', reason: 'smtp-temporary: 451', retryable: true },
+      );
+    }
     if (this.provider === 'accepts') {
       return Promise.resolve({
         ok: true,
@@ -384,19 +448,28 @@ interface Outcome {
  * then a process restart and one more submission. A row that a failing
  * store left claimed is taken up again by a new submission or a restart.
  */
-async function runDelivery(
+async function runDeliveryVia(
   kind: StoreKind,
   provider: ProviderMode,
   faults: Fault[],
+  transport: Transport = 'http',
 ): Promise<Outcome> {
   vi.setSystemTime(START);
-  const h = new Harness(kind, provider, faults);
+  const h = new Harness(kind, provider, faults, transport);
+  smtp.selected = transport === 'smtp';
+  // Whichever provider is not selected must stay uncalled.
+  const unused = (): never => {
+    h.uncountedSends++;
+    throw new Error(`the ${transport} run called the other provider`);
+  };
+  smtp.submit = transport === 'smtp' ? h.handOver : unused;
   _resetOutboundEmailQueueForTests(h);
   _setStaggerMsForTests(0);
   _setProviderTimeoutMsForTests(50);
   vi.mocked(reportDeliveryShortfall).mockClear();
   vi.mocked(recordDeliveryNote).mockClear();
-  mockFetch.mockImplementation(h.fetch);
+  mockFetch.mockClear();
+  mockFetch.mockImplementation(transport === 'http' ? h.handOver : unused);
 
   submit(h);
   await settle(h);
@@ -472,6 +545,7 @@ function kindsFor(name: string): FaultKind[] {
 beforeEach(() => {
   vi.useFakeTimers({ now: START });
   vi.clearAllMocks();
+  smtp.selected = false;
 });
 
 afterEach(() => {
@@ -482,7 +556,18 @@ afterEach(() => {
 const STORES: StoreKind[] = ['memory', 'sqlite'];
 const PROVIDERS: ProviderMode[] = ['fails-retryably', 'throws', 'accepts'];
 
-describe.each(STORES)('attempt budget, %s store', (kind) => {
+const TRANSPORTS: Transport[] = ['http', 'smtp'];
+const WORLDS = STORES.flatMap((kind) =>
+  TRANSPORTS.map((transport) => [kind, transport] as const),
+);
+
+describe.each(WORLDS)('attempt budget, %s store, %s provider', (kind, via) => {
+  const runDelivery = (
+    k: StoreKind,
+    provider: ProviderMode,
+    faults: Fault[],
+  ): Promise<Outcome> => runDeliveryVia(k, provider, faults, via);
+
   describe.each(PROVIDERS)('provider %s', (provider) => {
     it('with no fault: the expected sends, and every one is counted first', async () => {
       const outcome = await runDelivery(kind, provider, []);
@@ -530,14 +615,18 @@ describe.each(STORES)('attempt budget, %s store', (kind) => {
         const baseline = await runDelivery(kind, provider, []);
         const length = baseline.h.trace.length;
         // One attempt is 9 numbered calls (see the baseline trace). The
-        // SQLite store costs ten times the memory store per run, and the queue
-        // logic above it is the same, so there the pairs are one attempt
-        // apart, the first failure is a throw (a process stop at each call is
-        // in the test above), and the restart alternates.
-        const full = kind === 'memory';
+        // full set runs on the memory store with the HTTP provider. The
+        // SQLite store costs ten times as much per run, and the queue logic
+        // above the store and around either provider is the same, so the
+        // other three combinations run pairs one attempt apart, with a
+        // throw as the first failure (a process stop at each call is in the
+        // test above) and the restart on alternate pairs; SQLite starts a
+        // pair at every second call.
+        const full = kind === 'memory' && via === 'http';
         const window = full ? 18 : 9;
         let runs = 0;
-        for (let first = 0; first < length; first++) {
+        const stride = kind === 'sqlite' ? 2 : 1;
+        for (let first = 0; first < length; first += stride) {
           const firstName = baseline.h.trace[first];
           const firstKinds = kindsFor(firstName).filter(
             (k) => full || !k.startsWith('crash'),
@@ -565,7 +654,7 @@ describe.each(STORES)('attempt budget, %s store', (kind) => {
             }
           }
         }
-        expect(runs).toBeGreaterThan(length * window);
+        expect(runs).toBeGreaterThan((length * window) / stride);
       },
     );
   });

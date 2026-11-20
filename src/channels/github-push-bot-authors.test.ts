@@ -50,7 +50,7 @@ async function push(authorEmail: string): Promise<number> {
         message: 'update the FAQ',
         author: { name: 'Someone', email: authorEmail },
         added: [],
-        modified: ['discussions/FAQ.md'],
+        modified: ['docs/faq.md'],
         removed: [],
       },
     ],

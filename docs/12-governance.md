@@ -18,7 +18,7 @@ Each rule has a number so that code comments, prompts and tests can cite it. Kee
 | G8 | A detected conflict is held for human review. The agent never resolves it. | The agent quietly picks a winner between two recorded facts. |
 | G11 | A protected file (the curriculum in the reference deployment) is not the agent's to edit. A guard blocks its file-editing tools on that path and records attempts; a host check on git authorship is the second line. The admin identities it accepts are the `ADMIN_AUTHOR_EMAILS` setting; with a real program repo the host does not start without them. | Core facts change through a chat message instead of through their owner. |
 | G14 | Synced snapshot files are generated, not hand-edited. | A hand edit is overwritten at the next sync, or a stale copy is trusted. |
-| G17 | A blocked sender from the same institution gets one courtesy reply. This is the only reply to a non-allowlisted sender. "One" is tracked in memory; a restart resets it. | Colleagues get silence and keep writing; or the bot starts answering strangers. |
+| G17 | A blocked sender from the same institution gets one courtesy reply. This is the only reply to a non-allowlisted sender. "One" is tracked in memory; a restart resets it. The institution is the `INSTITUTION_DOMAIN` setting; with a real program repo the host does not start without it. | Colleagues get silence and keep writing; or the bot starts answering strangers. |
 | G19 | Each sender has a cap on turns per time window. The cap is lower for automated agents and unvouched senders. Enforced on email only; Telegram and web chat have no cap. Counters are in memory and reset on restart. | A mail loop or one heavy sender uses the whole budget. |
 | G22 | An email recipient must be on the allowlist. Exceptions in the code: the G17 courtesy reply, and the operator address added to mail for a peer agent. | Content goes to someone the team never approved. |
 | G23 | Every successful send writes a host-side audit record. Not yet true for scheduled and direct chat sends, operator notices on Telegram, and web chat's timeout reply. | Nobody can later prove what was sent, to whom, and when. |
@@ -40,6 +40,10 @@ Each rule has a number so that code comments, prompts and tests can cite it. Kee
 | G59 | Email addresses come only from the allowlist or the inbound mail, for recipients and in body text. In body text the bot's own address and one approved shared mailbox are also accepted. The body check runs on email only, not chat, and skips saved deliveries from an older format. | An invented address delivers private content to a stranger. |
 
 `G1` to `G10` as a block are the knowledge-base write protocol in the program repo's governance file. `RC-nnn` numbers are root-cause IDs: each names the failure that led to a rule (for example `RC-018`: the agent must learn what the host actually sent).
+
+## What the rules do not cover
+
+The numbered rules govern who may change the record and what the bot may send. They do not say which kinds of data may enter the record, which outside services may receive it, who may read the program repo, or how long anything is kept. Those are decisions for the adopter and the institution. [`data-handling.md`](./data-handling.md) lists each outside service and storage place as traced from the code, and the decisions to make before go-live. Record your answers in the program repo's governance file.
 
 ## Changing a rule
 

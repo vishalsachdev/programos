@@ -5,8 +5,8 @@ import { readEnvFile } from './env.js';
  * identities that code compares against. Each is read from `.env` or the
  * process environment (the process environment wins, as in config.ts) and
  * defaults to the repo's placeholder. Values are fixed at import.
- * ADMIN_AUTHOR_EMAILS has no usable default on a real program repo; see
- * admin-identity-check.ts.
+ * INSTITUTION_DOMAIN and ADMIN_AUTHOR_EMAILS have no usable default on a
+ * real program repo; see identity-settings-check.ts.
  *
  * A value that is set but malformed throws at startup: these settings feed
  * access decisions, and a silent fallback to a placeholder would be worse
@@ -64,15 +64,23 @@ function emailListSetting(key: string, fallback: string[]): string[] {
   return items;
 }
 
+/** The institution domain this repo ships with. It is nobody's. */
+export const PLACEHOLDER_INSTITUTION_DOMAIN = 'example.edu';
+
 /**
  * The institution's mail domain. A blocked sender on this domain (or a
  * subdomain) gets the one-time "access closed" reply, and a route named in
- * an allowlist row resolves to `<name>@<this domain>`.
+ * an allowlist row resolves to `<name>@<this domain>`. With a real program
+ * repo the setting is required and must not be the placeholder:
+ * identity-settings-check.ts stops the host at startup.
  */
 export const INSTITUTION_DOMAIN = domainSetting(
   'INSTITUTION_DOMAIN',
-  'example.edu',
+  PLACEHOLDER_INSTITUTION_DOMAIN,
 );
+
+/** False when INSTITUTION_DOMAIN fell back to the placeholder. */
+export const INSTITUTION_DOMAIN_IS_SET = raw('INSTITUTION_DOMAIN') !== '';
 
 /**
  * The bot's own mail domain: the default bot mailbox, the Message-ID
@@ -111,7 +119,7 @@ export const PLACEHOLDER_ADMIN_AUTHOR_EMAILS: readonly string[] = [
  * Git author identities allowed to change protected governance files.
  * Setting ADMIN_AUTHOR_EMAILS replaces the placeholder list; it does not
  * add to it. With a real program repo the setting is required and must not
- * name a placeholder: admin-identity-check.ts stops the host at startup.
+ * name a placeholder: identity-settings-check.ts stops the host at startup.
  */
 export const ADMIN_AUTHOR_EMAILS: readonly string[] = emailListSetting(
   'ADMIN_AUTHOR_EMAILS',

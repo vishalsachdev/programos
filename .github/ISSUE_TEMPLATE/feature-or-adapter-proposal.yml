@@ -1,0 +1,49 @@
+name: Feature or adapter proposal
+description: A new channel, mail provider, model runner, host recipe or other capability.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read `CONTRIBUTING.md` first. Most code here is exported from the reference deployment, so a change to it also needs a patch file, and a large one may be better as a separate adapter.
+        Never paste mail content, real names, addresses or secrets here.
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need and for whom
+      description: The team, the setting and the task that the repo does not cover today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What would change. Name the files or the contract in `SPEC.md` it touches, if you know.
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Channel adapter
+        - Inbound or outbound mail provider
+        - Model provider or agent runner
+        - Host or deployment recipe
+        - Governance rule
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: guarantees
+    attributes:
+      label: Effect on the guarantees
+      description: Does it touch the allowlist, the delivery gate, the audit log, protected files or where data goes? See `SPEC.md` section 11.
+    validations:
+      required: false
+  - type: checkboxes
+    id: work
+    attributes:
+      label: Who does the work
+      options:
+        - label: I can open a pull request for this

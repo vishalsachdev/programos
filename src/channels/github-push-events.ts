@@ -37,7 +37,7 @@ const KB_INCLUDE_PREFIXES = [
   'discussions/OPEN_QUESTIONS.md',
   'discussions/PARKED.md',
   'discussions/PENDING_MEETINGS.md',
-  'discussions/FAQ.md',
+  'docs/faq.md',
   'discussions/LEARNING_INFRASTRUCTURE.md',
   'courses/',
   'program/',

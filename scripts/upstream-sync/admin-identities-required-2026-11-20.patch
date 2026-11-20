@@ -1,0 +1,572 @@
+diff --git a/src/identity-settings-check.test.ts b/src/identity-settings-check.test.ts
+new file mode 100644
+index 0000000..27bb5cf
+--- /dev/null
++++ b/src/identity-settings-check.test.ts
+@@ -0,0 +1,284 @@
++import { execFileSync } from 'child_process';
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++// The identity settings are fixed when their module loads, so every case
++// sets the environment first and then imports a fresh copy of the modules.
++
++const REAL_PATTERN = '^git@git[.]example[.]edu:team/kb([.]git)?$';
++const PLACEHOLDER_ORIGIN = 'git@github.com:example-org/program-repo.git';
++const REAL_ORIGIN = 'git@git.example.edu:team/kb.git';
++const REAL_DOMAIN = 'uni.test';
++const REAL_ADMINS = 'admin@example.org';
++
++let tmp: string;
++
++function repoWithOrigin(name: string, origin: string | null): string {
++  const dir = path.join(tmp, name);
++  execFileSync('git', ['init', '-q', dir]);
++  if (origin) {
++    execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', origin]);
++  }
++  return dir;
++}
++
++function fresh(env: {
++  admins?: string;
++  domain?: string;
++  pattern?: string;
++  checkout?: string;
++  mirror?: string;
++}) {
++  vi.resetModules();
++  vi.stubEnv('ADMIN_AUTHOR_EMAILS', env.admins ?? '');
++  vi.stubEnv('INSTITUTION_DOMAIN', env.domain ?? '');
++  vi.stubEnv('PROGRAM_ORIGIN_PATTERN', env.pattern ?? '');
++  vi.stubEnv('PROGRAM_REPO', env.checkout ?? path.join(tmp, 'no-checkout'));
++  vi.stubEnv('PROGRAM_READ_MIRROR', env.mirror ?? path.join(tmp, 'no-mirror'));
++  vi.doMock('./env.js', () => ({ readEnvFile: () => ({}) }));
++  // Host git in the checkout drops to the checkout owner when root; these
++  // repos belong to whoever runs the tests.
++  vi.doMock('./program-repo.js', () => ({
++    getProgramRepoPath: () => process.env.PROGRAM_REPO,
++    checkoutGitOptions: () => ({
++      cwd: process.env.PROGRAM_REPO,
++      env: process.env,
++      timeout: 30_000,
++    }),
++  }));
++}
++
++async function check(): Promise<() => void> {
++  const mod = await import('./identity-settings-check.js');
++  return mod.assertIdentitySettingsConfigured;
++}
++
++beforeEach(() => {
++  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'identity-settings-'));
++});
++
++afterEach(() => {
++  vi.doUnmock('./env.js');
++  vi.doUnmock('./program-repo.js');
++  vi.unstubAllEnvs();
++  vi.resetModules();
++  fs.rmSync(tmp, { recursive: true, force: true });
++});
++
++describe('real program repo, ADMIN_AUTHOR_EMAILS unset', () => {
++  it('refuses to start when PROGRAM_ORIGIN_PATTERN is set', async () => {
++    fresh({ pattern: REAL_PATTERN, domain: REAL_DOMAIN });
++    const assert = await check();
++    expect(assert).toThrow(/ADMIN_AUTHOR_EMAILS is not set/);
++    expect(assert).not.toThrow(/INSTITUTION_DOMAIN/);
++    expect(assert).toThrow(/PROGRAM_ORIGIN_PATTERN is set/);
++    expect(assert).toThrow(/`\.env` file in the repo root/);
++    expect(assert).toThrow(/config\/instance\.env\.example/);
++  });
++
++  it('refuses to start when the checkout origin is not the placeholder', async () => {
++    fresh({ checkout: repoWithOrigin('kb', REAL_ORIGIN), domain: REAL_DOMAIN });
++    const assert = await check();
++    expect(assert).toThrow(/ADMIN_AUTHOR_EMAILS is not set/);
++    expect(assert).toThrow(/origin of the program repo checkout/);
++  });
++
++  it('refuses to start when a hand-made read mirror has a real origin', async () => {
++    fresh({
++      checkout: repoWithOrigin('kb', PLACEHOLDER_ORIGIN),
++      mirror: path.join(repoWithOrigin('mirror', REAL_ORIGIN), '.git'),
++      domain: REAL_DOMAIN,
++    });
++    expect(await check()).toThrow(/origin of the read mirror/);
++  });
++
++  it('does not put the origin URL in the error', async () => {
++    const origin = 'https://x-token:hunter2@git.example.edu/team/kb.git';
++    fresh({ checkout: repoWithOrigin('kb', origin), domain: REAL_DOMAIN });
++    const assert = await check();
++    expect(assert).toThrow(/ADMIN_AUTHOR_EMAILS is not set/);
++    expect(assert).not.toThrow(/hunter2|git\.example\.edu/);
++  });
++});
++
++describe('real program repo, ADMIN_AUTHOR_EMAILS holds a placeholder', () => {
++  it.each([
++    'avery@example.edu',
++    'Avery.Personal@gmail.com',
++    '1000001+example-org@users.noreply.github.com',
++  ])('refuses to start with %s in the list', async (placeholder) => {
++    fresh({
++      pattern: REAL_PATTERN,
++      domain: REAL_DOMAIN,
++      admins: `admin@example.org, ${placeholder}`,
++    });
++    const assert = await check();
++    expect(assert).toThrow(/ADMIN_AUTHOR_EMAILS contains a placeholder/);
++    expect(assert).toThrow(placeholder.toLowerCase());
++  });
++});
++
++describe('real program repo, ADMIN_AUTHOR_EMAILS holds real identities', () => {
++  it('starts, and the admin check uses the setting', async () => {
++    fresh({
++      checkout: repoWithOrigin('kb', REAL_ORIGIN),
++      admins: 'Admin@Example.org,42+admin@users.noreply.github.com',
++      domain: REAL_DOMAIN,
++    });
++    expect(await check()).not.toThrow();
++    const { isAdminAuthorEmail } = await import('./governance-protection.js');
++    expect(isAdminAuthorEmail('admin@example.org')).toBe(true);
++    expect(isAdminAuthorEmail('42+admin@users.noreply.github.com')).toBe(true);
++    expect(isAdminAuthorEmail('avery@example.edu')).toBe(false);
++    expect(isAdminAuthorEmail('avery.personal@gmail.com')).toBe(false);
++    expect(
++      isAdminAuthorEmail('1000001+example-org@users.noreply.github.com'),
++    ).toBe(false);
++  });
++});
++
++describe('real program repo, INSTITUTION_DOMAIN unset', () => {
++  it('refuses to start when PROGRAM_ORIGIN_PATTERN is set', async () => {
++    fresh({ pattern: REAL_PATTERN, admins: REAL_ADMINS });
++    const assert = await check();
++    expect(assert).toThrow(/INSTITUTION_DOMAIN is not set/);
++    expect(assert).not.toThrow(/ADMIN_AUTHOR_EMAILS/);
++    expect(assert).toThrow(/PROGRAM_ORIGIN_PATTERN is set/);
++    expect(assert).toThrow(/`\.env` file in the repo root/);
++    expect(assert).toThrow(/config\/instance\.env\.example/);
++  });
++
++  it('refuses to start when the checkout origin is not the placeholder', async () => {
++    fresh({ checkout: repoWithOrigin('kb', REAL_ORIGIN), admins: REAL_ADMINS });
++    const assert = await check();
++    expect(assert).toThrow(/INSTITUTION_DOMAIN is not set/);
++    expect(assert).toThrow(/origin of the program repo checkout/);
++  });
++
++  it('refuses to start when a hand-made read mirror has a real origin', async () => {
++    fresh({
++      checkout: repoWithOrigin('kb', PLACEHOLDER_ORIGIN),
++      mirror: path.join(repoWithOrigin('mirror', REAL_ORIGIN), '.git'),
++      admins: REAL_ADMINS,
++    });
++    const assert = await check();
++    expect(assert).toThrow(/INSTITUTION_DOMAIN is not set/);
++    expect(assert).toThrow(/origin of the read mirror/);
++  });
++
++  it('does not put the origin URL in the error', async () => {
++    const origin = 'https://x-token:hunter2@git.example.edu/team/kb.git';
++    fresh({ checkout: repoWithOrigin('kb', origin), admins: REAL_ADMINS });
++    const assert = await check();
++    expect(assert).toThrow(/INSTITUTION_DOMAIN is not set/);
++    expect(assert).not.toThrow(/hunter2|git\.example\.edu/);
++  });
++});
++
++describe('real program repo, INSTITUTION_DOMAIN is the placeholder', () => {
++  it.each(['example.edu', 'Example.EDU'])(
++    'refuses to start with %s',
++    async (placeholder) => {
++      fresh({
++        pattern: REAL_PATTERN,
++        admins: REAL_ADMINS,
++        domain: placeholder,
++      });
++      const assert = await check();
++      expect(assert).toThrow(/INSTITUTION_DOMAIN is the placeholder domain/);
++      expect(assert).toThrow('"example.edu"');
++      expect(assert).not.toThrow(/ADMIN_AUTHOR_EMAILS/);
++    },
++  );
++});
++
++describe('real program repo, INSTITUTION_DOMAIN holds a real domain', () => {
++  it('starts, and the setting is the domain in use', async () => {
++    fresh({
++      checkout: repoWithOrigin('kb', REAL_ORIGIN),
++      admins: REAL_ADMINS,
++      domain: 'Uni.Test',
++    });
++    expect(await check()).not.toThrow();
++    const { INSTITUTION_DOMAIN } = await import('./instance-identity.js');
++    expect(INSTITUTION_DOMAIN).toBe('uni.test');
++  });
++});
++
++describe('real program repo, both settings missing', () => {
++  it('names both settings in one error', async () => {
++    fresh({ pattern: REAL_PATTERN });
++    const assert = await check();
++    expect(assert).toThrow(/INSTITUTION_DOMAIN is not set/);
++    expect(assert).toThrow(/ADMIN_AUTHOR_EMAILS is not set/);
++  });
++});
++
++describe('real program repo, the other identity settings', () => {
++  it('starts with BOT_MAIL_DOMAIN and INTAKE_GIT_AUTHOR_EMAIL unset', async () => {
++    fresh({ pattern: REAL_PATTERN, admins: REAL_ADMINS, domain: REAL_DOMAIN });
++    vi.stubEnv('BOT_MAIL_DOMAIN', '');
++    vi.stubEnv('INTAKE_GIT_AUTHOR_EMAIL', '');
++    expect(await check()).not.toThrow();
++  });
++});
++
++describe('placeholder program repo', () => {
++  it.each([
++    ['no checkout and no mirror', () => ({})],
++    [
++      'a checkout of the placeholder repo (ssh)',
++      () => ({ checkout: repoWithOrigin('kb', PLACEHOLDER_ORIGIN) }),
++    ],
++    [
++      'a checkout of the placeholder repo (https with a token)',
++      () => ({
++        checkout: repoWithOrigin(
++          'kb',
++          'https://x-token:abc@github.com/example-org/program-repo',
++        ),
++      }),
++    ],
++    [
++      'a checkout with no origin',
++      () => ({ checkout: repoWithOrigin('kb', null) }),
++    ],
++  ])(
++    'starts with ADMIN_AUTHOR_EMAILS and INSTITUTION_DOMAIN unset: %s',
++    async (_name, env: () => Parameters<typeof fresh>[0]) => {
++      fresh(env());
++      expect(await check()).not.toThrow();
++      const { isAdminAuthorEmail } = await import('./governance-protection.js');
++      expect(isAdminAuthorEmail('avery@example.edu')).toBe(true);
++      const { INSTITUTION_DOMAIN } = await import('./instance-identity.js');
++      expect(INSTITUTION_DOMAIN).toBe('example.edu');
++    },
++  );
++
++  it('starts with a placeholder address in the setting', async () => {
++    fresh({ admins: 'avery@example.edu' });
++    expect(await check()).not.toThrow();
++  });
++
++  it('starts with INSTITUTION_DOMAIN set to the placeholder domain', async () => {
++    fresh({ domain: 'example.edu' });
++    expect(await check()).not.toThrow();
++  });
++});
++
++describe('main()', () => {
++  it('runs the check before anything else starts', () => {
++    const source = fs.readFileSync(
++      new URL('./index.ts', import.meta.url),
++      'utf-8',
++    );
++    const body = source.slice(source.indexOf('async function main()'));
++    const firstStatement = body.slice(body.indexOf('{') + 1).trim();
++    expect(firstStatement.replace(/^(\/\/[^\n]*\n\s*)+/, '')).toMatch(
++      /^assertIdentitySettingsConfigured\(\);/,
++    );
++  });
++});
+diff --git a/src/identity-settings-check.ts b/src/identity-settings-check.ts
+new file mode 100644
+index 0000000..eae308c
+--- /dev/null
++++ b/src/identity-settings-check.ts
+@@ -0,0 +1,66 @@
++import {
++  ADMIN_AUTHOR_EMAILS,
++  ADMIN_AUTHOR_EMAILS_IS_SET,
++  INSTITUTION_DOMAIN,
++  INSTITUTION_DOMAIN_IS_SET,
++  PLACEHOLDER_ADMIN_AUTHOR_EMAILS,
++  PLACEHOLDER_INSTITUTION_DOMAIN,
++} from './instance-identity.js';
++import { realProgramRepoReason } from './repo-reader.js';
++
++const WHERE =
++  'Set it in the `.env` file in the repo root (or in the process ' +
++  'environment). See config/instance.env.example.';
++
++const ADMIN_VALUE =
++  "Set ADMIN_AUTHOR_EMAILS to the admin's real git author emails, " +
++  'separated by commas.';
++
++const DOMAIN_VALUE =
++  "Set INSTITUTION_DOMAIN to the institution's real mail domain.";
++
++/**
++ * Startup check, called first in main(). With a real program repo two
++ * identity settings must be the deployment's own:
++ *
++ *  - ADMIN_AUTHOR_EMAILS: the shipped placeholders belong to nobody, and a
++ *    git author address is not verified, so a commit that carries one would
++ *    pass the protected-file check (G11, G39).
++ *  - INSTITUTION_DOMAIN: with the placeholder, no blocked colleague gets
++ *    the courtesy reply (G17) and no route named in the allowlist resolves
++ *    to an approver.
++ *
++ * Every problem found is named in one error. With the placeholder repo (a
++ * fresh clone, the tests) this does nothing.
++ */
++export function assertIdentitySettingsConfigured(): void {
++  const reason = realProgramRepoReason();
++  if (!reason) return;
++
++  const problems: string[] = [];
++  if (!INSTITUTION_DOMAIN_IS_SET) {
++    problems.push(`INSTITUTION_DOMAIN is not set. ${DOMAIN_VALUE}`);
++  } else if (INSTITUTION_DOMAIN === PLACEHOLDER_INSTITUTION_DOMAIN) {
++    problems.push(
++      `INSTITUTION_DOMAIN is the placeholder domain ("${PLACEHOLDER_INSTITUTION_DOMAIN}"). ${DOMAIN_VALUE}`,
++    );
++  }
++  if (!ADMIN_AUTHOR_EMAILS_IS_SET) {
++    problems.push(`ADMIN_AUTHOR_EMAILS is not set. ${ADMIN_VALUE}`);
++  } else {
++    const placeholders = ADMIN_AUTHOR_EMAILS.filter((email) =>
++      PLACEHOLDER_ADMIN_AUTHOR_EMAILS.includes(email),
++    );
++    if (placeholders.length > 0) {
++      problems.push(
++        `ADMIN_AUTHOR_EMAILS contains a placeholder address ("${placeholders.join('", "')}"). Remove it. ${ADMIN_VALUE}`,
++      );
++    }
++  }
++  if (problems.length === 0) return;
++
++  throw new Error(
++    `A real program repo is configured (${reason}), and the host will not ` +
++      `start with placeholder identity settings. ${problems.join(' ')} ${WHERE}`,
++  );
++}
+diff --git a/src/index.ts b/src/index.ts
+index 85ebde3..6ff42b7 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -13,6 +13,7 @@ import {
+   TIMEZONE,
+   DATA_DIR,
+ } from './config.js';
++import { assertIdentitySettingsConfigured } from './identity-settings-check.js';
+ import { startCredentialProxy } from './credential-proxy.js';
+ import './channels/index.js';
+ import {
+@@ -872,6 +873,8 @@ function ensureContainerSystemRunning(): void {
+ }
+ 
+ async function main(): Promise<void> {
++  // Before anything starts: a real program repo needs real identity settings.
++  assertIdentitySettingsConfigured();
+   ensureContainerSystemRunning();
+   initDatabase();
+   logger.info('Database initialized');
+diff --git a/src/instance-identity.ts b/src/instance-identity.ts
+index 8a90df9..0535d08 100644
+--- a/src/instance-identity.ts
++++ b/src/instance-identity.ts
+@@ -5,6 +5,8 @@ import { readEnvFile } from './env.js';
+  * identities that code compares against. Each is read from `.env` or the
+  * process environment (the process environment wins, as in config.ts) and
+  * defaults to the repo's placeholder. Values are fixed at import.
++ * INSTITUTION_DOMAIN and ADMIN_AUTHOR_EMAILS have no usable default on a
++ * real program repo; see identity-settings-check.ts.
+  *
+  * A value that is set but malformed throws at startup: these settings feed
+  * access decisions, and a silent fallback to a placeholder would be worse
+@@ -62,16 +64,24 @@ function emailListSetting(key: string, fallback: string[]): string[] {
+   return items;
+ }
+ 
++/** The institution domain this repo ships with. It is nobody's. */
++export const PLACEHOLDER_INSTITUTION_DOMAIN = 'example.edu';
++
+ /**
+  * The institution's mail domain. A blocked sender on this domain (or a
+  * subdomain) gets the one-time "access closed" reply, and a route named in
+- * an allowlist row resolves to `<name>@<this domain>`.
++ * an allowlist row resolves to `<name>@<this domain>`. With a real program
++ * repo the setting is required and must not be the placeholder:
++ * identity-settings-check.ts stops the host at startup.
+  */
+ export const INSTITUTION_DOMAIN = domainSetting(
+   'INSTITUTION_DOMAIN',
+-  'example.edu',
++  PLACEHOLDER_INSTITUTION_DOMAIN,
+ );
+ 
++/** False when INSTITUTION_DOMAIN fell back to the placeholder. */
++export const INSTITUTION_DOMAIN_IS_SET = raw('INSTITUTION_DOMAIN') !== '';
++
+ /**
+  * The bot's own mail domain: the default bot mailbox, the Message-ID
+  * domain of outbound mail and the bot's git author address.
+@@ -94,16 +104,27 @@ export const INTAKE_GIT_AUTHOR_EMAIL = emailSetting(
+   'email-inbox@example.org',
+ );
+ 
++/**
++ * The admin identities this repo ships with. They belong to nobody, and a
++ * git author address is not verified, so on a real program repo anyone with
++ * push access could commit as one of them.
++ */
++export const PLACEHOLDER_ADMIN_AUTHOR_EMAILS: readonly string[] = [
++  'avery.personal@gmail.com',
++  'avery@example.edu',
++  '1000001+example-org@users.noreply.github.com',
++];
++
+ /**
+  * Git author identities allowed to change protected governance files.
+  * Setting ADMIN_AUTHOR_EMAILS replaces the placeholder list; it does not
+- * add to it.
++ * add to it. With a real program repo the setting is required and must not
++ * name a placeholder: identity-settings-check.ts stops the host at startup.
+  */
+ export const ADMIN_AUTHOR_EMAILS: readonly string[] = emailListSetting(
+   'ADMIN_AUTHOR_EMAILS',
+-  [
+-    'avery.personal@gmail.com',
+-    'avery@example.edu',
+-    '1000001+example-org@users.noreply.github.com',
+-  ],
++  [...PLACEHOLDER_ADMIN_AUTHOR_EMAILS],
+ );
++
++/** False when ADMIN_AUTHOR_EMAILS fell back to the placeholder list. */
++export const ADMIN_AUTHOR_EMAILS_IS_SET = raw('ADMIN_AUTHOR_EMAILS') !== '';
+diff --git a/src/repo-reader.ts b/src/repo-reader.ts
+index e77e480..a6c9c5f 100644
+--- a/src/repo-reader.ts
++++ b/src/repo-reader.ts
+@@ -39,16 +39,8 @@ interface PathCommitAuthor {
+   email: string;
+ }
+ 
+-/**
+- * The mirror bootstrap takes its clone URL from the live checkout, whose
+- * .git/config is container-writable, and runs the clone as root. Accept only
+- * the real repository (any credential prefix), so a planted value cannot pick
+- * the source or smuggle a git option or ext:: transport.
+- * PROGRAM_ORIGIN_PATTERN overrides the pattern (tests).
+- */
+-export function isExpectedOrigin(url: string): boolean {
+-  const pattern = process.env.PROGRAM_ORIGIN_PATTERN;
+-  if (pattern) return !url.startsWith('-') && new RegExp(pattern).test(url);
++/** True for the origin of the placeholder repo, example-org/program-repo. */
++function isPlaceholderOrigin(url: string): boolean {
+   if (/^git@github\.com:example-org\/program-repo(\.git)?$/.test(url))
+     return true;
+   // Parse, don't pattern-match: "https://evil?@github.com/..." must not pass.
+@@ -71,6 +63,80 @@ export function isExpectedOrigin(url: string): boolean {
+   );
+ }
+ 
++/**
++ * The mirror bootstrap takes its clone URL from the live checkout, whose
++ * .git/config is container-writable, and runs the clone as root. Accept only
++ * the real repository (any credential prefix), so a planted value cannot pick
++ * the source or smuggle a git option or ext:: transport.
++ * PROGRAM_ORIGIN_PATTERN overrides the pattern (tests).
++ */
++export function isExpectedOrigin(url: string): boolean {
++  const pattern = process.env.PROGRAM_ORIGIN_PATTERN;
++  if (pattern) return !url.startsWith('-') && new RegExp(pattern).test(url);
++  return isPlaceholderOrigin(url);
++}
++
++function readMirrorPath(): string {
++  return process.env.PROGRAM_READ_MIRROR || '/srv/repos/program-repo-read.git';
++}
++
++/** Origin URL of the live checkout, read as the checkout owner. */
++function checkoutOriginUrl(): string {
++  // As the checkout owner, never root: the checkout's .git/config is
++  // container-writable (see program-repo.ts).
++  return execFileSync('git', ['remote', 'get-url', 'origin'], {
++    ...checkoutGitOptions(),
++    cwd: getProgramRepoPath(),
++    encoding: 'utf-8',
++    timeout: 10_000,
++    stdio: ['ignore', 'pipe', 'pipe'],
++  }).trim();
++}
++
++/** Origin URL of the read mirror (host-owned, so read as the host user). */
++function mirrorOriginUrl(): string {
++  return execFileSync(
++    'git',
++    ['--git-dir', readMirrorPath(), 'config', '--get', 'remote.origin.url'],
++    { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] },
++  ).trim();
++}
++
++/**
++ * Why this host counts as serving a real program repo, or null when it
++ * serves the placeholder (a fresh clone before adaptation, the tests).
++ *
++ * Real means either of:
++ *  - PROGRAM_ORIGIN_PATTERN is set: the operator named their own origin;
++ *  - the read mirror or the live checkout has an origin that is not the
++ *    placeholder repo's. This covers a mirror that was cloned by hand, which
++ *    needs no PROGRAM_ORIGIN_PATTERN.
++ * A repo that is missing or has no origin does not count.
++ *
++ * The reason never includes the URL, which can carry a token.
++ */
++export function realProgramRepoReason(): string | null {
++  if (process.env.PROGRAM_ORIGIN_PATTERN) {
++    return 'PROGRAM_ORIGIN_PATTERN is set';
++  }
++  const sources: Array<[string, () => string]> = [
++    ['read mirror', mirrorOriginUrl],
++    ['program repo checkout', checkoutOriginUrl],
++  ];
++  for (const [name, read] of sources) {
++    let url: string;
++    try {
++      url = read();
++    } catch {
++      continue;
++    }
++    if (url && !isPlaceholderOrigin(url)) {
++      return `the origin of the ${name} is not the placeholder example-org/program-repo`;
++    }
++  }
++  return null;
++}
++
+ export class RepoReader {
+   private sha: string | null = null;
+   private allowlistSha: string | null = null;
+@@ -614,9 +680,7 @@ let singleton: RepoReader | null = null;
+ /** Process-wide reader over the program-repo read mirror. */
+ export function getRepoReader(): RepoReader {
+   if (!singleton) {
+-    const mirror =
+-      process.env.PROGRAM_READ_MIRROR || '/srv/repos/program-repo-read.git';
+-    singleton = new RepoReader(mirror);
++    singleton = new RepoReader(readMirrorPath());
+     singleton.init();
+   }
+   return singleton;

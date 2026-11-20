@@ -130,7 +130,7 @@ and say so.
     as ordinary mail from the operator.
   - Weekly outreach summaries (`OUTREACH_SUMMARY_JID`) do not follow this setting.
   The bot logs an error at startup for each setting an enabled route lacks. Send a
-  test alert on each enabled route before go-live ("First start", step 7).
+  test alert on each enabled route before go-live ("First start", step 8).
 - **Model endpoint must be at the root of its host.** The credential proxy
   (`src/credential-proxy.ts`) uses only the host and port of `ANTHROPIC_BASE_URL`
   and drops any path. `https://gateway.example.edu` works;

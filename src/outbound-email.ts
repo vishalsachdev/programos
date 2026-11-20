@@ -28,6 +28,7 @@ import {
 } from './channels/webhook-allowlist.js';
 import { stripMarkdown } from './email-format.js';
 import { readEnvFile } from './env.js';
+import { BOT_MAIL_DOMAIN } from './instance-identity.js';
 import { addressesMissingFromLastSnapshot } from './allowlist-snapshot.js';
 import { recordDeliveryNote } from './delivery-notes.js';
 import { recordEmailSent } from './email-delivery-check.js';
@@ -698,7 +699,7 @@ async function executeSendOutboundEmailResult(
     .update(opts.deliveryId)
     .digest('hex')
     .slice(0, 32);
-  const msgId = `<outreach-${messageIdToken}@example.org>`;
+  const msgId = `<outreach-${messageIdToken}@${BOT_MAIL_DOMAIN}>`;
   const plainText = stripMarkdown(gatedBody);
 
   const providerDeadlineMs = getProviderTimeoutMs();
@@ -1325,7 +1326,7 @@ function ensureQueueStarted(): void {
   outbox.compact(getOutboxRetentionMs(), now);
   lastCompactionAt = now;
 
-  for (const lane of ['transactional', 'bulk'] as OutboxLane[]) {
+  for (const lane of ['transactional', 'bulk', 'alert'] as OutboxLane[]) {
     enqueueNextPending(lane, outbox);
   }
 }

@@ -14,11 +14,32 @@ export interface SenderAllowlistConfig {
   logDenied: boolean;
 }
 
-const DEFAULT_CONFIG: SenderAllowlistConfig = {
-  default: { allow: '*', mode: 'trigger' },
+// Fail closed: with no usable config file, no sender may trigger the agent.
+// Mode stays 'trigger' so messages are still stored, only not acted on.
+const DENY_ALL_CONFIG: SenderAllowlistConfig = {
+  default: { allow: [], mode: 'trigger' },
   chats: {},
   logDenied: true,
 };
+
+// The loader runs for every message, so each path is reported once per
+// failure reason; a successful load clears it and a later failure logs again.
+const reportedFailures = new Map<string, string>();
+
+function denyAll(
+  filePath: string,
+  reason: string,
+  err?: unknown,
+): SenderAllowlistConfig {
+  if (reportedFailures.get(filePath) !== reason) {
+    reportedFailures.set(filePath, reason);
+    logger.error(
+      { path: filePath, reason, ...(err === undefined ? {} : { err }) },
+      'sender-allowlist: no usable config file at this path; chat triggers are denied for every sender until it is fixed (example: config-examples/sender-allowlist.json)',
+    );
+  }
+  return DENY_ALL_CONFIG;
+}
 
 function isValidEntry(entry: unknown): entry is ChatAllowlistEntry {
   if (!entry || typeof entry !== 'object') return false;
@@ -39,31 +60,29 @@ export function loadSenderAllowlist(
   try {
     raw = fs.readFileSync(filePath, 'utf-8');
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return DEFAULT_CONFIG;
-    logger.warn(
-      { err, path: filePath },
-      'sender-allowlist: cannot read config',
-    );
-    return DEFAULT_CONFIG;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return denyAll(filePath, 'file is missing');
+    }
+    return denyAll(filePath, 'file cannot be read', err);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    logger.warn({ path: filePath }, 'sender-allowlist: invalid JSON');
-    return DEFAULT_CONFIG;
+    return denyAll(filePath, 'invalid JSON');
   }
 
+  if (!parsed || typeof parsed !== 'object') {
+    return denyAll(filePath, 'invalid or missing default entry');
+  }
   const obj = parsed as Record<string, unknown>;
 
   if (!isValidEntry(obj.default)) {
-    logger.warn(
-      { path: filePath },
-      'sender-allowlist: invalid or missing default entry',
-    );
-    return DEFAULT_CONFIG;
+    return denyAll(filePath, 'invalid or missing default entry');
   }
+
+  reportedFailures.delete(filePath);
 
   const chats: Record<string, ChatAllowlistEntry> = {};
   if (obj.chats && typeof obj.chats === 'object') {

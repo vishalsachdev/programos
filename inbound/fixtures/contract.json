@@ -1,0 +1,17 @@
+{
+  "_comment": "Shared by inbound/test and the host test src/channels/webhook-inbound-intake.test.ts. The inbound tests prove the worker produces the *.expected.* files from the *.eml files with these inputs; the host test feeds those files to the real webhook handler.",
+  "receivedAt": "2026-11-19T15:00:00.000Z",
+  "inboxDir": "discussions/raw",
+  "envelope": {
+    "from": "bounce+abc123@mail.example.edu",
+    "to": "program@example.org"
+  },
+  "gitAuthorName": "Email Inbox",
+  "gitAuthorEmail": "email-inbox@example.org",
+  "cases": [
+    "plain-question",
+    "multipart-attachment",
+    "routed-approval",
+    "auto-reply"
+  ]
+}

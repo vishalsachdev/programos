@@ -104,7 +104,7 @@ As shipped, the agent reaches the model with a Claude subscription token or an A
 - A file version records `lastModifiedBy`, `lastModifiedDateTime` and size; "OneDrive doesn't preserve the complete metadata for previous versions of a file." No message, and nothing ties changes to several files together. [List versions](https://learn.microsoft.com/en-us/graph/api/driveitem-list-versions)
 - Version history can be trimmed automatically or by count and age, and trimmed versions are deleted permanently. [Version history limits](https://learn.microsoft.com/en-us/sharepoint/document-library-version-history-limits)
 
-**The cost, plainly.** Instead of git, a SharePoint store loses: one commit for one logical change across files; a message per change; an author check the host can trust (version authors are whoever's token wrote); the host-owned repository and its fetch check; the push check on protected paths; history that is not trimmed by a site setting. Each of those is a guarantee in `SPEC.md`, section 11, and none has a drop-in replacement in the pages read. Rebuilding them on SharePoint is a new storage layer, the audit log, the governance checks and the routed-approval trust rule: months of work, not a setting.
+**The cost, plainly.** Instead of git, a SharePoint store loses: one commit for one logical change across files; a message per change; an author check the host can trust (version authors are whoever's token wrote); the host-owned repository and its fetch check; the push check on protected paths; history that is not trimmed by a site setting. Each of those is a guarantee in `SPEC.md`, section 11, and none has a drop-in replacement in the pages read. Rebuilding them on SharePoint is a new storage layer, the audit log, the governance checks and the routed-approval trust rule: a rebuild, not a setting. How long it would take was not estimated.
 
 Beside git, as a read-only source, SharePoint costs little: sync a library to a folder on the host and mount it read-only (`content-sources.md`). The agent can read it and cannot change it; facts it records still go to git.
 
@@ -150,7 +150,7 @@ Until step 4 is approved, a unit can run steps 2 and 3 with the existing `inboun
 | Copilot Studio replacing parts of the engine | Drops the delivery gate, the host-written audit log, the allowlist and the routed-approval check |
 | Another approved model (not Claude) with a new agent runner | The agent, its skills and the gate reviewer run on the Claude agent SDK; a new runner is a rewrite of the container side. Claude on Foundry serves the same API |
 | Staff questions in a Teams channel | A new channel with its own identity mapping; Graph posts as an application only for migration; email already carries the guarantees |
-| SharePoint as the knowledge-base store | Loses atomic commits, trusted authors, the host-owned repository and the protected-path checks; months of work |
+| SharePoint as the knowledge-base store | Loses atomic commits, trusted authors, the host-owned repository and the protected-path checks; each would have to be rebuilt, and how long that takes was not estimated |
 | Keep Resend and Cloudflare | Works today, but an institutional sending domain usually cannot be set up there (issue 9), and the accounts are not tenant-held |
 
 ### Follow-up issues

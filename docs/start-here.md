@@ -51,6 +51,7 @@ For **Try it**:
 - a laptop, and a coding agent on it. The laptop must be able to run two free programs, Docker and Node; your agent checks for them and tells you how to install what is missing;
 - an account with an AI provider that serves Claude, such as Anthropic (check the provider's current pricing);
 - a Telegram account, and a bot token: a secret that Telegram gives you when you create a bot through its BotFather chat. Your agent walks you through it;
+- nothing to do for this one, but know it: every such secret ends up in one settings file on the machine, named `.env`. Your agent makes that file readable by the bot's own account only (`chmod 600 .env`) at the moment it creates it, and the bot complains in its log at each start if it is not. Never paste a secret into the chat with your agent;
 - an account at a git host such as GitHub, for a private place to keep the record.
 
 For a **Pilot**, also:

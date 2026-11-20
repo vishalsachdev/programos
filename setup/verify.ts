@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
 
 import { STORE_DIR } from '../src/config.js';
 import { assertSafeDbPath } from '../src/host-fs-safety.js';
-import { readEnvFile } from '../src/env.js';
+import { envFilePermissionProblem, readEnvFile } from '../src/env.js';
 import { logger } from '../src/logger.js';
 import {
   getPlatform,
@@ -107,6 +107,14 @@ export async function run(_args: string[]): Promise<void> {
     }
   }
 
+  // .env holds every secret: say so when other users of the machine can read it.
+  const envPermissions = envFilePermissionProblem(envFile);
+  if (envPermissions)
+    logger.error(
+      { file: envPermissions.file, mode: envPermissions.mode },
+      `.env is readable by other users of this machine. Fix it with: ${envPermissions.fix}`,
+    );
+
   // 4. Check channel auth (detect configured channels by credentials)
   const envVars = readEnvFile([
     'TELEGRAM_BOT_TOKEN',
@@ -182,6 +190,11 @@ export async function run(_args: string[]): Promise<void> {
     SERVICE: service,
     CONTAINER_RUNTIME: containerRuntime,
     CREDENTIALS: credentials,
+    ENV_FILE: envPermissions
+      ? `readable by other users (mode ${envPermissions.mode})`
+      : fs.existsSync(envFile)
+        ? 'private'
+        : 'missing',
     CONFIGURED_CHANNELS: configuredChannels.join(','),
     CHANNEL_AUTH: JSON.stringify(channelAuth),
     REGISTERED_GROUPS: registeredGroups,

@@ -90,6 +90,8 @@ cp config-examples/mount-allowlist.json ~/.config/nanoclaw/mount-allowlist.json
 
 Fill the PART 1 lines in `.env`. Leave the PART 2 lines commented: `.env` does nothing for them. They go in the unit in step 6.
 
+`.env` holds every secret, so run the `chmod 600 .env` line right after the copy, and again if you ever recreate the file. At each start the host logs one error, with the file and this command, while the group or others can read it. Add `REQUIRE_PRIVATE_ENV_FILE=true` to `.env` to make the host refuse to start in that state (the default is to warn, so that an upgrade does not stop a running bot). Set `DELIVERY_STATE_SIGNING_KEY` to its own random value here too (`openssl rand -hex 32`); without it the host signs saved delivery state with another secret and warns at each start (`AGENTS.md`, choice 18).
+
 Checked: the allowlist copy, and that the file names `/srv/program-repo`.
 
 ### 4. The program repo and its deploy key (as `programos`)
@@ -152,11 +154,13 @@ TimeoutStopSec=450
 ```
 
 ```
+chmod 600 ~/.config/systemd/user/nanoclaw.service.d/override.conf
 cd ~/programos
 npx tsx setup/index.ts --step service
 systemctl --user status nanoclaw
 ```
 
+- **An HTTPS origin with a token.** The SSH deploy key of step 4 puts no secret in `override.conf`. If the origin must be an HTTPS address with a token (`Environment=PROGRAM_ORIGIN_URL=https://<token>@git.example.edu/your-org/your-program-repo.git`, with the HTTPS pattern from `config/instance.env.example`), `override.conf` is the one place that holds the token, which is why the first line above makes it readable by its owner only. The host stores the address without the token in `/srv/repos/program-repo-host/.git/config` and in the read mirror, puts the token on no git command line, and gives it to git through the git process's environment (`src/origin-credential.ts`; git 2.31 or later). It keeps `/srv/repos/program-repo-host` at mode 0700. Checked: against a closed local port and a local stand-in HTTPS server (the same `Authorization` header arrives as with the token stored in the config). Not run: a real git host.
 - The step builds the code, writes `~/.config/systemd/user/nanoclaw.service`, and enables and starts it. The unit is named `nanoclaw` because the code is a copy of that framework. Running the step again replaces the unit and keeps `override.conf`.
 - systemd drops an `Environment=` line that holds a backslash escape it does not know, such as `\.`. Write `[.]` for a dot. Write `%%` for a percent sign.
 - `TimeoutStopSec=450`: a clean stop can wait for git for up to 440 seconds (the sum is in `ecosystem.config.cjs`). The systemd default is 90 seconds.
@@ -205,6 +209,7 @@ Checked: not run as a sequence.
 2. Update as above, and run `./container/build.sh`: the image's runner changed.
 3. Add `Environment=PROGRAM_ORIGIN_URL=...` to `override.conf` (step 6). A host that already has the read mirror works without it, because the mirror's origin is used; set it anyway.
 4. Start the bot. At the first start it creates `/srv/repos/program-repo-host` and `/srv/repos/program-repo-host-export.git`. The history comes from the read mirror on the same disk, so this needs no network. It reads nothing from the old checkout's `.git/config`. The folder `/srv/repos` must be writable by the bot's user (step 1 made it so).
+   A host repository or read mirror made by a version from before the fix of issue 53 (2026-11-20) can hold an HTTPS token in its `.git/config`, in a folder every account on the machine could read. The first start with the fixed version repairs it and logs each step as a warning: `/srv/repos/program-repo-host` becomes mode 0700 and its `.git/config` 0600; a stored origin with a token is rewritten without it; the read mirror's stored origin is rewritten too when `PROGRAM_ORIGIN_URL` holds the same address. A mirror cloned by hand with a token, on a host with no `PROGRAM_ORIGIN_URL`, keeps the token (it has no other home): the host makes that config file private and logs how to move the token into `PROGRAM_ORIGIN_URL`. Nothing is deleted. If other people have accounts on the machine, treat the old token as exposed and replace it. Also run `chmod 600 ~/programos/.env ~/.config/systemd/user/nanoclaw.service.d/override.conf`.
 5. Run the check, as the bot's user, with the same PART 2 settings exported in the shell:
 
 ```

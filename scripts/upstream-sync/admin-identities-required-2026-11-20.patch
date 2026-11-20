@@ -361,7 +361,7 @@ index 0000000..eae308c
 +  );
 +}
 diff --git a/src/index.ts b/src/index.ts
-index 85ebde3..6ff42b7 100644
+index e3d2c2a..8f09844 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -13,6 +13,7 @@ import {
@@ -372,7 +372,7 @@ index 85ebde3..6ff42b7 100644
  import { startCredentialProxy } from './credential-proxy.js';
  import './channels/index.js';
  import {
-@@ -872,6 +873,8 @@ function ensureContainerSystemRunning(): void {
+@@ -873,6 +874,8 @@ function ensureContainerSystemRunning(): void {
  }
  
  async function main(): Promise<void> {

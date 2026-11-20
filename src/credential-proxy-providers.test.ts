@@ -311,6 +311,26 @@ describe('credential-proxy providers', () => {
     expect(selectProvider()).toBe('anthropic');
   });
 
+  // Review finding on PR 26: in OAuth mode each new container exchanges its
+  // token (2xx) before the model request. That 2xx must not reset the count.
+  it('feeds the breaker: a 2xx key exchange between failed model calls does not reset the count', async () => {
+    await start();
+    for (let i = 0; i < 3; i++) {
+      anthropicStatus = 200;
+      await send(proxyPort, '/api/oauth/claude_cli/create_api_key', {
+        'x-nanoclaw-proxy-token': anthropicToken,
+      });
+      await send(proxyPort, '/v1/models', {
+        'x-nanoclaw-proxy-token': anthropicToken,
+      });
+      anthropicStatus = 529;
+      await send(proxyPort, '/v1/messages', {
+        'x-nanoclaw-proxy-token': anthropicToken,
+      });
+    }
+    expect(selectProvider()).toBe('foundry');
+  });
+
   it('feeds the breaker: an unreachable upstream counts as a failure', async () => {
     await start({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:59997' });
     for (let i = 0; i < 3; i++)

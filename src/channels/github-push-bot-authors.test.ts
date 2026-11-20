@@ -84,6 +84,13 @@ describe('bot authors on the push webhook follow the settings', () => {
     expect(await push('program-bot@bot.test')).toBe(0);
   });
 
+  // Review finding on PR 28 (Bugbot): the settings are lower-cased, and the
+  // commit author was compared as git wrote it.
+  it('matches the intake and bot authors whatever the case of the commit author', async () => {
+    expect(await push('Intake@Mail.Test')).toBe(0);
+    expect(await push('Program-Bot@BOT.test')).toBe(0);
+  });
+
   it('logs the placeholder identities like any other author once replaced', async () => {
     expect(await push('email-inbox@example.org')).toBe(1);
     expect(await push('program-bot@example.org')).toBe(1);

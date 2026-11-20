@@ -109,6 +109,52 @@ describe('read mirror and a token in PROGRAM_ORIGIN_URL', () => {
     expect(reader.currentSha).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  // Review finding on PR 71 (Codex): the token was rotated in the setting
+  // before the first start of this version. The stored URL then differed from
+  // the setting, stayed in the config, and git kept fetching with the old one.
+  it('a stored origin with an older token than the setting is rewritten without it, and the fetch uses the new token', () => {
+    const OLD = ['an', 'older', 'revoked', 'token', '71'].join('-');
+    makeMirror(`https://${USER}:${OLD}@${ADDRESS}`);
+    const recorder = recordGitProcesses(kb.root);
+    const reader = new RepoReader(kb.mirror);
+
+    expect(reader.init()).toBe(true);
+    expect(mirrorConfig()).not.toContain(OLD);
+    expect(mirrorConfig()).not.toContain(TOKEN);
+    expect(mirrorConfig()).toContain(`url = ${BARE}`);
+    expect(logged.join('\n')).toMatch(/rewritten without it/);
+
+    reader.refresh({ force: true }); // fails at the closed port, as it must
+    const fetch = recorder
+      .argv()
+      .findIndex((a) => a.includes(' fetch origin '));
+    expect(fetch).toBeGreaterThanOrEqual(0);
+    expect(recorder.configKeys()[fetch]).toContain(`url.${FULL}.insteadOf`);
+    expect(recorder.argvText()).not.toContain(OLD);
+    expect(recorder.argvText()).not.toContain(TOKEN);
+    expect(logged.join('\n')).not.toContain(OLD);
+    expect(logged.join('\n')).not.toContain(TOKEN);
+  });
+
+  it('a stored token is kept when the setting names another address, or the same address with no credential', () => {
+    for (const setting of [
+      `https://${USER}:${TOKEN}@127.0.0.1:9/other/program-repo.git`,
+      BARE,
+    ]) {
+      fs.rmSync(kb.mirror, { recursive: true, force: true });
+      makeMirror(FULL);
+      vi.stubEnv('PROGRAM_ORIGIN_URL', setting);
+      const reader = new RepoReader(kb.mirror);
+      reader.init();
+      expect(mirrorConfig(), setting).toContain(TOKEN);
+      expect(fs.statSync(path.join(kb.mirror, 'config')).mode & 0o777).toBe(
+        0o600,
+      );
+    }
+    expect(logged.join('\n')).toMatch(/holds a credential in its origin URL/);
+    expect(logged.join('\n')).not.toContain(TOKEN);
+  });
+
   it('a stored token the setting does not have is kept (it has no other home), made private, and reported without being shown', () => {
     makeMirror(FULL);
     vi.stubEnv('PROGRAM_ORIGIN_URL', '');

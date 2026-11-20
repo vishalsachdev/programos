@@ -205,9 +205,10 @@ export class RepoReader {
 
   /**
    * A mirror made by an earlier version, or cloned by hand, can hold the
-   * origin's token in its config. When PROGRAM_ORIGIN_URL is that same URL,
-   * the stored one is rewritten without the credential (git then reads it
-   * from the setting). Otherwise the config is the credential's only home:
+   * origin's token in its config. When PROGRAM_ORIGIN_URL names the same
+   * address and holds a credential (the same one or a newer one), the stored
+   * URL is rewritten without the credential (git then reads it from the
+   * setting). Otherwise the config is the credential's only home:
    * it is left as it is, made readable by its owner only, and a warning
    * says how to move it. Never throws.
    */
@@ -232,7 +233,16 @@ export class RepoReader {
           'RepoReader: the read mirror config holds a credential and was readable by other users; now private to its owner',
         );
       }
-      if (stored === (process.env.PROGRAM_ORIGIN_URL || '')) {
+      // Same address, and the setting carries a credential of its own: the
+      // stored one is not needed. It may be an older token than the setting's
+      // (rotated before this start); git would go on using the stored one,
+      // because the rewrite from the setting matches the bare address only.
+      const setting = process.env.PROGRAM_ORIGIN_URL || '';
+      if (
+        hasOriginCredential(setting) &&
+        splitOriginCredential(stored).bare ===
+          splitOriginCredential(setting).bare
+      ) {
         execFileSync(
           'git',
           [
@@ -446,7 +456,11 @@ export class RepoReader {
       );
       const [sha, author] = history.trim().split('\n')[0].split('\0');
       // A delayed webhook must never select a later agent-authored version.
-      if (!/^[0-9a-f]{40}$/.test(sha) || author !== INTAKE_GIT_AUTHOR_EMAIL)
+      // The setting is stored in lower case; git keeps the author's case.
+      if (
+        !/^[0-9a-f]{40}$/.test(sha) ||
+        (author ?? '').toLowerCase() !== INTAKE_GIT_AUTHOR_EMAIL
+      )
         return null;
       const { stdout } = await execFileAsync(
         'git',

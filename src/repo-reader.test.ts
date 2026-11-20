@@ -128,8 +128,11 @@ describe('RepoReader', () => {
     };
     commitEml('configured.eml', 'intake@mail.test');
     commitEml('placeholder.eml', 'email-inbox@example.org');
+    // Review finding on PR 28 (Bugbot): the setting is lower-cased, git keeps
+    // the author's case, and the two were compared exactly.
+    commitEml('mixed-case.eml', 'Intake@Mail.Test');
 
-    vi.stubEnv('INTAKE_GIT_AUTHOR_EMAIL', 'intake@mail.test');
+    vi.stubEnv('INTAKE_GIT_AUTHOR_EMAIL', 'Intake@Mail.Test');
     vi.resetModules();
     const fresh = await import('./repo-reader.js');
     const r = new fresh.RepoReader(mirror);
@@ -138,6 +141,9 @@ describe('RepoReader', () => {
     expect(
       await r.readFileAtCreationAsync('discussions/raw/configured.eml'),
     ).toBe('From: configured.eml\n');
+    expect(
+      await r.readFileAtCreationAsync('discussions/raw/mixed-case.eml'),
+    ).toBe('From: mixed-case.eml\n');
     expect(
       await r.readFileAtCreationAsync('discussions/raw/placeholder.eml'),
     ).toBeNull();

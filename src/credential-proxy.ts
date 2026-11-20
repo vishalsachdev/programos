@@ -27,7 +27,11 @@ import {
   ModelProvider,
   recordProviderResult,
 } from './model-provider.js';
-import { checkProxyRequest, webToolsEnabled } from './web-tools.js';
+import {
+  checkProxyRequest,
+  classifyProxyPath,
+  webToolsEnabled,
+} from './web-tools.js';
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -282,7 +286,11 @@ export function startCredentialProxy(
             headers,
           } as RequestOptions,
           (upRes) => {
-            recordProviderResult(provider, { status: upRes.statusCode });
+            recordProviderResult(
+              provider,
+              { status: upRes.statusCode },
+              { modelCall: classifyProxyPath(requestPath) === 'model' },
+            );
             res.writeHead(upRes.statusCode!, upRes.headers);
             upRes.pipe(res);
           },

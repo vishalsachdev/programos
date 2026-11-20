@@ -20,14 +20,26 @@ const ORPHAN_CLEANUP_GRACE_MS = parseInt(
 /** Hostname containers use to reach the host machine. */
 export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
 
+let openNetworkBindHost: string | undefined;
+
 /**
- * Address the credential proxy binds to.
+ * Address the credential proxy binds to when the container network is open
+ * (and on Docker Desktop): CREDENTIAL_PROXY_HOST, else
  * Docker Desktop (macOS): 127.0.0.1 — the VM routes host.docker.internal to loopback.
  * Docker (Linux): bind to the docker0 bridge IP so only containers can reach it,
  *   including when the bridge is down and Node omits it from networkInterfaces().
+ *
+ * Worked out on first use, not when this file is loaded: the restricted
+ * network on Linux binds to its own gateway and never asks for docker0, so a
+ * host without docker0 (rootless Docker, no `ip` command) must still start
+ * there. Throws, as before, when the address is needed and cannot be found;
+ * it never falls back to all interfaces.
  */
-export const PROXY_BIND_HOST =
-  process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
+export function proxyBindHost(): string {
+  openNetworkBindHost ??=
+    process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
+  return openNetworkBindHost;
+}
 
 /**
  * True where Docker runs in a VM (Docker Desktop on macOS or WSL) and
@@ -218,7 +230,7 @@ export function warnIfWebhookReachableFromContainers(): void {
 /**
  * Address the credential proxy must bind to for the current network mode.
  * Restricted on Linux: the internal network's gateway address, the only host
- * address those containers can route to. Otherwise PROXY_BIND_HOST.
+ * address those containers can route to. Otherwise proxyBindHost().
  * CREDENTIAL_PROXY_HOST applies to the open network only (0.0.0.0 excepted).
  */
 export function resolveProxyBindHost(): string {
@@ -230,7 +242,7 @@ export function resolveProxyBindHost(): string {
         'the delivery gate or the audit log. Set CONTAINER_NETWORK=restricted ' +
         'unless you need the agent to use the network.',
     );
-    return PROXY_BIND_HOST;
+    return proxyBindHost();
   }
   warnIfWebhookReachableFromContainers();
   if (usesDockerDesktop()) {
@@ -239,7 +251,7 @@ export function resolveProxyBindHost(): string {
       'CONTAINER_NETWORK=restricted is not verified on Docker Desktop. ' +
         'Run scripts/check-container-egress.ts before you rely on it.',
     );
-    return PROXY_BIND_HOST;
+    return proxyBindHost();
   }
   const gateway = ensureRestrictedNetwork();
   logger.info(

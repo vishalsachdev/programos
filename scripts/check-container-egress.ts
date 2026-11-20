@@ -14,14 +14,16 @@
  *      address, and cannot resolve an outside name;
  *      open: reported, not failed;
  *   3. a commit made inside the container, in a mounted checkout, ends up on
- *      the remote after the host's push (a temporary local remote, so the
- *      real knowledge base is not touched);
- *   4. if PROGRAM_REPO is a checkout: the host credential can push there
- *      (`git push --dry-run`, which changes nothing).
+ *      the remote after the host takes it out and pushes it (src/host-repo.ts;
+ *      a temporary checkout, host repository and local remote, so the real
+ *      knowledge base is not touched).
+ *
+ * The host's credential against the real origin is checked by
+ * `npx tsx scripts/check-host-git-trust.ts --network`.
  *
  * Exit code 0 only if every check passes.
  */
-import { execFile, execFileSync, spawnSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import fs from 'fs';
 import http from 'http';
 import type { AddressInfo } from 'net';
@@ -36,8 +38,8 @@ import {
   hostGatewayArgs,
   resolveProxyBindHost,
 } from '../src/container-runtime.js';
-import { pushCheckoutAfterTurn } from '../src/checkout-sync.js';
-import { CHECKOUT_OWNER, checkoutGitOptions } from '../src/program-repo.js';
+import { syncHostRepo } from '../src/host-repo.js';
+import { CHECKOUT_OWNER } from '../src/program-repo.js';
 
 const OUTSIDE_NAME = process.env.CHECK_OUTSIDE_HOST || 'example.com';
 const OUTSIDE_ADDRESS = process.env.CHECK_OUTSIDE_ADDRESS || '1.1.1.1';
@@ -149,36 +151,39 @@ async function main(): Promise<void> {
 
   // 3. A commit made in the container reaches the remote through the host.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'egress-check-'));
+  const saved = new Map<string, string | undefined>(
+    [
+      'PROGRAM_REPO',
+      'PROGRAM_HOST_REPO',
+      'PROGRAM_READ_MIRROR',
+      'PROGRAM_ORIGIN_URL',
+      'PROGRAM_ORIGIN_PATTERN',
+    ].map((key) => [key, process.env[key]]),
+  );
   try {
     const remote = path.join(tmp, 'remote.git');
     const checkout = path.join(tmp, 'checkout');
-    const g = (cwd: string, ...args: string[]) =>
-      execFileSync(
-        'git',
-        [
-          '-c',
-          'user.name=check',
-          '-c',
-          'user.email=check@example.org',
-          ...args,
-        ],
-        { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-      ).trim();
-    g(tmp, 'init', '-q', '--bare', '-b', 'main', remote);
-    g(tmp, 'clone', '-q', remote, checkout);
-    g(checkout, 'checkout', '-q', '-b', 'main');
-    fs.writeFileSync(path.join(checkout, 'README.md'), 'check\n');
-    g(checkout, 'add', 'README.md');
-    g(checkout, 'commit', '-q', '-m', 'start');
-    g(checkout, 'push', '-q', '-u', 'origin', 'main');
     // The host's git runs as the checkout owner when the host is root.
     if (process.getuid?.() === 0)
       execFileSync('chown', [
-        '-R',
         `${CHECKOUT_OWNER.uid}:${CHECKOUT_OWNER.gid}`,
         tmp,
       ]);
     else fs.chmodSync(tmp, 0o755);
+    // The temporary remote and checkout are made by git inside a container,
+    // and read back the same way: this script starts no git on the host.
+    // The folder is mounted at its own path, so the paths mean the same on
+    // both sides.
+    const setup = await inContainer(
+      `cd ${tmp} && git init -q --bare -b main remote.git && ` +
+        'git clone -q remote.git checkout 2>/dev/null && cd checkout && ' +
+        'git checkout -q -b main && git config user.name check && ' +
+        'git config user.email check@example.org && echo check > README.md && ' +
+        'git add README.md && git commit -q -m start && git push -q -u origin main',
+      ['-v', `${tmp}:${tmp}`, '-e', 'HOME=/tmp'],
+    );
+    if (setup.code !== 0)
+      report(false, 'a temporary remote and checkout could be made', setup.out);
 
     const commit = await inContainer(
       'cd /workspace/extra/program-repo && ' +
@@ -194,46 +199,45 @@ async function main(): Promise<void> {
       commit.code === 0 ? '' : commit.out,
     );
 
-    process.env.PROGRAM_REPO = checkout;
-    const outcome = await pushCheckoutAfterTurn();
-    let onRemote = '';
-    try {
-      onRemote = execFileSync('git', ['rev-parse', 'main'], {
-        ...checkoutGitOptions(),
-        cwd: remote,
-        encoding: 'utf8',
-      }).trim();
-    } catch {
-      // reported below
-    }
+    // The host's own settings, pointed at the temporary repositories. The
+    // host runs no git in the checkout: it fetches the commit out of it.
+    Object.assign(process.env, {
+      PROGRAM_REPO: checkout,
+      PROGRAM_HOST_REPO: path.join(tmp, 'host'),
+      PROGRAM_READ_MIRROR: path.join(tmp, 'mirror.git'),
+      PROGRAM_ORIGIN_URL: remote,
+      PROGRAM_ORIGIN_PATTERN: `^${remote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+    });
+    const outcome = await syncHostRepo();
+    const onRemote = (
+      await inContainer(`git --git-dir ${remote} show main:from-container.md`, [
+        '-v',
+        `${tmp}:${tmp}:ro`,
+        '-e',
+        'HOME=/tmp',
+      ])
+    ).out;
     report(
-      outcome === 'pushed' && onRemote === sha,
-      'the host pushed the container commit to the remote',
-      outcome === 'pushed' ? '' : `push outcome: ${outcome}`,
+      outcome.pushed &&
+        outcome.imported >= 1 &&
+        onRemote === 'written in the container',
+      'the host took the container commit out of the checkout and pushed it to the remote',
+      outcome.pushed
+        ? ''
+        : `sync outcome: ${JSON.stringify({ ...outcome })}`.slice(0, 300),
     );
   } finally {
-    delete process.env.PROGRAM_REPO;
+    for (const key of saved.keys()) {
+      const value = saved.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 
-  // 4. The real checkout: can the host credential push? Changes nothing.
-  const real = checkoutGitOptions().cwd;
-  if (fs.existsSync(path.join(real, '.git'))) {
-    const r = spawnSync('git', ['push', '--dry-run'], {
-      ...checkoutGitOptions(),
-      encoding: 'utf8',
-    });
-    report(
-      r.status === 0,
-      `the host credential can push from ${real} (dry run)`,
-      r.status === 0 ? '' : `${r.stderr}`.trim().slice(0, 300),
-    );
-  } else {
-    console.log(
-      `SKIP  no checkout at ${real}: set PROGRAM_REPO to check the host credential against the real remote`,
-    );
-  }
-
+  console.log(
+    'NOTE  the host credential against the real origin: run npx tsx scripts/check-host-git-trust.ts --network',
+  );
   console.log(failed ? `\n${failed} check(s) failed.` : '\nAll checks passed.');
   process.exit(failed ? 1 : 0);
 }

@@ -3,7 +3,15 @@ import { promisify } from 'util';
 import path from 'path';
 
 import { logger } from './logger.js';
-import { checkoutGitOptions, getProgramRepoPath } from './program-repo.js';
+import {
+  checkoutOriginUrl,
+  isExpectedOrigin,
+  isPlaceholderOrigin,
+  mirrorOriginUrl,
+  readMirrorPath,
+} from './program-origin.js';
+
+export { isExpectedOrigin };
 import { isAdminAuthorEmail } from './governance-protection.js';
 import { INTAKE_GIT_AUTHOR_EMAIL } from './instance-identity.js';
 
@@ -39,75 +47,13 @@ interface PathCommitAuthor {
   email: string;
 }
 
-/** True for the origin of the placeholder repo, example-org/program-repo. */
-function isPlaceholderOrigin(url: string): boolean {
-  if (/^git@github\.com:example-org\/program-repo(\.git)?$/.test(url))
-    return true;
-  // Parse, don't pattern-match: "https://evil?@github.com/..." must not pass.
-  if (!/^https:\/\/[^\s]+$/.test(url)) return false;
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return false;
-  }
-  return (
-    u.protocol === 'https:' &&
-    u.hostname === 'github.com' &&
-    u.port === '' &&
-    u.search === '' &&
-    u.hash === '' &&
-    !url.includes('?') &&
-    !url.includes('#') &&
-    /^\/example-org\/program-repo(\.git)?$/.test(u.pathname)
-  );
-}
-
-/**
- * The mirror bootstrap takes its clone URL from the live checkout, whose
- * .git/config is container-writable, and runs the clone as root. Accept only
- * the real repository (any credential prefix), so a planted value cannot pick
- * the source or smuggle a git option or ext:: transport.
- * PROGRAM_ORIGIN_PATTERN overrides the pattern (tests).
- */
-export function isExpectedOrigin(url: string): boolean {
-  const pattern = process.env.PROGRAM_ORIGIN_PATTERN;
-  if (pattern) return !url.startsWith('-') && new RegExp(pattern).test(url);
-  return isPlaceholderOrigin(url);
-}
-
-function readMirrorPath(): string {
-  return process.env.PROGRAM_READ_MIRROR || '/srv/repos/program-repo-read.git';
-}
-
-/** Origin URL of the live checkout, read as the checkout owner. */
-function checkoutOriginUrl(): string {
-  // As the checkout owner, never root: the checkout's .git/config is
-  // container-writable (see program-repo.ts).
-  return execFileSync('git', ['remote', 'get-url', 'origin'], {
-    ...checkoutGitOptions(),
-    cwd: getProgramRepoPath(),
-    encoding: 'utf-8',
-    timeout: 10_000,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
-}
-
-/** Origin URL of the read mirror (host-owned, so read as the host user). */
-function mirrorOriginUrl(): string {
-  return execFileSync(
-    'git',
-    ['--git-dir', readMirrorPath(), 'config', '--get', 'remote.origin.url'],
-    { encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] },
-  ).trim();
-}
-
 /**
  * Why this host counts as serving a real program repo, or null when it
  * serves the placeholder (a fresh clone before adaptation, the tests).
  *
  * Real means either of:
- *  - PROGRAM_ORIGIN_PATTERN is set: the operator named their own origin;
+ *  - PROGRAM_ORIGIN_PATTERN or PROGRAM_ORIGIN_URL is set: the operator
+ *    named their own origin;
  *  - the read mirror or the live checkout has an origin that is not the
  *    placeholder repo's. This covers a mirror that was cloned by hand, which
  *    needs no PROGRAM_ORIGIN_PATTERN.
@@ -119,6 +65,8 @@ export function realProgramRepoReason(): string | null {
   if (process.env.PROGRAM_ORIGIN_PATTERN) {
     return 'PROGRAM_ORIGIN_PATTERN is set';
   }
+  const set = process.env.PROGRAM_ORIGIN_URL;
+  if (set && !isPlaceholderOrigin(set)) return 'PROGRAM_ORIGIN_URL is set';
   const sources: Array<[string, () => string]> = [
     ['read mirror', mirrorOriginUrl],
     ['program repo checkout', checkoutOriginUrl],
@@ -166,7 +114,7 @@ export class RepoReader {
       logger.error(
         { mirror: this.mirrorPath },
         'RepoReader: no readable SHA at init — repo reads will fail closed. ' +
-          'Create the mirror manually: git clone --mirror <origin-url> ' +
+          'Set PROGRAM_ORIGIN_URL, or create the mirror manually: git clone --mirror <origin-url> ' +
           this.mirrorPath,
       );
     }
@@ -174,34 +122,26 @@ export class RepoReader {
   }
 
   /**
-   * Bootstrap the bare mirror by cloning the live checkout's origin remote.
-   * Called only when init() finds no readable SHA — i.e. the mirror is
-   * missing or not a repo. Returns true if a clone succeeded.
+   * Bootstrap the bare mirror by cloning PROGRAM_ORIGIN_URL, the origin the
+   * operator set. The URL is not taken from the live checkout: its
+   * .git/config is container-writable. Called only when init() finds no
+   * readable SHA — i.e. the mirror is missing or not a repo. Returns true if
+   * a clone succeeded.
    */
   private bootstrapMirror(): boolean {
     // Read at call time (not via config import) so tests can stub it.
-    const livePath = getProgramRepoPath();
-    let originUrl: string;
-    try {
-      // As the checkout owner, never root: the checkout's .git/config is
-      // container-writable (see program-repo.ts).
-      originUrl = execFileSync('git', ['remote', 'get-url', 'origin'], {
-        ...checkoutGitOptions(),
-        cwd: livePath,
-        encoding: 'utf-8',
-        timeout: 10_000,
-      }).trim();
-    } catch (err: any) {
+    const originUrl = process.env.PROGRAM_ORIGIN_URL || '';
+    if (!originUrl) {
       logger.warn(
-        { err: err?.message, livePath, mirror: this.mirrorPath },
-        'RepoReader: mirror bootstrap skipped — could not resolve origin URL from live checkout',
+        { mirror: this.mirrorPath },
+        'RepoReader: mirror bootstrap skipped — PROGRAM_ORIGIN_URL is not set',
       );
       return false;
     }
     if (!isExpectedOrigin(originUrl)) {
       logger.warn(
         { mirror: this.mirrorPath },
-        'RepoReader: mirror bootstrap refused — unexpected origin URL in the live checkout',
+        'RepoReader: mirror bootstrap refused — PROGRAM_ORIGIN_URL is not the expected origin',
       );
       return false;
     }
@@ -215,7 +155,7 @@ export class RepoReader {
       );
       logger.info(
         { originUrl, mirror: this.mirrorPath },
-        'RepoReader: bootstrapped read mirror from live checkout origin',
+        'RepoReader: bootstrapped read mirror from PROGRAM_ORIGIN_URL',
       );
       return true;
     } catch (err: any) {

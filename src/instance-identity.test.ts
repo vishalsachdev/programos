@@ -106,12 +106,15 @@ describe('BOT_MAIL_DOMAIN', () => {
 
   it("sets the author of the host's audit-log commits", async () => {
     fresh({ BOT_MAIL_DOMAIN: 'bot.test' });
-    const { runAuditCommit } = await import('./audit-log.js');
-    const calls: string[][] = [];
-    await runAuditCommit(1, async (args) => {
-      calls.push(args);
-    });
-    expect(calls[1]).toContain('--author=Coordinator <program-bot@bot.test>');
+    // The commit is made by host-repo.ts now; author and committer both
+    // come from its git environment.
+    const { hostGitEnv } = await import('./host-repo.js');
+    for (const credentialed of [true, false]) {
+      const env = hostGitEnv({ credentialed });
+      expect(env.GIT_AUTHOR_EMAIL).toBe('program-bot@bot.test');
+      expect(env.GIT_COMMITTER_EMAIL).toBe('program-bot@bot.test');
+      expect(env.GIT_AUTHOR_NAME).toBe('Coordinator');
+    }
   });
 });
 

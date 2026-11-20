@@ -24,7 +24,7 @@ Start every task with a pull, so you work on the current state:
 cd /workspace/extra/program-repo && git pull
 ```
 
-**The host pulls and pushes for you.** The host pulls before your turn starts and pushes your commits when your turn ends. This container holds no git credential and may have no network route to the git host or to any website, so `git pull`, `git push`, `curl`, `agent-browser`, and web search or fetch can fail here. A failed `git pull` or `git push` is expected: do not retry it and do not treat it as a problem to report. Work on the local state and commit as usual. Say a change is "committed"; say it is "pushed" only if your own `git push` printed a success (G51). If a task needs a web page you cannot reach, say so instead of answering from memory.
+**The host pushes for you.** `git pull` here reads a read-only copy that the host keeps current, and the host pushes your commits when your turn ends. This container holds no git credential and may have no network route to the git host or to any website, so `git push`, `curl`, `agent-browser`, and web search or fetch can fail here. A failed `git push` is expected: do not retry it and do not treat it as a problem to report. Work on the local state and commit as usual. Say a change is "committed"; say it is "pushed" only if your own `git push` printed a success (G51). If a task needs a web page you cannot reach, say so instead of answering from memory.
 
 All file reads, edits, and writes must use paths under `/workspace/extra/program-repo/`.
 

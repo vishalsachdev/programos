@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CHECKOUT_OWNER,
-  checkoutGitOptions,
   getProgramRepoPath,
   readCheckoutOwner,
 } from './program-repo.js';
+import { getHostRepoPath, hostGitOptions } from './host-repo.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -24,21 +24,42 @@ describe('getProgramRepoPath', () => {
   });
 });
 
-describe('checkoutGitOptions', () => {
+// Host git no longer runs in the checkout (host-repo.ts). The same
+// guarantees are asserted on the options of the git that replaced it.
+describe('hostGitOptions', () => {
   it('runs as the checkout owner (uid 1000) when the host is root', () => {
-    const opts = checkoutGitOptions({ isRoot: true });
+    const opts = hostGitOptions({ credentialed: true }, { isRoot: true });
     expect(opts.uid).toBe(CHECKOUT_OWNER.uid);
     expect(opts.gid).toBe(CHECKOUT_OWNER.gid);
     expect(CHECKOUT_OWNER.uid).toBe(1000);
-    expect(opts.cwd).toBe(getProgramRepoPath());
+    // In the host-owned repository, never in the agent's checkout.
+    expect(opts.cwd).toBe(getHostRepoPath());
+    expect(opts.cwd).not.toBe(getProgramRepoPath());
     // Root's HOME (and its ~/.gitconfig) must not leak into the child.
     expect(opts.env.HOME).toBe('/home/ubuntu');
   });
 
   it('leaves uid/gid unset when not root (dev machines, tests)', () => {
-    const opts = checkoutGitOptions({ isRoot: false });
+    const opts = hostGitOptions({ credentialed: true }, { isRoot: false });
     expect(opts.uid).toBeUndefined();
     expect(opts.gid).toBeUndefined();
+  });
+
+  it('gives git no variable of the host process, and no user config unless it needs the credential', () => {
+    vi.stubEnv('GIT_DIR', '/tmp/elsewhere');
+    vi.stubEnv('GIT_INDEX_FILE', '/tmp/index');
+    vi.stubEnv('GIT_SSH_COMMAND', 'ssh -i /host/key');
+    const local = hostGitOptions({ credentialed: false }).env;
+    expect(local.GIT_DIR).toBeUndefined();
+    expect(local.GIT_INDEX_FILE).toBeUndefined();
+    expect(local.GIT_SSH_COMMAND).toBeUndefined();
+    expect(local.GIT_CONFIG_GLOBAL).toBe('/dev/null');
+    expect(local.GIT_CONFIG_NOSYSTEM).toBe('1');
+    expect(local.HOME).toBe('/nonexistent');
+    const remote = hostGitOptions({ credentialed: true }).env;
+    expect(remote.GIT_DIR).toBeUndefined();
+    expect(remote.GIT_SSH_COMMAND).toBe('ssh -i /host/key');
+    expect(remote.GIT_CONFIG_GLOBAL).toBeUndefined();
   });
 });
 
@@ -87,10 +108,13 @@ describe('readCheckoutOwner', () => {
     const repo = await import('./program-repo.js');
     const fsOps = await import('./checkout-fs.js');
 
-    const git = repo.checkoutGitOptions({ isRoot: true });
+    const hostRepo = await import('./host-repo.js');
+    const remote = { credentialed: true };
+
+    const git = hostRepo.hostGitOptions(remote, { isRoot: true });
     expect([git.uid, git.gid, git.env.HOME]).toEqual([1001, 1002, '/home/svc']);
     // Not root: no uid switch, but HOME still follows the setting.
-    const dev = repo.checkoutGitOptions({ isRoot: false });
+    const dev = hostRepo.hostGitOptions(remote, { isRoot: false });
     expect([dev.uid, dev.gid, dev.env.HOME]).toEqual([
       undefined,
       undefined,

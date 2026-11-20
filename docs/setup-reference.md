@@ -24,7 +24,7 @@ The keys are those in [`config/instance.env.example`](../config/instance.env.exa
 | `ADMIN_AUTHOR_EMAILS` | .env | The placeholder list | The admin's git author emails, separated by commas: the only identities allowed to change protected governance files. **With a real program repo the host refuses to start when this is missing or names a placeholder** | 9, 11 |
 | `TZ` | .env or process | The system's time zone | The time zone for schedules | 8 |
 
-A "real program repo" means `PROGRAM_ORIGIN_PATTERN` is set, or the origin of the checkout or the read mirror is not `example-org/program-repo` (`src/identity-settings-check.ts`).
+A "real program repo" means `PROGRAM_ORIGIN_PATTERN` or `PROGRAM_ORIGIN_URL` is set, or the origin of the checkout or the read mirror is not `example-org/program-repo` (`src/identity-settings-check.ts`).
 
 ### Model provider and reply sensor
 
@@ -83,6 +83,8 @@ The caps count in memory and reset when the process restarts. They apply to emai
 | `PROGRAM_REPO` | process | `/srv/program-repo` | Absolute path of the program repo checkout. The same path is in `seed-db.cjs` and `config-examples/mount-allowlist.json`; change them together. Marked REQUIRED | 7 |
 | `PROGRAM_ORIGIN_PATTERN` | process | Only the placeholder origin `example-org/program-repo` is accepted | A regular expression that the repo's git origin URL must match. Keep `^` and `$`; write a dot as `[.]` | 7 |
 | `PROGRAM_READ_MIRROR` | process | `/srv/repos/program-repo-read.git` | Path of the bare mirror the host reads the allowlists from | 7 |
+| `PROGRAM_ORIGIN_URL` | process | The origin of the read mirror, if that exists; else none, and nothing is fetched or pushed | The git origin of the program repo, as the host fetches and pushes it. The host never takes this address from the checkout, whose git config the agent can write. It must match `PROGRAM_ORIGIN_PATTERN`. Also the address the read mirror is first cloned from | 7 |
+| `PROGRAM_HOST_REPO` | process | `program-repo-host` in the folder of the read mirror (`/srv/repos/program-repo-host`) | Path of the host's own repository: the audit log is committed there and every fetch and push runs there (`src/host-repo.ts`). The host creates it. It must not be inside `PROGRAM_REPO`, and no container may mount it | 7 |
 | `GITHUB_PUSH_WEBHOOK_SECRET` | .env, then process | `/api/github-push` answers 503 | Secret of the push webhook on the program repo | 7, 13 |
 | `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID`, `CHECKOUT_OWNER_HOME` | process | `1000`, `1000`, `/home/ubuntu` | Used only when the host process runs as root: host git and file operations in the program repo run as this user. The supported recipe does not run as root | 8 |
 

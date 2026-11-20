@@ -39,15 +39,11 @@ function fresh(env: {
   vi.stubEnv('PROGRAM_REPO', env.checkout ?? path.join(tmp, 'no-checkout'));
   vi.stubEnv('PROGRAM_READ_MIRROR', env.mirror ?? path.join(tmp, 'no-mirror'));
   vi.doMock('./env.js', () => ({ readEnvFile: () => ({}) }));
-  // Host git in the checkout drops to the checkout owner when root; these
-  // repos belong to whoever runs the tests.
+  // The checkout's config is read as a file, as the checkout owner (no git
+  // runs there); these repos belong to whoever runs the tests.
   vi.doMock('./program-repo.js', () => ({
     getProgramRepoPath: () => process.env.PROGRAM_REPO,
-    checkoutGitOptions: () => ({
-      cwd: process.env.PROGRAM_REPO,
-      env: process.env,
-      timeout: 30_000,
-    }),
+    CHECKOUT_OWNER: { uid: 1000, gid: 1000, home: '/home/ubuntu' },
   }));
 }
 

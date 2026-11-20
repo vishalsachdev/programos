@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,088 passing tests (1,761 from the source, 327 added here). One timing test
+   is 2,154 passing tests (1,761 from the source, 393 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -152,10 +152,11 @@ move up without starting again. "First start" means part 14.
   has never run against a live Cloudflare account, mailbox or GitHub repo. Operator
   alerts by email have not been sent through a live mail provider. Plan one real
   test of each before colleagues are told the address.
-- **How the agent's work reaches the git host:** the agent commits inside the
-  container and the host pushes (First start, step 5). The container holds no git
-  credential. The host's push has run against local test remotes only; First
-  start, step 9, checks it on this machine before real users.
+- **Who pushes:** the host, with its own deploy key. The agent commits in its
+  checkout and holds no git credential; the host takes those commits out,
+  checks them and pushes them (`docs/deployment.md`, step 4; part 10, "The host
+  runs no git in the agent's checkout"). This ran against local repositories
+  only: watch one agent commit arrive on your git host before real users.
 
 **The MVP, exactly.** The smallest setup that does these four things with a real
 colleague, not the operator:
@@ -392,11 +393,10 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Code default:* the placeholder origin `example-org/program-repo`. Any other
   origin is refused until the pattern is set.
 - *First pilot:* a private repo; readers are the pilot team and the operator;
-  push rights for the admin, the bot's machine (a deploy key for that one repo,
-  held by the host user; the agent container gets no key) and the intake service
-  (a token for that one repo).
-- *Settings:* `PROGRAM_REPO`, `PROGRAM_ORIGIN_PATTERN`, `PROGRAM_READ_MIRROR`
-  (process); `GITHUB_PUSH_WEBHOOK_SECRET` (.env or process).
+  push rights for the admin, the bot's machine (a deploy key for that one repo)
+  and the intake service (a token for that one repo).
+- *Settings:* `PROGRAM_REPO`, `PROGRAM_ORIGIN_URL`, `PROGRAM_ORIGIN_PATTERN`,
+  `PROGRAM_READ_MIRROR`, `PROGRAM_HOST_REPO` (process); `GITHUB_PUSH_WEBHOOK_SECRET` (.env or process).
 - *Detail:* part 11; First start, step 5; `docs/illinois/github-enterprise.md`;
   `docs/data-handling.md`, "Who can read the audit log and the raw mail".
 
@@ -534,8 +534,8 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   you set `open` or turn web tools on, and write the answer in `setup-decisions.md`.
 - *What stops working with the pilot choice:* web search and web fetch;
   `agent-browser`; `curl` and any other network use from the agent's shell;
-  `git pull` and `git push` inside the container (the host does both: First
-  start, step 5); a scheduled-task script that fetches a URL (the example in
+  `git push` inside the container (the host pushes; `git pull` still works,
+  because it reads the host's read-only export: First start, step 5); a scheduled-task script that fetches a URL (the example in
   `groups/global/references/scheduled-task-scripts.md` does). With web tools off
   the proxy also refuses requests that would make the model provider reach an
   outside host for the agent: a web search or fetch tool, a remote MCP server, an
@@ -547,8 +547,6 @@ does nothing for them. `docs/setup-reference.md` has the full table.
     unless `WEBHOOK_HOST=127.0.0.1` is set, and the host logs a warning at each
     start while it is not. Set it (choice 8).
   - Whatever the agent puts in a model request goes to the model provider.
-  - The host runs git in the checkout, and the agent can write that checkout's
-    `.git/config` and hooks (`SPEC.md` section 11).
 - *Settings:* `CONTAINER_NETWORK`, `AGENT_WEB_TOOLS` (process, else .env; both
   are read at start, so a change needs a restart); `CONTAINER_NETWORK_NAME`
   (process; the Docker network's name, default `nanoclaw-agents`; change it only
@@ -607,7 +605,7 @@ Search for each placeholder (include tests; exclude `node_modules`):
 | `Coordinator` (also `Co-ordinator`, `co[\s-]?ordinator` in patterns) | The bot's name | `ASSISTANT_NAME` in `.env`, prompts in `groups/`, several `src/` files and patterns that recognise the name |
 | `Program`, `program-email`, `program-telegram`, `web-chat-program`, `tg-program` | The program or project name and its channel group names | `groups/` folder names, `seed-db.cjs`, `src/index.ts`, `src/task-scheduler.ts` and others |
 | `program-repo`, `/workspace/extra/program-repo` | The knowledge-base repo and its mount point in the container | `PROGRAM_REPO` (process environment), `src/program-repo.ts`, prompts, container skills |
-| `example-org/program-repo` | The git origin the host accepts for the program repo. A different origin is refused and the read mirror is not created. | `isExpectedOrigin` in `src/repo-reader.ts`; set `PROGRAM_ORIGIN_PATTERN` (process environment). Any git host works, including a GitHub Enterprise host; `config/instance.env.example` has example patterns |
+| `example-org/program-repo` | The git origin the host accepts for the program repo. A different origin is refused and the read mirror is not created. | `isExpectedOrigin` in `src/program-origin.ts`; set `PROGRAM_ORIGIN_PATTERN` and `PROGRAM_ORIGIN_URL` (process environment). Any git host works, including a GitHub Enterprise host; `config/instance.env.example` has example patterns |
 | `example.edu` | The institution mail domain. It is used in logic: the "access closed" courtesy reply (`src/channels/webhook.ts`) and approver addresses in `src/routed-approvals.ts` | Setting: `INSTITUTION_DOMAIN` in `.env`. **Required for a real program repo:** the host refuses to start when it is missing, `example.edu` or a subdomain of `example.edu` (`src/identity-settings-check.ts`). The operator's address, the shared mailbox in `src/trusted-body-mailboxes.ts`, prompts and tests still hold `example.edu` as text |
 | `example.org` | The bot's own mail domain: the default bot address, the Message-ID domain, and the bot's git author `program-bot@example.org` | Setting: `BOT_MAIL_DOMAIN` in `.env`. Prompts in `groups/` and skills in `container/skills/` name the git author as text; change them to match. The site address `program-repo.example.org` in `src/behaviour-sensor.ts` is not covered by the setting |
 | `email-inbox@example.org` | The git author of the inbound mail intake service (see "Inbound mail") | Setting: `INTAKE_GIT_AUTHOR_EMAIL` in `.env` |
@@ -618,7 +616,7 @@ Search for each placeholder (include tests; exclude `node_modules`):
 | `PeerAgent`, `averybot@gmail.com` | A second automated agent that also mails the bot | `src/config.ts` (`AGENT_INBOX_ADDRESSES`); empty the list if the user has none |
 | `CRS`, `ELC`, `LAB` plus three digits | Course-code prefixes | See part 8 |
 
-Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `PROGRAM_ORIGIN_PATTERN`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. The supported way to run the bot is the systemd recipe in `docs/deployment.md`; `start.sh` and `ecosystem.config.cjs` are pm2 examples from the reference deployment.
+Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `PROGRAM_HOST_REPO`, `PROGRAM_ORIGIN_URL`, `PROGRAM_ORIGIN_PATTERN`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. The supported way to run the bot is the systemd recipe in `docs/deployment.md`; `start.sh` and `ecosystem.config.cjs` are pm2 examples from the reference deployment.
 
 ## 8. Academic examples
 
@@ -650,7 +648,6 @@ and say so.
 | Operator alerts by email (`ADMIN_ALERT_ROUTE=email`) | New in this repo, not in K-ai. Tested here with the mail provider stubbed; **not yet run against a live provider** | `OPERATOR_CC_EMAIL` set to one person's address, the outbound provider key |
 | Behaviour sensor and evaluation scripts | In production in K-ai | Ground-truth files in the program repo; see "Academic examples" |
 | Restricted container network (`CONTAINER_NETWORK`) | New in this repo (2026-11-20); not in K-ai. Checked with real containers on Docker Engine on Linux only | Docker Engine on Linux for the default; see "Safety items" |
-| Host pulls and pushes the program repo (`src/checkout-sync.ts`) | New in this repo (2026-11-20); not in K-ai. Tested against a local remote | A git credential for the host user that runs git; an operator alert channel |
 | Web search, web fetch, `agent-browser` | Off by default since 2026-11-20 | `AGENT_WEB_TOOLS=1`; fetch and browser also need `CONTAINER_NETWORK=open`. ASK first |
 | Web chat | Was in production, later retired there | A secret and a reverse proxy; treat as untested. **No allowlist of people: any caller with the secret is answered** |
 
@@ -665,6 +662,17 @@ and say so.
   `config-examples/sender-allowlist.json` ("First start", step 3).
 - **Listener address:** set `WEBHOOK_HOST=127.0.0.1` and use a reverse proxy. The code
   default listens on all interfaces.
+- **The host runs no git in the agent's checkout.** The agent can write the whole
+  checkout, `.git/config` and `.git/hooks` included, and git obeys both. So the host
+  keeps its own repository (`PROGRAM_HOST_REPO`, `src/host-repo.ts`) that no container
+  mounts. The audit log is written and committed there, and every fetch and push with
+  the host's credential runs there. Commits leave the checkout through a fetch from
+  its path, are checked, and are pushed to the origin the host was given
+  (`PROGRAM_ORIGIN_URL`, or the read mirror's origin), never to an address the checkout
+  names. Do not add a host git call that uses the checkout as its repository:
+  `src/host-git-guard.test.ts` fails when one appears. Do not mount the host repo, its
+  export or the read mirror into a container; the host refuses such an extra mount.
+  `SPEC.md` section 11 lists what this does not cover.
 - **Operator alerts need a route that works.** Every operator alert goes through
   `src/admin-alert.ts`, which follows `ADMIN_ALERT_ROUTE`: `telegram` (the default),
   `email`, or `telegram,email`. On the Telegram route, delivery-failure alerts go to the
@@ -726,9 +734,6 @@ and say so.
     The webhook listener does so unless `WEBHOOK_HOST=127.0.0.1` is set in the process
     environment; the code default is all interfaces, and the host warns at each start
     while the network is restricted and that address is not loopback. Set it.
-  - The host runs git in the checkout, whose `.git/config` and hooks the agent can
-    write, so a planted hook runs on the host with the host's network (`SPEC.md`
-    section 11).
 - **Web search and web fetch are off by default.** `AGENT_WEB_TOOLS=1` turns them on
   (`src/web-tools.ts`). Web fetch and `agent-browser` need `CONTAINER_NETWORK=open` as
   well. While the setting is off, the tools are removed from the agent's list, and the
@@ -746,7 +751,7 @@ and say so.
   an agent turn fails with "Refused by this deployment", read the host log for the
   reason before you change a setting. ASK before you turn web tools on.
 - **Mounts:** `config-examples/mount-allowlist.json` must list only the program repo. The email group is not the main group and it must write to the program repo in status-update mode, so `nonMainReadOnly` is `false` in the example. Keep the web chat group's own mount read-only in its group registration.
-- **Protected files are guarded for the agent's file-editing tools only.** `container/agent-runner/src/protected-write-guard.ts` blocks Write, Edit and NotebookEdit on protected paths. It does not inspect shell commands. The git-author check in `src/governance-protection.ts` is the second line. Do not describe this to the user as a hard block.
+- **Protected files are guarded for the agent's file-editing tools only.** `container/agent-runner/src/protected-write-guard.ts` blocks Write, Edit and NotebookEdit on protected paths. It does not inspect shell commands, so the agent can still change such a file in its checkout. The host does not push that: a commit from the checkout that changes a protected path is refused, whatever author it names, and the operator is alerted (`src/host-repo.ts`). The git-author check in `src/governance-protection.ts` still judges commits that reach the origin another way. Do not describe the tool guard to the user as a hard block.
 - **Known gaps inherited from the source** (reported there): the conflict-check skill tells the agent to notify the admin with a Telegram tool that is not registered; two prompts and that skill disagree on how to record an uncorroborated spreadsheet fact (the skill is stricter: it goes to open questions); `groups/main/CLAUDE.md` is mostly upstream framework text.
 - **Operations scripts are examples.** `scripts/deploy.sh`, `scripts/state-snapshot*.{sh,mjs}`
   and `ecosystem.config.cjs` come from the reference deployment. `deploy.sh` runs
@@ -841,20 +846,24 @@ Do these once, in this order, before the first test message:
    mounts. `seed-db.cjs` shows the full row with `additionalMounts`; it needs the
    database to exist first, and its host path is a placeholder. Read both, then
    register the email group, the main group and (if used) the Telegram group.
-5. Clone the program repo at the mounted path, with an upstream branch set
-   (`git clone` does this). Two writers use the files: the host and the agent inside
-   the container. Only the host talks to the git host. The container gets no git
-   credential, no SSH client and, on the restricted network, no route to the git host;
-   do not try to give it a key or a token. The agent commits in the mounted checkout.
-   The host pulls before each turn and pushes after each agent result, before the
-   reply is handed on (`src/checkout-sync.ts`); a push that fails is reported to the
-   operator on the alert channel. So the git credential belongs to the host user that
-   runs git: when the host process runs as root, that is user and group 1000 with home
-   `/home/ubuntu` unless `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID` and
-   `CHECKOUT_OWNER_HOME` say otherwise (`src/checkout-fs.ts`, `src/program-repo.ts`),
-   and a root-owned clone fails. Give that user a credential limited to the program repo (a deploy key
-   in its `~/.ssh`, or a token in its git credential store). Check it as that user:
-   `git pull` and `git push --dry-run` in the checkout.
+5. Clone the program repo at the mounted path, and set `PROGRAM_ORIGIN_URL` to its
+   origin (process environment). The agent commits in that checkout. The host does
+   not run git there. At its first start the host creates its own repository
+   (`PROGRAM_HOST_REPO`; default `program-repo-host` beside the read mirror) and
+   from then on it alone fetches and pushes, with the host's credential: before
+   each turn, after each agent result, and with each audit-log commit
+   (`src/host-repo.ts`). The container needs no git credential: its `git pull`
+   reads a read-only export of the host's repository, and the host pushes its
+   commits. When the host process runs as root, its git runs as user and group
+   1000 with home `/home/ubuntu` unless `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID`
+   and `CHECKOUT_OWNER_HOME` say otherwise (`src/checkout-fs.ts`,
+   `src/program-repo.ts`), so a root-owned clone fails. Use a deploy key or token
+   limited to the program repo, held by that host user. Then run
+   `npx tsx scripts/check-host-git-trust.ts --network` as that user with the bot's
+   environment: every line must say PASS or NOTE. It checks that this host's git
+   runs nothing a repository names while serving it, that the host repo is outside
+   the checkout, that the origin comes from host settings, and that the credential
+   reads the origin and can push (a dry run).
 6. Build the container image (`container/build.sh`).
 7. Set `INSTITUTION_DOMAIN` and `ADMIN_AUTHOR_EMAILS` in `.env` before the first
    start with the real program repo: the institution's mail domain, and the
@@ -874,9 +883,9 @@ Do these once, in this order, before the first test message:
    service's environment. It starts containers the way the host does and must print
    PASS for each line: the container reaches the host's proxy address; on the
    restricted network it reaches no outside host and resolves no outside name; a
-   commit made inside the container arrives on a (temporary) remote through the
-   host's push; and the host's credential can push from the real checkout (a dry
-   run). Do not send the first test message until it passes.
+   commit made inside the container is taken out of a (temporary) checkout by the
+   host and arrives on a (temporary) remote. The host's credential against the
+   real origin is step 5's check. Do not send the first test message until both pass.
 
 ## 15. Governance
 

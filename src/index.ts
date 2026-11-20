@@ -13,12 +13,12 @@ import {
   TIMEZONE,
   DATA_DIR,
 } from './config.js';
-import {
-  pushCheckoutAfterTurn,
-  setCheckoutPushAlerter,
-  syncCheckoutBeforeTurn,
-} from './checkout-sync.js';
 import { assertIdentitySettingsConfigured } from './identity-settings-check.js';
+import {
+  ensureHostRepo,
+  hostRepoPlacementProblem,
+  setHostRepoAlerter,
+} from './host-repo.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -96,6 +96,7 @@ import { prepareWorkingContext } from './working-context.js';
 import { logger } from './logger.js';
 import {
   flushAuditLog,
+  syncKnowledgeBase,
   logCcContextSuppressionOnce,
   logDeadLetterOnce,
   logDeliveryProblem,
@@ -660,9 +661,9 @@ async function runAgent(
     if (output.result !== null && output.result !== undefined) {
       sawUsableResult = true;
     }
-    // Push what the agent committed before the reply is handed on (the
-    // container has no git credential; see checkout-sync.ts).
-    if (output.status === 'success') await pushCheckoutAfterTurn();
+    // Take what the agent committed out of its checkout and push it, before
+    // the reply is handed on (host-repo.ts; the host runs no git in there).
+    if (output.status === 'success') await syncKnowledgeBase();
     if (onOutput) await onOutput(output);
   };
 
@@ -705,7 +706,9 @@ async function runAgent(
     .join('\n\n');
 
   try {
-    await syncCheckoutBeforeTurn();
+    // Commit pending audit entries, fetch the origin and refresh the export
+    // the container pulls from, so the agent reads the current state.
+    await syncKnowledgeBase({ fetchOrigin: true });
     const imageAttachments =
       agentMode === 'normal' ? parseImageReferences(prompt) : [];
 
@@ -885,6 +888,20 @@ function ensureContainerSystemRunning(): void {
 async function main(): Promise<void> {
   // Before anything starts: a real program repo needs real identity settings.
   assertIdentitySettingsConfigured();
+
+  // The host-owned repository must not sit inside the agent's checkout.
+  const hostRepoProblem = hostRepoPlacementProblem();
+  if (hostRepoProblem) throw new Error(hostRepoProblem);
+  // Create it on the first start after an upgrade (local; no network).
+  try {
+    ensureHostRepo();
+  } catch (err) {
+    logger.error(
+      { err },
+      'Host repo could not be created; audit entries will not be committed. ' +
+        'Set PROGRAM_HOST_REPO to a folder the checkout owner can create.',
+    );
+  }
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
@@ -1076,8 +1093,9 @@ async function main(): Promise<void> {
     adminShortfallAlerter((text, opts) => sendDeadLetterAlert(text, opts)),
   );
 
-  // A failed knowledge-base push goes to the same operator channel.
-  setCheckoutPushAlerter((text) => sendDeadLetterAlert(text));
+  // A failed knowledge-base push, or agent commits the host refused to take,
+  // go to the same operator channel (host-repo.ts).
+  setHostRepoAlerter((text) => sendDeadLetterAlert(text));
 
   // Start the durable email outbox queue only AFTER the owner alert channel is
   // wired, so replayed terminal outcomes and retained shortfalls alert the owner.

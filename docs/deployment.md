@@ -30,6 +30,7 @@ The recipe uses these names. If you change one, change it in every step.
 | Code | `/home/programos/programos` |
 | Program repo checkout | `/srv/program-repo` (the code default, and the path in `seed-db.cjs` and `config-examples/mount-allowlist.json`) |
 | Read mirror | `/srv/repos/program-repo-read.git` (the code default) |
+| Host-owned repository | `/srv/repos/program-repo-host` (the code default; created by the bot) |
 | Public name | `bot.example.org`, with a DNS record that points at the machine |
 
 "Checked" under a step says what was run for this page on 2026-11-19, in a container with Ubuntu 24.04, systemd 255 and Node 22. That container had no running systemd and no Docker daemon. A step marked "not run" comes from reading the code and each tool's own documentation.
@@ -112,11 +113,11 @@ git -C /srv/program-repo pull
 git -C /srv/program-repo push
 ```
 
-The host refuses a checkout whose origin it does not expect, and then it does not create the read mirror. Step 6 sets `PROGRAM_ORIGIN_PATTERN` for this origin.
+Step 6 sets `PROGRAM_ORIGIN_URL` and `PROGRAM_ORIGIN_PATTERN` for this origin. The host fetches from and pushes to that address only. It does not read the address from the checkout, and it creates neither the read mirror nor its own repository from an origin that does not match the pattern.
 
-**This key is the only git credential, and it stays on the host.** The agent in the container commits in the mounted checkout and never talks to the git host: the container gets no home folder, no SSH agent, no SSH client and no key, and on the restricted network it has no route to the git host. The host pulls before each turn and pushes the agent's commits after each result, with this key (`src/checkout-sync.ts`). A push that fails is sent to the operator as an alert. Do not put a key or a token into the container.
+**This key serves the host only, and the host is the only one that pushes.** The agent commits in `/srv/program-repo`, inside the container, with no credential. The host runs no git in that folder, because the agent can write its `.git/config` and hooks. At its first start the host creates its own repository, `/srv/repos/program-repo-host`, which no container mounts. There it commits the audit log, fetches the origin before each turn, takes the agent's commits out of the checkout after each result, checks them, and pushes (`src/host-repo.ts`). The container's `git pull` reads a read-only export of that repository; a `git push` inside the container fails and is not needed. A push that fails, and commits the host refused to take, are reported to the operator.
 
-Checked: the clone, pull and push against a git host were not run. The host-side pull and push are tested against a local remote (`src/checkout-sync.test.ts`), and on 2026-11-20 a commit made inside a real container on the restricted network arrived on a local remote through the host (`scripts/check-container-egress.ts`). That run used the agent image built from `container/Dockerfile` (in a cloud session, with that session's certificate authority added so the build could download packages).
+Checked: the host side ran against local repositories as the tests do, as a normal user and as root. Not run: a git host, and a container (the pull inside it was run with git outside one).
 
 ### 5. Container image and channel groups (as `programos`)
 
@@ -133,7 +134,7 @@ Checked: the `register` step and `seed-db.cjs` ran, and the stored row holds the
 
 ### 6. The systemd unit (as `programos`)
 
-Write the PART 2 settings first. The unit that `setup/service.ts` writes has no such lines, and that step starts the service at once. Create the folder, then save the seven lines below as `~/.config/systemd/user/nanoclaw.service.d/override.conf`:
+Write the PART 2 settings first. The unit that `setup/service.ts` writes has no such lines, and that step starts the service at once. Create the folder, then save the eight lines below as `~/.config/systemd/user/nanoclaw.service.d/override.conf`:
 
 ```
 mkdir -p ~/.config/systemd/user/nanoclaw.service.d
@@ -143,6 +144,7 @@ mkdir -p ~/.config/systemd/user/nanoclaw.service.d
 [Service]
 Environment=PROGRAM_REPO=/srv/program-repo
 Environment=PROGRAM_READ_MIRROR=/srv/repos/program-repo-read.git
+Environment=PROGRAM_ORIGIN_URL=git@github.com:your-org/your-program-repo.git
 Environment=PROGRAM_ORIGIN_PATTERN=^git@github[.]com:your-org/your-program-repo([.]git)?$
 Environment=WEBHOOK_HOST=127.0.0.1
 Environment=BEHAVIOUR_SENSOR_DISABLED=1
@@ -197,6 +199,25 @@ Run `./container/build.sh` too when `container/` changed.
 
 Checked: not run as a sequence.
 
+**Upgrading a host that ran a version from before 2026-11-20** (the host then ran git in `/srv/program-repo`):
+
+1. Stop the bot the normal way (`systemctl --user stop nanoclaw`). A clean stop commits and pushes the pending audit entries with the old code.
+2. Update as above, and run `./container/build.sh`: the image's runner changed.
+3. Add `Environment=PROGRAM_ORIGIN_URL=...` to `override.conf` (step 6). A host that already has the read mirror works without it, because the mirror's origin is used; set it anyway.
+4. Start the bot. At the first start it creates `/srv/repos/program-repo-host` and `/srv/repos/program-repo-host-export.git`. The history comes from the read mirror on the same disk, so this needs no network. It reads nothing from the old checkout's `.git/config`. The folder `/srv/repos` must be writable by the bot's user (step 1 made it so).
+5. Run the check, as the bot's user, with the same PART 2 settings exported in the shell:
+
+```
+cd ~/programos
+npx tsx scripts/check-host-git-trust.ts --network
+```
+
+Every line must say PASS or NOTE. A NOTE about files that differ in the checkout means the old code left audit entries there that were never pushed (an unclean stop): append them by hand to the same file under `/srv/repos/program-repo-host/discussions/audit-log/`.
+
+What changes for the operator: the audit log is written under `/srv/repos/program-repo-host`, not under `/srv/program-repo`; the agent sees it after its next pull. Commits the agent left unpushed in the checkout are pushed by the host at the first sync, if they pass its checks. The host's git credential stays where it was. Nothing in the checkout is rewritten by the host.
+
+Checked: steps 4 and 5 ran against local repositories, with a read mirror present and absent. Not run: the upgrade on a host with a systemd unit.
+
 ## Before real users
 
 Go through this list at the end of the recipe.
@@ -204,8 +225,8 @@ Go through this list at the end of the recipe.
 - The people who approve data use at your institution have seen [`data-handling.md`](./data-handling.md), and its "Decide before go-live" list has an answer on each line.
 - Operator alerts have a route that works. The default route is Telegram for the admin; `ADMIN_ALERT_ROUTE=email` mails them to the operator's address instead, and `telegram,email` does both. A test alert arrives on each route you enabled (`AGENTS.md`, "First start", step 8). The startup log has no `Admin alert setup` error.
 - The reply sensor is off, or its destination is approved for your data.
-- `npx tsx scripts/check-container-egress.ts` prints PASS on every line: the container cannot reach the outside (restricted network), and a commit made in the container arrives on a remote through the host's push.
-- A failed knowledge-base push reaches the admin as an alert (to test: make the remote unreachable for one turn that commits).
+- `npx tsx scripts/check-container-egress.ts` prints PASS on every line: on the restricted network the container reaches the host's proxy address and nothing outside, and a commit made in a container reaches a temporary remote through the host.
+- `npx tsx scripts/check-host-git-trust.ts --network` shows no FAIL line, and a commit the agent makes in a test turn arrives on the git host.
 - One plain question passes end to end on each channel you enabled.
 - If email is on: the intake service files a test message (two files in `discussions/raw/`, by the expected git author), and one routed approval passes end to end. A sender who is not on the allowlist gets no answer, or the one courtesy reply if they are at your institution.
 - If email is on: the mail provider's events webhook answers 200 to a test event, and a bounce produces an operator alert on each route you enabled ([`setup-reference.md`](./setup-reference.md), "Webhooks from other services").

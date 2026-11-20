@@ -46,6 +46,6 @@ pattern only, so an open-ended pattern accepts more than you mean.
   (`src/channels/github-push-events.ts`) receiving deliveries from that host;
   network reach from your bot host to github.illinois.edu.
 
-Before the first test message, do the pull and push check in
-`AGENTS.md` ("First start", step 5) as the host user that runs git. The agent
-container holds no git credential; the host pushes its commits.
+Before the first test message, run the check in `AGENTS.md` ("First start",
+step 5): `npx tsx scripts/check-host-git-trust.ts --network`. Only the host
+needs a credential for this git host; the container gets none.

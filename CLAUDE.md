@@ -4,7 +4,7 @@ Notes for Claude (and future maintainers) working on this repo. Adopter-facing d
 
 ## Scope of this repo
 
-ProgramOS is a **clonable implementation** (since 2026-11-14; before that it was a spec only). Adopters clone this repo and their coding agent follows `AGENTS.md`. The code in `src/`, `container/`, `groups/`, `setup/` and `scripts/` is an export from the reference deployment; `UPSTREAM.md` records the version. Do not hand-edit exported code here: fix it at the source and re-export, or record the edit so the next export repeats it. The authoritative list of files this repo owns is `OWNED` in `scripts/upstream-sync/export.py`, including `scripts/upstream-sync/` itself; exports never overwrite those paths. `inbound/` (the mail intake worker) is owned: it was written here, has its own `package.json`, and is edited here.
+ProgramOS is a **clonable implementation** (since 2026-11-14; before that it was a spec only). Adopters clone this repo and their coding agent follows `AGENTS.md`. The code in `src/`, `container/`, `groups/`, `setup/` and `scripts/` is an export from the reference deployment; `UPSTREAM.md` records the version. Do not hand-edit exported code here without recording it: fix it at the source and re-export, or run `python3 scripts/upstream-sync/repo_patch.py` after the edit and commit the consolidated patch it rewrites (`scripts/upstream-sync/repo-changes-2026-11-20.patch`; never edited by hand, no other per-PR patch files). CI runs the same script with `--check`. The authoritative list of files this repo owns is `OWNED` in `scripts/upstream-sync/export.py`, including `scripts/upstream-sync/` itself; exports never overwrite those paths. `inbound/` (the mail intake worker) is owned: it was written here, has its own `package.json`, and is edited here.
 
 Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup guidance lives in `docs/09-illinois-quickstart.md`. The optional palette for the Illinois public site lives in `site/themes/illinois.css`.
 
@@ -32,7 +32,7 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - [ ] Finalize `docs/12-governance.md`
 - [ ] Rewrite `docs/09-illinois-quickstart.md` (campus mail and cloud path)
 - [x] A neutral inbound mail intake service: `inbound/` (Cloudflare Email Worker; owned by this repo, not exported)
-- [ ] Run `inbound/` against a live Cloudflare domain and mailbox (never done; `inbound/README.md`, "Not verified"). After an export, reapply `scripts/upstream-sync/repo-changes-2026-11-20.patch` (it holds the host test for `inbound/`)
+- [ ] Run `inbound/` against a live Cloudflare domain and mailbox (never done; `inbound/README.md`, "Not verified"). The host test for `inbound/` is exported code and is held in the consolidated patch
 - [ ] Proof numbers on the site, each from a dated query, in one data file
 - [ ] Foundry backup provider: live checks with a real key (`docs/model-providers.md`, section 6), then decide the provider order
 - [ ] Take fixes from the source through `scripts/upstream-sync/` (wrong-chat Telegram reply, timing test, others in SPEC section 11)

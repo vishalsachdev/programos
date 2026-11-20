@@ -11,7 +11,7 @@
      (src/, container/, groups/, setup/, most of scripts/, package.json and others). -->
 
 - [ ] This PR changes no exported code
-- [ ] This PR changes exported code, and the same change is recorded as a `*.patch` file under `scripts/upstream-sync/` that applies to a clean checkout of `main` (`git apply --check`)
+- [ ] This PR changes exported code, and I ran `python3 scripts/upstream-sync/repo_patch.py` and committed the regenerated `scripts/upstream-sync/repo-changes-2026-11-20.patch` (CI checks it)
 
 ## Checks
 
@@ -19,6 +19,7 @@
 - [ ] `npx tsc --noEmit`
 - [ ] `npx vitest run` (state the count of passing tests; none skipped, deleted or weakened)
 - [ ] `python3 -B -m unittest discover scripts/upstream-sync`
+- [ ] `python3 scripts/upstream-sync/repo_patch.py --check`
 
 ## Docs
 

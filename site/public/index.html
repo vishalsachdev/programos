@@ -480,6 +480,10 @@
             <pre>Read AGENTS.md and help me adapt this for my project.</pre>
           </li>
           <li>
+            The agent first asks whether you are setting this up at the University of Illinois or somewhere else. That
+            picks the pages it uses with you: the Illinois track or the general track. The code is the same on both.
+          </li>
+          <li>
             The agent explains three ways to start and asks which you want: try it (one person, a laptop, Telegram
             only), a pilot (a small always-on machine, email, a handful of allowlisted colleagues; the recommended
             first version), or institutional (the same on services your institution has approved).
@@ -505,6 +509,7 @@
           <h3>Where the guarantees stop</h3>
           <ul>
             <li>The person allowlist holds for email and Telegram. Web chat checks a shared secret only.</li>
+            <li>On email the allowlist is matched on the From header, which a sender can forge. By default the host only records whether named mail servers confirmed the sender; it can be set to drop mail they did not confirm. Never run against live mail.</li>
             <li>Use Telegram with one chat only. With two or more chats, a reply can go to the wrong chat.</li>
             <li>Sender caps apply to email only, and they reset when the process restarts.</li>
             <li>Email needs a separate intake service. The one in the repository is new and has not run against live services.</li>

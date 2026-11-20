@@ -43,6 +43,7 @@ import {
   getAllSessions,
   deleteSession,
   getAllTasks,
+  getDatabase,
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
@@ -83,6 +84,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { readRetentionConfig, startRetention } from './retention.js';
 import { startSessionCleanup } from './session-cleanup.js';
 import { startDeliveryCheck } from './email-delivery-check.js';
 import { startSchedulerLoop } from './task-scheduler.js';
@@ -141,6 +143,7 @@ import {
   shutdownOutboundEmailQueue,
   startOutboundEmailQueue,
 } from './outbound-email.js';
+import { assertEmailAuthConfigured } from './email-auth.js';
 
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
@@ -897,9 +900,14 @@ async function main(): Promise<void> {
   // .env holds every secret: one clear error when other users of this
   // machine can read it; a refusal only with REQUIRE_PRIVATE_ENV_FILE=true.
   checkEnvFilePermissions();
+  // A retention setting that is not a whole number of days stops the host.
+  const retentionConfig = readRetentionConfig();
 
   // OUTBOUND_MAIL_PROVIDER=smtp: only an encrypted, authenticated submission.
   assertOutboundMailConfigured();
+
+  // EMAIL_AUTH_MODE=enforce needs a trusted mail server to be named.
+  assertEmailAuthConfigured();
 
   // The host-owned repository must not sit inside the agent's checkout.
   const hostRepoProblem = hostRepoPlacementProblem();
@@ -1224,6 +1232,8 @@ async function main(): Promise<void> {
     },
   });
   startSessionCleanup();
+  // Off unless a RETENTION_*_DAYS setting is above 0 (src/retention.ts).
+  startRetention(retentionConfig, { db: getDatabase() });
   startDeliveryCheck({
     timezone: TIMEZONE,
     // Late-bound: sendDeadLetterAlert is reassigned once channels connect.

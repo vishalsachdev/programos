@@ -9,5 +9,12 @@
   "raw_file_path": "discussions/raw/2026-11-19-re-admissions-updates-fe485fe0.md",
   "eml_file_path": "discussions/raw/2026-11-19-re-admissions-updates-fe485fe0.eml",
   "attachment_count": 0,
-  "attachment_state": "ready"
+  "attachment_state": "ready",
+  "auth": {
+    "version": 1,
+    "envelope_from_domain": "mail.example.edu",
+    "from_headers": 1,
+    "from_mailboxes": 1,
+    "results": []
+  }
 }

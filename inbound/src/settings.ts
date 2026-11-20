@@ -1,6 +1,8 @@
 // Settings come from wrangler vars and secrets. No value here belongs to a
 // real deployment: the defaults are the placeholders the host code uses.
 
+import { hostNameList, type AuthTrust } from './auth.js';
+
 /** The part of Workers KV this worker uses. A test passes an in-memory one. */
 export interface KVStore {
   get(key: string, type: 'text'): Promise<string | null>;
@@ -28,6 +30,9 @@ export interface Env {
   HOST_WEBHOOK_URL?: string;
   MAX_MESSAGE_BYTES?: string;
   MAX_ATTEMPTS?: string;
+  PLATFORM_AUTHSERV_ID?: string;
+  FORWARDER_AUTHSERV_IDS?: string;
+  FORWARDER_DOMAINS?: string;
   // KV namespace binding
   PENDING: KVStore;
 }
@@ -43,6 +48,7 @@ export interface Settings {
   gitAuthorEmail: string;
   hostWebhookUrl: string;
   maxAttempts: number;
+  authTrust: AuthTrust;
 }
 
 /**
@@ -79,6 +85,46 @@ export function maxMessageBytes(env: Env): number {
 /** Read on its own too, so attempts are still counted when a setting is wrong. */
 export function maxAttempts(env: Env): number {
   return positiveInt(env.MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS);
+}
+
+/**
+ * Which servers' authentication results are read (`auth.ts`). All three are
+ * empty by default: nothing is read and the host's verdict is "unknown".
+ */
+export function authTrust(env: Env): AuthTrust {
+  const platform = hostNameList(
+    env.PLATFORM_AUTHSERV_ID,
+    'PLATFORM_AUTHSERV_ID',
+  );
+  if (platform.length > 1) {
+    throw new Error('PLATFORM_AUTHSERV_ID must be one host name');
+  }
+  const forwarderAuthservIds = hostNameList(
+    env.FORWARDER_AUTHSERV_IDS,
+    'FORWARDER_AUTHSERV_IDS',
+  );
+  const forwarderDomains = hostNameList(
+    env.FORWARDER_DOMAINS,
+    'FORWARDER_DOMAINS',
+  );
+  if ((forwarderAuthservIds.length === 0) !== (forwarderDomains.length === 0)) {
+    throw new Error(
+      'FORWARDER_AUTHSERV_IDS and FORWARDER_DOMAINS are set together or not at all',
+    );
+  }
+  if (forwarderAuthservIds.length > 0 && platform.length === 0) {
+    throw new Error('FORWARDER_AUTHSERV_IDS needs PLATFORM_AUTHSERV_ID');
+  }
+  if (forwarderAuthservIds.includes(platform[0])) {
+    throw new Error(
+      'FORWARDER_AUTHSERV_IDS must not repeat PLATFORM_AUTHSERV_ID',
+    );
+  }
+  return {
+    platformAuthservId: platform[0] ?? '',
+    forwarderAuthservIds,
+    forwarderDomains,
+  };
 }
 
 function required(env: Env, key: keyof Env): string {
@@ -130,5 +176,6 @@ export function readSettings(env: Env): Settings {
     gitAuthorEmail,
     hostWebhookUrl,
     maxAttempts: maxAttempts(env),
+    authTrust: authTrust(env),
   };
 }

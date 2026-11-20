@@ -214,6 +214,95 @@ export function writeFileInTree(
 }
 
 /**
+ * True when every component from `root` to `dir` is a real directory; false
+ * when one is missing. Throws when one is a link or not a directory. Unlike
+ * assertRealDirChain it creates nothing: a delete must not make folders.
+ */
+function realDirChainExists(root: string, dir: string): boolean {
+  const rel = path.relative(root, dir);
+  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
+    throw new Error(`refused: ${dir} is outside ${root}`);
+  let current = root;
+  for (const part of ['', ...rel.split(path.sep).filter(Boolean)]) {
+    current = part ? path.join(current, part) : current;
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(current);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
+    if (st.isSymbolicLink() || !st.isDirectory())
+      throw new Error(`refused: ${current} is not a real directory`);
+  }
+  return true;
+}
+
+/** One entry found by listFilesInTree. */
+export interface TreeFile {
+  name: string;
+  mtimeMs: number;
+  size: number;
+  /** False for a link or a hard-linked file; only with `includeUnsafe`. */
+  plain: boolean;
+}
+
+/**
+ * The single-link regular files directly inside `root/relDir`, or null when
+ * the folder is absent. Links, folders, FIFOs and hard-linked files are left
+ * out, so a caller that deletes from this list never acts on one. With
+ * `includeUnsafe`, links and hard-linked files are listed too, marked
+ * `plain: false`, so the caller can report them; unlinkFileInTree refuses
+ * them either way. Throws when a component of the path is a link.
+ */
+export function listFilesInTree(
+  root: string,
+  relDir = '',
+  opts: { includeUnsafe?: boolean } = {},
+): TreeFile[] | null {
+  const dir = path.resolve(root, relDir);
+  if (!realDirChainExists(path.resolve(root), dir)) return null;
+  const files: TreeFile[] = [];
+  for (const name of fs.readdirSync(dir)) {
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(path.join(dir, name));
+    } catch {
+      continue; // removed meanwhile
+    }
+    const plain = st.isFile() && st.nlink === 1;
+    const unsafe = st.isSymbolicLink() || (st.isFile() && st.nlink > 1);
+    if (!plain && !(opts.includeUnsafe && unsafe)) continue;
+    files.push({ name, mtimeMs: st.mtimeMs, size: st.size, plain });
+  }
+  return files;
+}
+
+/**
+ * Delete the file `root/relPath` and nothing else. Every folder on the way
+ * is checked to be a real folder, and the name itself must be a single-link
+ * regular file: a link, a folder or a hard-linked file is refused. unlink()
+ * removes a name and never follows a link at it. Returns false when the
+ * file is already gone. The residual race in the header applies.
+ */
+export function unlinkFileInTree(root: string, relPath: string): boolean {
+  const target = path.resolve(root, relPath);
+  if (!realDirChainExists(path.resolve(root), path.dirname(target)))
+    return false;
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+  if (!st.isFile() || st.nlink > 1)
+    throw new Error(`refused: ${target} is not a single-link regular file`);
+  fs.unlinkSync(target);
+  return true;
+}
+
+/**
  * Change ownership of `root` and everything under it without following
  * symlinks: links are lchown'd themselves and never descended into.
  */

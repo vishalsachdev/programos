@@ -32,6 +32,15 @@ HOST_WEBHOOK_URL = "https://bot.example.org/"
 MAX_MESSAGE_BYTES = "10485760"
 # Attempts per message before it is set aside under "failed:" in the buffer.
 MAX_ATTEMPTS = "12"
+# Sender authentication (README.md, "Sender authentication"). All three are
+# empty by default: no header is trusted and the host records "unknown".
+# The authserv-id your mail platform writes first in Authentication-Results.
+# Cloudflare documents "mx.cloudflare.net"; check a real message before use.
+PLATFORM_AUTHSERV_ID = ""
+# Only when a mailbox elsewhere forwards to this address: the authserv-id(s)
+# of that mail system, and the domain(s) its servers send forwarded mail as.
+FORWARDER_AUTHSERV_IDS = ""
+FORWARDER_DOMAINS = ""
 
 # Secrets are not in this file. Set them with:
 #   npx wrangler secret put GITHUB_TOKEN

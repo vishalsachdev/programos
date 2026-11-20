@@ -4,10 +4,24 @@
 import PostalMime from 'postal-mime';
 import type { Address, Email } from 'postal-mime';
 
+import {
+  NO_TRUST,
+  authLine,
+  readAuth,
+  type AuthRecord,
+  type AuthTrust,
+} from './auth.js';
+
 /** SMTP envelope values, as the mail platform reports them. */
 export interface Envelope {
   from: string;
   to: string;
+  /**
+   * `Authentication-Results` as the platform's own API reports it
+   * (`message.headers`), not as read from the raw bytes. Used only to
+   * confirm which raw header is the platform's (`auth.ts`).
+   */
+  authenticationResults?: string | null;
 }
 
 /**
@@ -28,6 +42,12 @@ export interface HostPayload {
   eml_file_path: string;
   attachment_count: number;
   attachment_state: 'ready';
+  /**
+   * What trusted mail servers recorded about the sender (`auth.ts`). The
+   * host turns it into one verdict; it never reads the message's own
+   * headers for this.
+   */
+  auth: AuthRecord;
 }
 
 export interface Intake {
@@ -102,6 +122,22 @@ function display(box: { name: string; address: string }): string {
     : box.address;
 }
 
+/**
+ * How many different addresses the From header text holds, display name
+ * included, so a group or a second address the parser drops still counts.
+ * The same address as display name and as mailbox counts once. A character
+ * outside ASCII counts as one more: two readers may fold it differently.
+ */
+export function fromAddressCount(fromHeader: string): number {
+  const tokens = fromHeader.match(/[^\s<>(),;:]+@[^\s<>(),;:]+/g) ?? [];
+  const found = new Set(
+    tokens.map((a) => a.replace(/^["']+|["']+$/g, '').toLowerCase()),
+  );
+  // Checked before lower-casing: the Kelvin sign lower-cases to "k".
+  // eslint-disable-next-line no-control-regex
+  return found.size + (tokens.some((a) => /[^\x00-\x7f]/.test(a)) ? 1 : 0);
+}
+
 /** Lowercase ASCII words joined by hyphens, for the file name. */
 export function slug(subject: string): string {
   const ascii = subject
@@ -143,6 +179,7 @@ function markdownCopy(
     subject: string;
   },
   emlPath: string,
+  auth: AuthRecord,
 ): string {
   const lines: string[] = [
     `From: ${fields.from}`,
@@ -158,6 +195,9 @@ function markdownCopy(
       if (value) lines.push(`${HEADER_NAMES[key]}: ${value}`);
     }
   }
+  // Written by this worker, never copied from the message: no header of
+  // this name is in COPIED_HEADERS.
+  lines.push(`X-Intake-Authentication: ${authLine(auth)}`);
   const body = (email.text ?? '').replace(/\r\n?/g, '\n').trim();
   lines.push('', `# ${fields.subject}`, '', body || '_(no text body)_');
 
@@ -193,6 +233,7 @@ export async function buildIntake(
   envelope: Envelope,
   receivedAt: Date,
   inboxDir: string,
+  trust: AuthTrust = NO_TRUST,
 ): Promise<Intake> {
   const email = await PostalMime.parse(raw);
   const id = await sha256Hex(raw);
@@ -203,6 +244,14 @@ export async function buildIntake(
     name: '',
     address: oneLine(envelope.from).toLowerCase(),
   };
+  const fromHeader = email.headers.find((h) => h.key === 'from')?.value ?? '';
+  const auth = readAuth(
+    email.headers,
+    envelope.from,
+    fromAddressCount(fromHeader),
+    trust,
+    envelope.authenticationResults,
+  );
   const toBoxes = mailboxes(email.to);
   const ccBoxes = mailboxes(email.cc);
   const subject = oneLine(email.subject) || '(no subject)';
@@ -232,6 +281,7 @@ export async function buildIntake(
       subject,
     },
     emlPath,
+    auth,
   );
 
   return {
@@ -254,6 +304,7 @@ export async function buildIntake(
       // the `.eml` that the same commit adds. Nothing is stored later, so
       // "pending" and "partial" never apply.
       attachment_state: 'ready',
+      auth,
     },
   };
 }

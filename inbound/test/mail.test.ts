@@ -92,6 +92,7 @@ describe('MIME parsing', () => {
     expect(Object.keys(payload).sort()).toEqual([
       'attachment_count',
       'attachment_state',
+      'auth',
       'cc',
       'date',
       'eml_file_path',

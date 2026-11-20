@@ -84,7 +84,7 @@ async function syncGroups(projectRoot: string): Promise<void> {
       BUILD: 'skipped',
       SYNC: 'skipped',
       GROUPS_IN_DB: 0,
-      REASON: 'whatsapp_not_configured',
+      REASON: 'not_needed_use_register_step',
       STATUS: 'success',
       LOG: 'logs/setup.log',
     });

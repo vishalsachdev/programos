@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,385 passing tests (1,761 from the source, 624 added here). One timing test
+   is 2,466 passing tests (1,761 from the source, 705 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -73,18 +73,75 @@ these rules in every message.
 9. **Stop when an answer is "I do not know".** Help the person find who can answer.
    Do not pick for them on a policy question.
 
-### Your first reply
+### Your first replies
 
 Do not start with questions about servers. In your first reply:
 
 1. Say in three sentences what this is (part 1, first bullet, in plain words).
 2. Say that you will ask one thing at a time and write the answers in
    `setup-decisions.md`, and that nothing is sent or deployed without their yes.
-3. Describe the three ways to start (part 4), each in two or three plain sentences.
-4. Recommend one, and ask which they want. If they only want to see it work, that
-   is "Try it". If they have a real team in mind, that is "Pilot".
+3. Name the three ways to start (part 4) in one line each, and say you will
+   help them choose in your next message.
+4. Ask the track question (below), with its explanation. It is the only
+   question in this reply.
+
+In your second reply, record the track, then describe the three ways to start,
+each in two or three plain sentences, with the notes for their track (below).
+Recommend one, and ask which they want. If they only want to see it work, that
+is "Try it". If they have a real team in mind, that is "Pilot". If you do not
+know yet which they want, say which you would pick in each case.
 
 Then ask the policy questions in part 4 that apply to the chosen path, one at a time.
+
+### The track question: which set of pages applies
+
+The code, the three ways to start and every choice in part 5 are the same for
+everyone. What differs is the set of pages you read alongside them. One
+university has its own set; everyone else uses the general set.
+
+- *Ask:* "Are you setting this up at the University of Illinois, or somewhere
+  else?"
+- *Explain first, in plain words:* this repo keeps one university's notes
+  (what its public IT pages say, and the questions only its offices can answer)
+  in a separate folder. If that is their university, you will use those notes
+  at each step; if not, you will skip them. The answer changes no code and
+  costs nothing.
+- *Record it* in `setup-decisions.md` as the first line, with the date.
+
+**General track** (anywhere else, including another university): read
+[`docs/general/README.md`](./docs/general/README.md) and follow its order. It
+assumes a domain the team controls, a virtual machine from a cloud provider,
+the default mail provider or SMTP, the intake worker in `inbound/`, and
+Telegram or email alerts. An institution's own rules are still asked for in
+the policy questions; this repo does not know them.
+
+**Illinois track:** read [`docs/illinois/README.md`](./docs/illinois/README.md).
+At each choice below, open the Illinois page that the index names for it
+(choice 1: `model-foundry.md`; choices 5 and 6: `email-quickstart.md` and
+`institutional-address.md`; choice 7: `github-enterprise.md`; choice 8:
+`hosting.md`; choice 9: `service-ownership.md`; choice 14: `data-handling.md`).
+Those pages quote public university pages, with links and dates, and mark the
+rest "not verified". Tell the person what a page quotes and what it leaves
+open. Never present a quote as an approval for their unit, and never fill an
+open item with a guess: help them write the question for the office named.
+Notes for each way to start, on the Illinois track:
+
+- *Try it:* the Illinois pages barely matter, unless the person must use a
+  university-approved model even for a trial (`model-foundry.md`).
+- *Pilot:* most of the waiting is here. The mail flow is a unit mailbox that
+  redirects to a domain the unit controls (`email-quickstart.md`). The
+  university's public pages restrict auto-forwarding for individual employees
+  and say non-individual accounts are not affected; whether a unit mailbox's
+  redirect to an outside domain is accepted is not verified. The same pages say
+  password logins are disabled for university accounts, so replying as an
+  `@illinois.edu` address with the SMTP provider is not expected to work; start
+  with replies from the bot's own domain.
+- *Institutional:* add `model-foundry.md`, `hosting.md` (the Azure request
+  page and its open questions) and `data-handling.md`; the sign-off questions
+  there come first.
+
+Both tracks share `SPEC.md`, `ARCHITECTURE.md`, `docs/12-governance.md`,
+`templates/program-repo/` and the generic pages under `docs/`.
 
 ## 4. Three ways to start
 
@@ -135,8 +192,8 @@ move up without starting again. "First start" means part 14.
     choice 6, option (b);
   - an inbound mail intake service (choice 5). The one in `inbound/` needs a
     Cloudflare account and a domain or subdomain that receives no other mail;
-  - a route for operator alerts (choice 4): a Telegram account, or the operator's
-    mailbox, or both;
+  - a route for operator alerts (choice 4): a Telegram account, the operator's
+    mailbox, a Microsoft Teams channel where a workflow may be created, or more than one;
   - the names and addresses of the first colleagues, and who approves for each
     (choice 10);
   - where the institution requires it, an answer from the IT or data office on
@@ -144,10 +201,13 @@ move up without starting again. "First start" means part 14.
     questions).
 - **What it does NOT give you:** no channel for students or the public; no
   single sign-on; no retention or deletion of old mail (the code never deletes
-  from the program repo); one outbound mail service at a time, with no fallback
-  to another; no web search, web fetch or
+  from the program repo; the bot's own machine keeps its stores forever unless
+  you set a period, choice 14); one outbound mail service at a time, with no
+  fallback to another; no web search, web fetch or
   browsing for the agent unless you turn them on (choice 17). Sender caps are in
-  memory and reset on restart. No second check of email replies by the reply
+  memory and reset on restart. No proof of who sent a message: the allowlist
+  matches the From line, and the sender-authentication check only records its
+  result until you name the mail servers and choose `enforce` (choice 19). No second check of email replies by the reply
   sensor: it is off in the pilot, and when on it checks chat replies only unless
   `SENSOR_EMAIL_REPLIES=1` (choice 2).
 - **Steps that apply:** all of part 13, all of First start, "Inbound mail", and
@@ -205,7 +265,8 @@ the person. The pilot is not done until every line is ticked or has a written re
     institution's own Azure subscription (`MODEL_PROVIDERS`). See choice 1;
   - institutional mail. With the worker in `inbound/`, the mail administrators add
     a forwarding rule or alias from an institutional address to the worker's
-    address (`inbound/README.md`, step 1). If mail must stay inside the
+    address (`inbound/README.md`, step 1). Forwarded mail needs the forwarder
+    settings of choice 19 before its senders can be confirmed. If mail must stay inside the
     institution's own mail system, you must write the intake service
     (`docs/setup-reference.md`, "Inbound mail");
   - the knowledge-base repo on the institution's git host if it has one, such as
@@ -220,8 +281,9 @@ the person. The pilot is not done until every line is ticked or has a written re
 - **Steps that apply:** the pilot's steps, with the approved values. Do the live
   checks in `docs/model-providers.md`, section 6, before the person relies on Foundry.
 - **Not verified:** no request from this repo has reached a real Foundry
-  endpoint; the failover was tested against fake servers only. One university's
-  open questions are under `docs/illinois/`; none of them is answered there.
+  endpoint; the failover was tested against fake servers only. On the Illinois
+  track, `docs/illinois/` quotes the university's public pages where they exist
+  and lists the rest as open questions; none of them is answered for a unit there.
 
 ### Policy questions (ASK)
 
@@ -232,12 +294,23 @@ matching choice in part 5.
 1. **Which AI service may this team's mail reach?** The agent sends message text to
    a model. The user's institution may limit this. The code uses Claude through the
    Claude Agent SDK. Other model families need a different agent runner (not included).
-   The destinations the code supports:
-   - the Anthropic API or a Claude subscription (the default);
-   - an endpoint that serves the Anthropic API, set with `ANTHROPIC_BASE_URL`;
+   The destinations the code supports, each with its data-approval status:
+   - the Anthropic API or a Claude subscription (the default). Approval:
+     ask your institution;
+   - an endpoint that serves the Anthropic API, set with `ANTHROPIC_BASE_URL`.
+     Approval: ask your institution, for that endpoint by name;
    - Claude on Microsoft Foundry in the user's own Azure subscription
      (`MODEL_PROVIDERS`, [`docs/model-providers.md`](./docs/model-providers.md)).
      Tested here against fake servers only; that page has the live checks.
+     Approval: ask your institution, for the hosting option and region too.
+
+   This repo records no approval for any of them. The open questions to take to
+   the institution: is this destination approved for the team's mail, including
+   mail that mentions students; under which agreement; with which hosting option
+   and region; does the approval cover the reply sensor's calls as well as the
+   agent's; and who signs. On the Illinois track they are in
+   `docs/illinois/model-foundry.md` and `docs/illinois/data-handling.md`,
+   items 2 and 3, all not verified.
 
    `MODEL_PROVIDERS` is an ordered list. A second entry is a backup, and it
    receives the same mail text when the first fails, so ASK about **every**
@@ -302,8 +375,9 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   backup is a second place your team's mail goes, and the failover has run only
   against fake servers.
 - *Cost to the person:* an account with the provider and a key; usage is billed
-  by the provider (check Anthropic's or Microsoft's current pricing). For
-  Foundry, an Azure subscription and three deployments.
+  by the provider (check Anthropic's or Microsoft's current pricing;
+  [`docs/costs.md`](./docs/costs.md) lists the pricing pages with the date they
+  were read). For Foundry, an Azure subscription and three deployments.
 - *Settings:* `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (one of the two),
   `ANTHROPIC_BASE_URL`, `MODEL_PROVIDERS` (`anthropic`, `foundry`,
   `anthropic,foundry`, `foundry,anthropic`), `ANTHROPIC_FOUNDRY_RESOURCE` or
@@ -402,6 +476,8 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Settings:* `WEBHOOK_SECRET`, `INTAKE_GIT_AUTHOR_EMAIL` (.env). The worker's own
   settings are in `inbound/wrangler.toml`.
 - *Detail:* part 12; `inbound/README.md`; `docs/setup-reference.md`, "Inbound mail".
+  Illinois track: `docs/illinois/email-quickstart.md` (a unit mailbox that
+  redirects to the bot's domain).
 
 **6. Outbound mail provider and the from-address**
 - *Plain words:* a mail service that delivers the bot's replies, and the address
@@ -478,13 +554,16 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *First pilot:* (b), run as a dedicated non-root user. The recipe has not been
   run end to end.
 - *Cost to the person:* a virtual machine from a cloud provider or their
-  institution (check the provider's current pricing), and a DNS name for it.
+  institution (check the provider's current pricing; `docs/costs.md`), and a
+  DNS name for it. What to ask for, and why an app-hosting service does not
+  work: `docs/cloud-vm.md`.
 - *Settings:* `WEBHOOK_HOST=127.0.0.1`, `WEBHOOK_PORT`, `CREDENTIAL_PROXY_PORT`
   (process); `TZ` (.env). `WEBHOOK_HOST` matters for choice 17 too: left unset,
   the listener is on all interfaces and the agent container can reach it. Only when the host process runs as root, which the
   recipe does not do: `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID`,
   `CHECKOUT_OWNER_HOME` (process).
-- *Detail:* `docs/deployment.md`; `docs/illinois/hosting.md` (a stub).
+- *Detail:* `docs/deployment.md`; `docs/cloud-vm.md` (Azure specifics);
+  `docs/illinois/hosting.md` (open questions).
 
 **9. Identity: names and domains**
 - *Plain words:* what the bot is called, which mail domain is "yours", and which
@@ -558,15 +637,42 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Plain words:* where the team's messages go, who can read them, and how long
   they are kept.
 - *What the code does:* message text reaches the model provider, the mail
-  provider, the intake service, Telegram if used, and the git host. The code
-  never deletes anything from the program repo, and there is no retention setting.
-- *First pilot:* the conservative default in `docs/data-handling.md`: staff
-  senders only, no student records, the reply sensor off, a private repo, web
-  chat off. Take that page to the people who approve data use, and write each
-  answer in `setup-decisions.md`.
-- *Settings:* none for retention. Leave `LOG_LEVEL` unset.
-- *Detail:* `docs/data-handling.md`; `docs/illinois/data-handling.md` (open
-  questions only).
+  provider, the intake service, Telegram if used, and the git host. On the
+  bot's own machine, logs and working files are cleared after 3 to 7 days, and
+  everything else (the full text of every message and reply, files sent on
+  Telegram, old conversation copies) is kept forever unless you set a number
+  of days for it.
+- *Options:* eight settings, one per kind of stored data, each a whole number
+  of days. `0` or absent means keep forever. Above `0`, the bot deletes what is
+  older, once a day. It never deletes something it still has to act on: a
+  message it has not answered, an approval still open, a task still scheduled.
+  The shortest period is one day; a negative number, a fraction or a word
+  stops the bot at startup with a message naming the setting.
+- *What no setting does:* nothing deletes from the program repo or the audit
+  log. Mail copies, attachments' text and the log stay until a person removes
+  them by hand, and a removed file is still in the repo's history. Mail from a
+  sender who is not on the list is stored too. `docs/data-handling.md`,
+  "Retention and deletion", gives the manual steps and what they cost.
+- *Code default:* all eight at `0`. Nothing is deleted.
+- *First pilot:* leave all eight unset until the people who approve data use
+  give a period (ASK; do not pick a number for them). When they do, run
+  `npx tsx scripts/retention-prune.ts` with the values first: it prints how
+  much each would delete and deletes nothing. Otherwise the conservative
+  default in `docs/data-handling.md`: staff senders only, no student records,
+  the reply sensor off, a private repo, web chat off. Take that page to the
+  people who approve data use, and write each answer in `setup-decisions.md`.
+- *Not tested:* the prune has run only against data made by the tests, never
+  on a deployment with real data. Deleting old messages and old conversation
+  copies shortens what the bot can recall; deleting old Telegram files means
+  it can no longer open them. Closed approvals keep an empty record, so an old
+  request is never mailed to an approver twice.
+- *Settings:* `RETENTION_MESSAGES_DAYS`, `RETENTION_ROUTED_APPROVALS_DAYS`,
+  `RETENTION_TASKS_DAYS`, `RETENTION_TRANSCRIPT_ARCHIVE_DAYS`,
+  `RETENTION_UPLOADS_DAYS`, `RETENTION_WORKING_CONTEXT_ARCHIVE_DAYS`,
+  `RETENTION_EVALS_DAYS`, `RETENTION_IPC_ERRORS_DAYS` (.env or the process
+  environment). Leave `LOG_LEVEL` unset.
+- *Detail:* `docs/data-handling.md`; `docs/setup-reference.md`, "Retention";
+  `docs/illinois/data-handling.md` (open questions only).
 
 **15. What senders are told**
 - *Plain words:* the words colleagues see about where their mail goes.
@@ -691,6 +797,49 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Detail:* `docs/service-ownership.md`; `docs/deployment.md`, steps 1, 3 and 6;
   `src/env.ts`, `src/delivery-state.ts`, `src/origin-credential.ts`.
 
+**19. Sender authentication for inbound mail**
+- *Plain words:* the email allowlist looks at the "From" line of a message, and
+  anyone can type any name there, the way anyone can write a false return address
+  on an envelope. Mail servers can check whether a message really came from the
+  domain it names (the checks are called SPF, DKIM and DMARC) and note the result
+  in the message. The bot can read that note, from servers you name, and record
+  for each message whether the sender was confirmed. It can also refuse mail that
+  was not confirmed.
+- *Options:* (a) `flag`: record the result in the audit log and change nothing
+  else; (b) `enforce`: also drop mail from a listed address that was not
+  confirmed. It gets no answer and no reply of any kind. With (b) one more
+  choice: what to do with mail that carries no result from a named server
+  (`EMAIL_AUTH_UNKNOWN`: `block`, the default, or `allow`).
+- *Code default:* `flag`, with no server named. Every message is then recorded
+  as `unknown` and handled as before.
+- *First pilot:* name the servers (below), stay on `flag` for the first weeks,
+  and read the `[EMAIL AUTH]` lines in the audit log for real mail from each
+  listed person. When they say `authenticated`, ASK the admin whether to change
+  to `enforce`. Recommend it: a forged approval or status update is the most
+  damaging thing a stranger could send. Do not set `enforce` before those lines
+  are right; real mail would be dropped without notice to the sender. The host
+  refuses to start with `enforce` and no server named.
+- *Naming the servers:* two places must agree. In the intake worker
+  (`inbound/wrangler.toml`): `PLATFORM_AUTHSERV_ID` (the name the mail platform
+  writes; Cloudflare documents `mx.cloudflare.net`), and, only when a mailbox
+  elsewhere forwards to the bot's address, `FORWARDER_AUTHSERV_IDS` and
+  `FORWARDER_DOMAINS`. On the host: `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`, the same
+  names. Read the names off a real message with the person's mail administrator;
+  do not guess them. An intake service you wrote yourself must send the `auth`
+  field, or every verdict stays `unknown`.
+- *Settings:* `EMAIL_AUTH_MODE`, `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`,
+  `EMAIL_AUTH_UNKNOWN` (process).
+- *Limit to tell the person:* only a DMARC pass confirms a sender. A colleague
+  whose mail domain publishes no DMARC record is never confirmed, and with
+  `enforce` their mail is dropped.
+- *Not tested:* never run against live mail. What a real mail system writes in
+  its headers was taken from public documentation only, and the forwarding case
+  rests on assumptions about the forwarding system that nobody checked. It
+  confirms a domain, not a person. Email only: Telegram and web chat are not
+  covered.
+- *Detail:* `docs/setup-reference.md`, "Sender authentication for inbound mail";
+  "Safety items"; `SPEC.md` section 11.
+
 ## 6. Words to explain
 
 Use these, or your own words of the same length, the first time each term comes up.
@@ -798,6 +947,13 @@ and say so.
   error at each start while other accounts on the machine can read it, and refuses
   to start only with `REQUIRE_PRIVATE_ENV_FILE=true` (choice 18). Do not
   paste a secret into the chat or into `setup-decisions.md`.
+- **A listed address is not proof of the sender.** The email allowlist matches the
+  From line, which a sender can forge. By default the host only records a
+  sender-authentication verdict for each message (`[EMAIL AUTH]` in the audit log)
+  and still processes forged mail from a listed address. Until a trusted mail
+  server is named on both the intake worker and the host, every verdict is
+  `unknown`. `EMAIL_AUTH_MODE=enforce` drops mail that is not authenticated
+  (choice 19). Tell the user which of the two they are running.
 - **Listener address:** set `WEBHOOK_HOST=127.0.0.1` and use a reverse proxy. The code
   default listens on all interfaces.
 - **The host runs no git in the agent's checkout.** The agent can write the whole
@@ -930,7 +1086,7 @@ contract". Read it before you set up or write an intake service.
 **`inbound/` holds one such service: a Cloudflare Email Worker.** It needs a domain
 on Cloudflare Email Routing. `inbound/README.md` has the setup steps, the file
 format it writes, its choices for failures and attachments, and its limits. Tell
-the user these three things before they choose it:
+the user these four things before they choose it:
 
 - It was written for this repo from the contract above. It is not the worker the
   reference deployment runs, and **it has never run against a live Cloudflare
@@ -938,6 +1094,8 @@ the user these three things before they choose it:
   Plan a real test (README, step 6) before go-live.
 - Mail it files gets no text extraction of PDF, Word or Excel attachments on the
   host. The attachments stay inside the committed `.eml`.
+- It reads sender-authentication results only from mail servers named in its
+  settings, and none is named by default (choice 19).
 - Its git author is a setting in the worker (`GIT_AUTHOR_EMAIL`, default
   `email-inbox@example.org`). The host must hold the same address in
   `INTAKE_GIT_AUTHOR_EMAIL` (`.env`). With a different address on one side,
@@ -962,8 +1120,9 @@ has a public HTTPS name. The steps and checks are in
 
 ## 13. Order of work
 
-1. Send your first reply (part 3). Help the person choose one of the three ways
-   to start (part 4). Create `setup-decisions.md` and record the choice.
+1. Create `setup-decisions.md` (part 3, rule 7). Send your first reply
+   (part 3) and ask the track question. Then help the person choose one of the
+   three ways to start (part 4). Record both answers.
 2. Ask the policy questions (part 4) and then each choice in part 5 that the
    chosen path needs, one at a time. Write each answer down for the user.
 3. Create the program repo skeleton and the allowlist.

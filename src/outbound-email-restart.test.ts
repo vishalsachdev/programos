@@ -259,12 +259,13 @@ describe('fresh-process outbox durability', () => {
     //
     // Before this wait the row was usually not yet due at start, and the retry
     // came from the queue's wake timer inside the 4 s drain window. That timer
-    // can fire 1 ms before the row is due: the claim then finds nothing, no new
-    // timer is set, and the row waits for the next send or restart. The test
-    // saw 1 attempt instead of 2 in 5 of 35 runs under CPU load. That is a
-    // defect in src/outbound-email.ts (scheduleLaneRetry), not in this test,
-    // and this test no longer exercises the wake timer. It is recorded in the
-    // pull request that added this comment.
+    // can fire 1 ms before the row is due: the claim then found nothing, no
+    // new timer was set, and the row waited for the next send or restart. The
+    // test saw 1 attempt instead of 2 in 5 of 35 runs under CPU load. That
+    // was a defect in src/outbound-email.ts (scheduleLaneRetry), since fixed;
+    // src/outbound-email-retry-wake.test.ts covers the wake timer with a fake
+    // clock. This test stays off the wake timer so that it does not depend on
+    // real-time windows.
     await waitFor(
       () => Date.now() > seedExitedAt + retryBackoffMs(1),
       10_000,

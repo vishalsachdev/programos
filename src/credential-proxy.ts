@@ -47,7 +47,11 @@ const PATH_TOKEN_RE = /^\/_t\/([0-9a-f]{64})(\/.*)?$/;
 
 /** One log line per key for the life of the process, with a cap on keys. */
 const warned = new Set<string>();
-function warnOnce(key: string, fields: object, message: string): void {
+function warnOnce(
+  key: string,
+  fields: Record<string, unknown>,
+  message: string,
+): void {
   if (warned.has(key) || warned.size >= 200) return;
   warned.add(key);
   logger.warn(fields, message);

@@ -162,8 +162,11 @@ beforeEach(() => {
   delete process.env.CONTAINER_NETWORK;
   delete process.env.AGENT_WEB_TOOLS;
   delete process.env.CREDENTIAL_PROXY_HOST;
+  // The deployment recipe's value. The tests of the warning change it.
+  process.env.WEBHOOK_HOST = '127.0.0.1';
 });
 afterEach(() => {
+  delete process.env.WEBHOOK_HOST;
   delete process.env.CONTAINER_NETWORK;
   delete process.env.AGENT_WEB_TOOLS;
 });
@@ -277,5 +280,45 @@ describe('credential proxy bind address', () => {
     );
     process.env.CREDENTIAL_PROXY_HOST = '0.0.0.0';
     expect(resolveProxyBindHost()).toBe('0.0.0.0');
+  });
+
+  it('restricted warns at start when the webhook listener is not on loopback', () => {
+    const warned = () =>
+      JSON.stringify(vi.mocked(logger.warn).mock.calls).includes(
+        'WEBHOOK_HOST',
+      );
+    // Unset: the listener's default is all interfaces.
+    for (const host of [undefined, '0.0.0.0', '::', '192.0.2.10']) {
+      vi.clearAllMocks();
+      if (host === undefined) delete process.env.WEBHOOK_HOST;
+      else process.env.WEBHOOK_HOST = host;
+      resolveProxyBindHost();
+      expect(warned()).toBe(true);
+    }
+    for (const host of ['127.0.0.1', '127.0.0.53', 'localhost', '::1']) {
+      vi.clearAllMocks();
+      process.env.WEBHOOK_HOST = host;
+      resolveProxyBindHost();
+      expect(warned()).toBe(false);
+    }
+  });
+
+  it('restricted on Docker Desktop gives the same webhook warning', () => {
+    state.platform = 'darwin';
+    process.env.CONTAINER_NETWORK = 'restricted';
+    delete process.env.WEBHOOK_HOST;
+    resolveProxyBindHost();
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).toMatch(
+      /WEBHOOK_HOST/,
+    );
+  });
+
+  it('open does not give the webhook warning: the open warning covers it', () => {
+    process.env.CONTAINER_NETWORK = 'open';
+    delete process.env.WEBHOOK_HOST;
+    resolveProxyBindHost();
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toMatch(
+      /WEBHOOK_HOST/,
+    );
   });
 });

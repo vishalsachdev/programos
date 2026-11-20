@@ -48,7 +48,7 @@ ls /workspace/ipc/ 2>/dev/null
 Confirm which tool families are available to you:
 
 - **Core:** Bash, Read, Write, Edit, Glob, Grep
-- **Web:** WebSearch, WebFetch
+- **Web:** WebSearch, WebFetch (only when the operator has turned web tools on; off by default. `echo $NANOCLAW_WEB_TOOLS` prints `1` when they are on)
 - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
 - **MCP:** mcp__nanoclaw__* (send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task, update_task, register_group)
 
@@ -88,7 +88,7 @@ Present as a clean, readable message:
 • IPC: ✓ (messages, tasks, input)
 
 *Tools:*
-• Core: ✓  Web: ✓  Orchestration: ✓  MCP: ✓
+• Core: ✓  Web: ✓ / off  Orchestration: ✓  MCP: ✓
 
 *Container:*
 • agent-browser: ✓ / not installed

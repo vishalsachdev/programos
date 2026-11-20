@@ -146,6 +146,54 @@ index 3d29372e6432a3e0b61da58dd4ed769482c6dd70..c88c60feafa961737ed7708fdce39e92
        env: sdkEnv,
        permissionMode: 'bypassPermissions',
        allowDangerouslySkipPermissions: true,
+diff --git a/container/skills/agent-browser/SKILL.md b/container/skills/agent-browser/SKILL.md
+index cb3aa8612363cd0da0708f7681c8456af1603674..f6e2907c0c33a87bdebcca72f1c568f82b6332cd 100644
+--- a/container/skills/agent-browser/SKILL.md
++++ b/container/skills/agent-browser/SKILL.md
+@@ -1,11 +1,13 @@
+ ---
+ name: agent-browser
+-description: Use when a task needs a page that WebFetch cannot read because it requires JavaScript, login or forms, and the admin has authorized opening any URL from inbound mail or an attachment.
++description: Use when a task needs a page that WebFetch cannot read because it requires JavaScript, login or forms, and the admin has authorized opening any URL from inbound mail or an attachment. Works only when the operator has opened the container's network (it is restricted by default, and then no page loads).
+ allowed-tools: Bash(agent-browser:*)
+ ---
+ 
+ # Browser Automation with agent-browser
+ 
++The container's network is restricted by default: no outside page loads, and `agent-browser open` fails. That is expected. Do not look for another route; tell the user the operator has not opened the network.
++
+ ## Quick start
+ 
+ ```bash
+diff --git a/container/skills/capabilities/SKILL.md b/container/skills/capabilities/SKILL.md
+index 8e8be1431bd593853cb6971a03c9bbbf20c4ca7a..3e4a3853b7b8d126ab82648bac1e371be5a6616c 100644
+--- a/container/skills/capabilities/SKILL.md
++++ b/container/skills/capabilities/SKILL.md
+@@ -36,7 +36,7 @@ Each directory is an installed skill. The directory name is the skill name (e.g.
+ 
+ Read the allowed tools from your SDK configuration. You always have access to:
+ - **Core:** Bash, Read, Write, Edit, Glob, Grep
+-- **Web:** WebSearch, WebFetch
++- **Web:** WebSearch, WebFetch (only when the operator has turned web tools on; off by default. `echo $NANOCLAW_WEB_TOOLS` prints `1` when they are on)
+ - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
+ - **Other:** TodoWrite, ToolSearch, Skill, NotebookEdit
+ - **MCP:** mcp__nanoclaw__* (messaging, tasks, group management)
+@@ -76,13 +76,13 @@ Present the report as a clean, readable message. Example:
+ 📋 *NanoClaw Capabilities*
+ 
+ *Installed Skills:*
+-• /agent-browser — Browse the web, fill forms, extract data
++• /agent-browser — Browse the web, fill forms, extract data (needs the container's network open)
+ • /capabilities — This report
+ (list all found skills)
+ 
+ *Tools:*
+ • Core: Bash, Read, Write, Edit, Glob, Grep
+-• Web: WebSearch, WebFetch
++• Web: WebSearch, WebFetch / off (web tools are not turned on)
+ • Orchestration: Task, TeamCreate, SendMessage
+ • MCP: send_message, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group
+ 
 diff --git a/container/skills/kb-conflict-check/check-ingestion-crosscheck.mjs b/container/skills/kb-conflict-check/check-ingestion-crosscheck.mjs
 index 5678eaccb49918a3c9d7299b52fc15811c5b3f9e..22fda848078f2863b6320a64508d1b0980b50a83 100644
 --- a/container/skills/kb-conflict-check/check-ingestion-crosscheck.mjs
@@ -204,6 +252,28 @@ index 893622a1cc6438dcc253b75b35f814d5beeb2df0..2449efb71a2ad8da01e027b6884c5472
  4. **If no audit logs or eval data exist for the period**, write a brief "No data available for this period" report and exit.
  5. **Analyze patterns:**
     - Which topics have recurring low-confidence answers?
+diff --git a/container/skills/status/SKILL.md b/container/skills/status/SKILL.md
+index 3a99fcce84179620fedb8a626e3b48a736661210..a35747fe4f61b7520c6585b7c3a98cb8bddf79e6 100644
+--- a/container/skills/status/SKILL.md
++++ b/container/skills/status/SKILL.md
+@@ -48,7 +48,7 @@ ls /workspace/ipc/ 2>/dev/null
+ Confirm which tool families are available to you:
+ 
+ - **Core:** Bash, Read, Write, Edit, Glob, Grep
+-- **Web:** WebSearch, WebFetch
++- **Web:** WebSearch, WebFetch (only when the operator has turned web tools on; off by default. `echo $NANOCLAW_WEB_TOOLS` prints `1` when they are on)
+ - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
+ - **MCP:** mcp__nanoclaw__* (send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task, update_task, register_group)
+ 
+@@ -88,7 +88,7 @@ Present as a clean, readable message:
+ • IPC: ✓ (messages, tasks, input)
+ 
+ *Tools:*
+-• Core: ✓  Web: ✓  Orchestration: ✓  MCP: ✓
++• Core: ✓  Web: ✓ / off  Orchestration: ✓  MCP: ✓
+ 
+ *Container:*
+ • agent-browser: ✓ / not installed
 diff --git a/ecosystem.config.cjs b/ecosystem.config.cjs
 index 879af27c44f367a0ef883dbcf8462b346edf0329..2a08967d450d3930200be9df1be66ddc62b19799 100644
 --- a/ecosystem.config.cjs
@@ -231,6 +301,21 @@ index 21ac568c67ff1bdb72a5864bbfc12526d475cebe..500011f6257e60855257c563b54402ca
  All file reads, edits, and writes must use paths under `/workspace/extra/program-repo/`.
  
  ## Context Recovery
+diff --git a/groups/main/CLAUDE.md b/groups/main/CLAUDE.md
+index c1227beb1a772781bbfe650a3d8199fa86f81b11..d8f8efa36545f7eb7f483a72ce41e4009080d0e6 100644
+--- a/groups/main/CLAUDE.md
++++ b/groups/main/CLAUDE.md
+@@ -5,8 +5,8 @@ You are Andy, a personal assistant. You help with tasks, answer questions, and c
+ ## What You Can Do
+ 
+ - Answer questions and have conversations
+-- Search the web and fetch content from URLs
+-- **Browse the web** with `agent-browser` — open pages, click, fill forms, take screenshots, extract data (run `agent-browser open <url>` to start, then `agent-browser snapshot -i` to see interactive elements)
++- Search the web and fetch content from URLs, only when the operator has turned web tools on. They are off by default: if `WebSearch` and `WebFetch` are not in your tool list, say so and do not try another way
++- **Browse the web** with `agent-browser` — open pages, click, fill forms, take screenshots, extract data (run `agent-browser open <url>` to start, then `agent-browser snapshot -i` to see interactive elements). This works only when the operator has opened the container's network. By default the network is restricted and no page loads
+ - Read and write files in your workspace
+ - Run bash commands in your sandbox
+ - Schedule tasks to run later or on a recurring basis
 diff --git a/package-lock.json b/package-lock.json
 index 045eb05e88b529625f762b0a0e79af8e0ee5c55e..41864c8da8c916671692e641fcb3bf76c441ba7a 100644
 --- a/package-lock.json
@@ -4348,10 +4433,10 @@ index c4c5543928a92309d50c25511c4937b287a2f666..5c501b043d9f62d3b49f072187e74395
   * The bot mailbox actually in effect: SEND_FROM_EMAIL from .env or the
 diff --git a/src/container-network.test.ts b/src/container-network.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..2c36e09e0da6b8c91baeb7e5f80a7533a0e7f073
+index 0000000000000000000000000000000000000000..3772d9843d22af9c02b4bb9628de52efb7538cce
 --- /dev/null
 +++ b/src/container-network.test.ts
-@@ -0,0 +1,281 @@
+@@ -0,0 +1,324 @@
 +/**
 + * The container's network setting (CONTAINER_NETWORK): the arguments the
 + * host passes to `docker run` for both values, and the address the
@@ -4516,8 +4601,11 @@ index 0000000000000000000000000000000000000000..2c36e09e0da6b8c91baeb7e5f80a7533
 +  delete process.env.CONTAINER_NETWORK;
 +  delete process.env.AGENT_WEB_TOOLS;
 +  delete process.env.CREDENTIAL_PROXY_HOST;
++  // The deployment recipe's value. The tests of the warning change it.
++  process.env.WEBHOOK_HOST = '127.0.0.1';
 +});
 +afterEach(() => {
++  delete process.env.WEBHOOK_HOST;
 +  delete process.env.CONTAINER_NETWORK;
 +  delete process.env.AGENT_WEB_TOOLS;
 +});
@@ -4631,6 +4719,46 @@ index 0000000000000000000000000000000000000000..2c36e09e0da6b8c91baeb7e5f80a7533
 +    );
 +    process.env.CREDENTIAL_PROXY_HOST = '0.0.0.0';
 +    expect(resolveProxyBindHost()).toBe('0.0.0.0');
++  });
++
++  it('restricted warns at start when the webhook listener is not on loopback', () => {
++    const warned = () =>
++      JSON.stringify(vi.mocked(logger.warn).mock.calls).includes(
++        'WEBHOOK_HOST',
++      );
++    // Unset: the listener's default is all interfaces.
++    for (const host of [undefined, '0.0.0.0', '::', '192.0.2.10']) {
++      vi.clearAllMocks();
++      if (host === undefined) delete process.env.WEBHOOK_HOST;
++      else process.env.WEBHOOK_HOST = host;
++      resolveProxyBindHost();
++      expect(warned()).toBe(true);
++    }
++    for (const host of ['127.0.0.1', '127.0.0.53', 'localhost', '::1']) {
++      vi.clearAllMocks();
++      process.env.WEBHOOK_HOST = host;
++      resolveProxyBindHost();
++      expect(warned()).toBe(false);
++    }
++  });
++
++  it('restricted on Docker Desktop gives the same webhook warning', () => {
++    state.platform = 'darwin';
++    process.env.CONTAINER_NETWORK = 'restricted';
++    delete process.env.WEBHOOK_HOST;
++    resolveProxyBindHost();
++    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).toMatch(
++      /WEBHOOK_HOST/,
++    );
++  });
++
++  it('open does not give the webhook warning: the open warning covers it', () => {
++    process.env.CONTAINER_NETWORK = 'open';
++    delete process.env.WEBHOOK_HOST;
++    resolveProxyBindHost();
++    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toMatch(
++      /WEBHOOK_HOST/,
++    );
 +  });
 +});
 diff --git a/src/container-runner-provider.test.ts b/src/container-runner-provider.test.ts
@@ -5192,7 +5320,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..f261b8662d98f7cf842677b15b0bae95
          `Exit Code: ${code}`,
          `Stdout Truncated: ${stdoutTruncated}`,
 diff --git a/src/container-runtime.ts b/src/container-runtime.ts
-index 2dd01c1c3ea91c3850e160b469caacb7df0db5a5..0712cd5c29987df9b3875da9376ca6a648f78787 100644
+index 2dd01c1c3ea91c3850e160b469caacb7df0db5a5..b57bbf1138deb58e5393b2fd26434eb1e2d9eca7 100644
 --- a/src/container-runtime.ts
 +++ b/src/container-runtime.ts
 @@ -6,6 +6,7 @@ import { execFileSync, execSync } from 'child_process';
@@ -5228,7 +5356,7 @@ index 2dd01c1c3ea91c3850e160b469caacb7df0db5a5..0712cd5c29987df9b3875da9376ca6a6
  
    // Bare-metal Linux: bind to the docker0 bridge IP instead of 0.0.0.0
    const ifaces = os.networkInterfaces();
-@@ -64,8 +72,184 @@ export function detectProxyBindHost(): string {
+@@ -64,8 +72,211 @@ export function detectProxyBindHost(): string {
    throw new Error('Cannot determine docker0 IPv4 address for credential proxy');
  }
  
@@ -5350,6 +5478,32 @@ index 2dd01c1c3ea91c3850e160b469caacb7df0db5a5..0712cd5c29987df9b3875da9376ca6a6
 +  restrictedGateway = undefined;
 +}
 +
++/** True for an address only the host itself can reach. */
++export function isLoopbackHost(host: string): boolean {
++  const h = host.trim().toLowerCase();
++  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
++}
++
++/**
++ * The restricted network still routes to the host on the network's gateway
++ * address, so a host service that listens on all interfaces is reachable
++ * from the agent container. The webhook listener does that by default
++ * (WEBHOOK_HOST, src/channels/webhook.ts). The default is not changed here;
++ * the operator is told at each start.
++ */
++export function warnIfWebhookReachableFromContainers(): void {
++  const host = process.env.WEBHOOK_HOST || '0.0.0.0';
++  if (isLoopbackHost(host)) return;
++  logger.warn(
++    { webhookHost: host },
++    'CONTAINER_NETWORK is restricted, but the webhook listener is not on a ' +
++      'loopback address (WEBHOOK_HOST): the agent container can reach it, ' +
++      'and any other host service that listens on all interfaces, on the ' +
++      'network gateway address. Set WEBHOOK_HOST=127.0.0.1 in the process ' +
++      'environment and put a reverse proxy in front.',
++  );
++}
++
 +/**
 + * Address the credential proxy must bind to for the current network mode.
 + * Restricted on Linux: the internal network's gateway address, the only host
@@ -5367,11 +5521,12 @@ index 2dd01c1c3ea91c3850e160b469caacb7df0db5a5..0712cd5c29987df9b3875da9376ca6a6
 +    );
 +    return PROXY_BIND_HOST;
 +  }
++  warnIfWebhookReachableFromContainers();
 +  if (usesDockerDesktop()) {
 +    ensureRestrictedNetwork();
 +    logger.warn(
 +      'CONTAINER_NETWORK=restricted is not verified on Docker Desktop. ' +
-+        'Run scripts/check-container-egress.sh before you rely on it.',
++        'Run scripts/check-container-egress.ts before you rely on it.',
 +    );
 +    return PROXY_BIND_HOST;
 +  }
@@ -5744,8 +5899,296 @@ index 0000000000000000000000000000000000000000..1372728a436c9c1a4ee241e48a72ff22
 +    expect(selectProvider()).toBe('foundry');
 +  });
 +});
+diff --git a/src/credential-proxy-web-tools.test.ts b/src/credential-proxy-web-tools.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c40d984f3c54dd29237b636f613f93d0004ec65
+--- /dev/null
++++ b/src/credential-proxy-web-tools.test.ts
+@@ -0,0 +1,282 @@
++/**
++ * Credential proxy with web tools off: the check in src/web-tools.ts applied
++ * to real requests, on the Anthropic route and on the Foundry route. Uses
++ * local fake upstreams.
++ */
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import http from 'http';
++import type { AddressInfo } from 'net';
++import { gzipSync } from 'zlib';
++
++const mockEnv: Record<string, string> = {};
++vi.mock('./env.js', () => ({
++  readEnvFile: vi.fn(() => ({ ...mockEnv })),
++}));
++
++vi.mock('./logger.js', () => ({
++  logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
++}));
++
++import {
++  startCredentialProxy,
++  registerProxyCaller,
++  revokeProxyCaller,
++} from './credential-proxy.js';
++import { logger } from './logger.js';
++import { resetModelProviderState } from './model-provider.js';
++
++const anthropicToken = 'a'.repeat(64);
++const foundryToken = 'f'.repeat(64);
++
++interface Seen {
++  url: string;
++  headers: http.IncomingHttpHeaders;
++  body: string;
++}
++
++function fakeUpstream(seen: Seen[]) {
++  const server = http.createServer((req, res) => {
++    const chunks: Buffer[] = [];
++    req.on('data', (c) => chunks.push(c));
++    req.on('end', () => {
++      seen.push({
++        url: req.url!,
++        headers: { ...req.headers },
++        body: Buffer.concat(chunks).toString(),
++      });
++      res.writeHead(200, { 'content-type': 'application/json' });
++      res.end('{"ok":true}');
++    });
++  });
++  return new Promise<http.Server>((resolve) =>
++    server.listen(0, '127.0.0.1', () => resolve(server)),
++  );
++}
++
++function send(
++  port: number,
++  path: string,
++  body: string | Buffer,
++  headers: Record<string, string> = {},
++  method = 'POST',
++): Promise<{ status: number; body: string }> {
++  return new Promise((resolve, reject) => {
++    const req = http.request(
++      { hostname: '127.0.0.1', port, method, path, headers },
++      (res) => {
++        const chunks: Buffer[] = [];
++        res.on('data', (c) => chunks.push(c));
++        res.on('end', () =>
++          resolve({
++            status: res.statusCode!,
++            body: Buffer.concat(chunks).toString(),
++          }),
++        );
++      },
++    );
++    req.on('error', reject);
++    req.end(body);
++  });
++}
++
++const WEB = { type: 'web_search_20250305', name: 'web_search' };
++const ESCAPED = '{"tools":[{"type":"web\\u005fsearch_20250305","name":"w"}]}';
++
++describe('credential proxy, web tools off', () => {
++  let proxy: http.Server;
++  let anthropicUpstream: http.Server;
++  let foundryUpstream: http.Server;
++  let port: number;
++  let anthropicSeen: Seen[];
++  let foundrySeen: Seen[];
++
++  async function start(env: Record<string, string> = {}) {
++    Object.assign(
++      mockEnv,
++      {
++        MODEL_PROVIDERS: 'anthropic,foundry',
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        ANTHROPIC_BASE_URL: `http://127.0.0.1:${(anthropicUpstream.address() as AddressInfo).port}`,
++        ANTHROPIC_FOUNDRY_BASE_URL: `http://127.0.0.1:${(foundryUpstream.address() as AddressInfo).port}/anthropic`,
++        ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
++      },
++      env,
++    );
++    registerProxyCaller(anthropicToken);
++    registerProxyCaller(foundryToken, 'foundry');
++    proxy = await startCredentialProxy(0);
++    port = (proxy.address() as AddressInfo).port;
++  }
++
++  /** The same request on each route: header token, and Foundry path token. */
++  const routes = [
++    {
++      name: 'anthropic',
++      path: (p: string) => p,
++      headers: { 'x-nanoclaw-proxy-token': anthropicToken },
++      seen: () => anthropicSeen,
++    },
++    {
++      name: 'foundry (path token)',
++      path: (p: string) => `/_t/${foundryToken}/anthropic${p}`,
++      headers: {} as Record<string, string>,
++      seen: () => foundrySeen,
++    },
++  ];
++
++  beforeEach(async () => {
++    vi.clearAllMocks();
++    resetModelProviderState();
++    anthropicSeen = [];
++    foundrySeen = [];
++    anthropicUpstream = await fakeUpstream(anthropicSeen);
++    foundryUpstream = await fakeUpstream(foundrySeen);
++  });
++
++  afterEach(async () => {
++    revokeProxyCaller(anthropicToken);
++    revokeProxyCaller(foundryToken);
++    await new Promise<void>((r) => (proxy ? proxy.close(() => r()) : r()));
++    await new Promise<void>((r) => anthropicUpstream.close(() => r()));
++    await new Promise<void>((r) => foundryUpstream.close(() => r()));
++    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
++    resetModelProviderState();
++  });
++
++  for (const route of routes) {
++    describe(route.name, () => {
++      const refusedCases: [string, string, string | Buffer, object?][] = [
++        ['a web search tool', '/v1/messages', JSON.stringify({ tools: [WEB] })],
++        ['a tool type written with an escape', '/v1/messages', ESCAPED],
++        ['a body that is not JSON', '/v1/messages', '{"tools":[{"type":"web'],
++        [
++          'a web tool inside a batch',
++          '/v1/messages/batches',
++          JSON.stringify({ requests: [{ params: { tools: [WEB] } }] }),
++        ],
++        [
++          'a gzip body',
++          '/v1/messages',
++          gzipSync(JSON.stringify({ tools: [WEB] })),
++          { 'content-encoding': 'gzip' },
++        ],
++        [
++          'a remote MCP server',
++          '/v1/messages',
++          JSON.stringify({
++            mcp_servers: [
++              { type: 'url', name: 'x', url: 'https://example.org/mcp' },
++            ],
++          }),
++        ],
++        [
++          'a URL the provider would download',
++          '/v1/messages',
++          JSON.stringify({
++            messages: [
++              {
++                role: 'user',
++                content: [
++                  {
++                    type: 'image',
++                    source: { type: 'url', url: 'https://example.org/a' },
++                  },
++                ],
++              },
++            ],
++          }),
++        ],
++        ['the managed agents API', '/v1/sessions', '{}'],
++        ['a path with dot segments', '/api/../v1/messages', '{}'],
++      ];
++
++      for (const [what, path, body, extra] of refusedCases) {
++        it(`refuses ${what} and does not contact the provider`, async () => {
++          await start();
++          const res = await send(port, route.path(path), body, {
++            ...route.headers,
++            ...(extra as Record<string, string>),
++          });
++          expect(res.status).toBe(403);
++          expect(res.body).toContain('web tools are off');
++          expect(anthropicSeen).toEqual([]);
++          expect(foundrySeen).toEqual([]);
++          // The token prefix of a path is never logged.
++          expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toMatch(
++            /[af]{64}/,
++          );
++        });
++      }
++
++      it('forwards an ordinary request as the JSON it checked', async () => {
++        await start();
++        const res = await send(
++          port,
++          route.path('/v1/messages?beta=true'),
++          '{"max_tokens": 5, "messages": [], "max_tokens": 7}',
++          route.headers,
++        );
++        expect(res.status).toBe(200);
++        const seen = route.seen();
++        expect(seen).toHaveLength(1);
++        expect(seen[0].body).toBe('{"max_tokens":7,"messages":[]}');
++        expect(seen[0].headers['content-length']).toBe(
++          String(seen[0].body.length),
++        );
++      });
++
++      it('forwards every one of these when AGENT_WEB_TOOLS is on, byte for byte', async () => {
++        await start({ AGENT_WEB_TOOLS: '1' });
++        const res = await send(
++          port,
++          route.path('/v1/messages'),
++          ESCAPED,
++          route.headers,
++        );
++        expect(res.status).toBe(200);
++        expect(route.seen()[0].body).toBe(ESCAPED);
++      });
++    });
++  }
++
++  it('reports a tool type it does not know once, and still forwards', async () => {
++    await start();
++    const body = JSON.stringify({
++      tools: [{ type: 'unit_test_new_tool_20990101', name: 'n' }],
++    });
++    const headers = { 'x-nanoclaw-proxy-token': anthropicToken };
++    expect((await send(port, '/v1/messages', body, headers)).status).toBe(200);
++    expect((await send(port, '/v1/messages', body, headers)).status).toBe(200);
++    const calls = vi
++      .mocked(logger.warn)
++      .mock.calls.filter((c) =>
++        JSON.stringify(c[0]).includes('unit_test_new_tool_20990101'),
++      );
++    expect(calls).toHaveLength(1);
++    expect(anthropicSeen).toHaveLength(2);
++  });
++
++  it('keeps the OAuth key exchange and requests with no body working', async () => {
++    await start({
++      ANTHROPIC_API_KEY: '',
++      CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth-token',
++    });
++    const headers = {
++      'x-nanoclaw-proxy-token': anthropicToken,
++      authorization: 'Bearer placeholder',
++    };
++    const exchange = await send(
++      port,
++      '/api/oauth/claude_cli/create_api_key',
++      '',
++      headers,
++    );
++    expect(exchange.status).toBe(200);
++    expect(anthropicSeen[0].headers.authorization).toBe(
++      'Bearer real-oauth-token',
++    );
++    const models = await send(port, '/v1/models', '', headers, 'GET');
++    expect(models.status).toBe(200);
++    expect(anthropicSeen).toHaveLength(2);
++  });
++});
 diff --git a/src/credential-proxy.test.ts b/src/credential-proxy.test.ts
-index b46bbd8cfe1ca28bbe60456580a0a66fd4a00caa..0c91bcf8467cce9d795b188fa046dfcd532f519c 100644
+index b46bbd8cfe1ca28bbe60456580a0a66fd4a00caa..b3214a228e03ba8f5129aec1a34d7811cfe1cbb2 100644
 --- a/src/credential-proxy.test.ts
 +++ b/src/credential-proxy.test.ts
 @@ -91,6 +91,38 @@ describe('credential-proxy', () => {
@@ -5771,7 +6214,7 @@ index b46bbd8cfe1ca28bbe60456580a0a66fd4a00caa..0c91bcf8467cce9d795b188fa046dfcd
 +    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
 +    const refused = await post(proxyPort);
 +    expect(refused.statusCode).toBe(403);
-+    expect(refused.body).toContain('turned off');
++    expect(refused.body).toContain('web tools are off');
 +    expect(lastUpstreamHeaders).toEqual({});
 +
 +    await new Promise<void>((r) => proxyServer.close(() => r()));
@@ -5788,7 +6231,7 @@ index b46bbd8cfe1ca28bbe60456580a0a66fd4a00caa..0c91bcf8467cce9d795b188fa046dfcd
      proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
  
 diff --git a/src/credential-proxy.ts b/src/credential-proxy.ts
-index 5990016ef0c61fde23168aaba7b004d41574a259..db345b64693636d4c6971805ee7d29631524f33b 100644
+index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df167e555e04 100644
 --- a/src/credential-proxy.ts
 +++ b/src/credential-proxy.ts
 @@ -9,6 +9,10 @@
@@ -5812,11 +6255,11 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..db345b64693636d4c6971805ee7d2963
 +  ModelProvider,
 +  recordProviderResult,
 +} from './model-provider.js';
-+import { declaresWebTool, webToolsEnabled } from './web-tools.js';
++import { checkProxyRequest, webToolsEnabled } from './web-tools.js';
  
  export type AuthMode = 'api-key' | 'oauth';
  
-@@ -26,26 +37,54 @@ export interface ProxyConfig {
+@@ -26,26 +37,66 @@ export interface ProxyConfig {
  
  const PROXY_TOKEN_HEADER = 'x-nanoclaw-proxy-token';
  const MAX_PROXY_BODY_BYTES = 20 * 1024 * 1024;
@@ -5828,6 +6271,18 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..db345b64693636d4c6971805ee7d2963
 + * token is rejected. A path with this prefix must never be logged.
 + */
 +const PATH_TOKEN_RE = /^\/_t\/([0-9a-f]{64})(\/.*)?$/;
++
++/** One log line per key for the life of the process, with a cap on keys. */
++const warned = new Set<string>();
++function warnOnce(
++  key: string,
++  fields: Record<string, unknown>,
++  message: string,
++): void {
++  if (warned.has(key) || warned.size >= 200) return;
++  warned.add(key);
++  logger.warn(fields, message);
++}
  
  /** Tokens are generated by the host for one container run, never persisted. */
 -export function registerProxyCaller(token: string): void {
@@ -5879,7 +6334,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..db345b64693636d4c6971805ee7d2963
  }
  
  export function startCredentialProxy(
-@@ -69,17 +108,39 @@ export function startCredentialProxy(
+@@ -69,17 +120,39 @@ export function startCredentialProxy(
    const upstreamUrl = new URL(
      secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
    );
@@ -5922,29 +6377,59 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..db345b64693636d4c6971805ee7d2963
  
        const rejectOversize = () => {
          res.writeHead(413);
-@@ -107,10 +168,30 @@ export function startCredentialProxy(
+@@ -106,11 +179,59 @@ export function startCredentialProxy(
+       });
        req.on('end', () => {
          if (tooLarge) return;
-         const body = Buffer.concat(chunks);
-+        // Web tools off (AGENT_WEB_TOOLS): refuse a model request that asks
-+        // the provider to search or fetch the web. See src/web-tools.ts.
-+        if (!webTools && declaresWebTool(body)) {
-+          logger.warn(
-+            { url: req.url },
-+            'Credential proxy refused a web tool request (AGENT_WEB_TOOLS is off)',
-+          );
-+          res.writeHead(403, { 'content-type': 'application/json' });
-+          res.end(
-+            JSON.stringify({
-+              type: 'error',
-+              error: {
-+                type: 'permission_error',
-+                message:
-+                  'Web search and web fetch are turned off on this deployment.',
-+              },
-+            }),
-+          );
-+          return;
+-        const body = Buffer.concat(chunks);
++        let body: Buffer = Buffer.concat(chunks);
++        // Web tools off (AGENT_WEB_TOOLS): refuse a request that would make
++        // the provider contact an outside host. Both providers pass here.
++        // See checkProxyRequest in src/web-tools.ts.
++        if (!webTools) {
++          const verdict = checkProxyRequest({
++            path: requestPath,
++            contentEncoding: req.headers['content-encoding'],
++            body,
++          });
++          if (!verdict.allow) {
++            // The reason is fixed text. The path is not logged: it may be
++            // caller-chosen text, and may hold the token prefix.
++            logger.warn(
++              { provider, reason: verdict.reason },
++              'Credential proxy refused a request (AGENT_WEB_TOOLS is off)',
++            );
++            res.writeHead(403, { 'content-type': 'application/json' });
++            res.end(
++              JSON.stringify({
++                type: 'error',
++                error: {
++                  type: 'permission_error',
++                  message: `Refused by this deployment (web tools are off): ${verdict.reason}.`,
++                },
++              }),
++            );
++            return;
++          }
++          body = verdict.body;
++          for (const type of verdict.unknownToolTypes)
++            warnOnce(
++              `tool:${type}`,
++              { provider, toolType: type },
++              'Credential proxy forwarded a tool type it does not know while AGENT_WEB_TOOLS is off; check that it does not reach outside hosts',
++            );
++          if (verdict.otherPath) {
++            const pathClass = requestPath
++              .split('?')[0]
++              .split('/')
++              .slice(0, 4)
++              .join('/');
++            warnOnce(
++              `path:${pathClass}`,
++              { provider, pathClass },
++              'Credential proxy forwarded a request that is not a model request (logged once per path)',
++            );
++          }
 +        }
          const headers: Record<string, string | number | string[] | undefined> =
            {
@@ -5954,7 +6439,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..db345b64693636d4c6971805ee7d2963
              'content-length': body.length,
            };
  
-@@ -120,7 +201,14 @@ export function startCredentialProxy(
+@@ -120,7 +241,14 @@ export function startCredentialProxy(
          delete headers['transfer-encoding'];
          delete headers[PROXY_TOKEN_HEADER];
  
@@ -5970,7 +6455,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..db345b64693636d4c6971805ee7d2963
            // API key mode: inject x-api-key on every request
            delete headers['x-api-key'];
            headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
-@@ -139,21 +227,28 @@ export function startCredentialProxy(
+@@ -139,21 +267,28 @@ export function startCredentialProxy(
  
          const upstream = makeRequest(
            {
@@ -8878,10 +9363,12 @@ index 48915fac34f7932485ce8d03bcdd10201ae237ff..d921c38a7f314aab30780cc1ac98904a
            // Forward result to user (sendMessage handles formatting). The
 diff --git a/src/web-tools.test.ts b/src/web-tools.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..929990196b456759f68d2ab7e48509c2263742e8
+index 0000000000000000000000000000000000000000..4b81df86b0cd43a0764f14cc7ded1e5a2b17ed53
 --- /dev/null
 +++ b/src/web-tools.test.ts
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,390 @@
++import { gzipSync } from 'zlib';
++
 +import { afterEach, describe, expect, it, vi } from 'vitest';
 +
 +const mockEnv: Record<string, string> = {};
@@ -8889,7 +9376,12 @@ index 0000000000000000000000000000000000000000..929990196b456759f68d2ab7e48509c2
 +  readEnvFile: vi.fn(() => ({ ...mockEnv })),
 +}));
 +
-+import { declaresWebTool, webToolsEnabled } from './web-tools.js';
++import {
++  checkProxyRequest,
++  classifyProxyPath,
++  type ProxyRequestVerdict,
++  webToolsEnabled,
++} from './web-tools.js';
 +
 +const runnerTools = (await import(
 +  new URL('../container/agent-runner/src/allowed-tools.ts', import.meta.url)
@@ -8955,45 +9447,322 @@ index 0000000000000000000000000000000000000000..929990196b456759f68d2ab7e48509c2
 +  });
 +});
 +
-+describe('declaresWebTool', () => {
-+  const body = (o: unknown) => Buffer.from(JSON.stringify(o));
++describe('checkProxyRequest (the proxy check while web tools are off)', () => {
++  const json = (o: unknown) => Buffer.from(JSON.stringify(o));
++  const web = { type: 'web_search_20250305', name: 'web_search' };
++  const check = (
++    body: Buffer,
++    path = '/v1/messages?beta=true',
++    contentEncoding?: string,
++  ) => checkProxyRequest({ path, body, contentEncoding });
++  const refused = (v: ProxyRequestVerdict) =>
++    v.allow ? 'allowed' : `refused: ${v.reason}`;
 +
-+  it('finds a provider-side web search or web fetch tool', () => {
++  it('refuses a provider-side web search or web fetch tool', () => {
++    expect(refused(check(json({ tools: [web] })))).toMatch(/web search/);
 +    expect(
-+      declaresWebTool(
-+        body({ tools: [{ type: 'web_search_20250305', name: 'web_search' }] }),
++      refused(
++        check(
++          json({ tools: [{ name: 'Bash' }, { type: 'web_fetch_20260309' }] }),
++        ),
 +      ),
-+    ).toBe(true);
++    ).toMatch(/web search or web fetch/);
++    // A version this code has never seen.
 +    expect(
-+      declaresWebTool(
-+        body({ tools: [{ name: 'Bash' }, { type: 'web_fetch_20250910' }] }),
-+      ),
-+    ).toBe(true);
++      refused(check(json({ tools: [{ type: 'web_search_20990101' }] }))),
++    ).toMatch(/^refused/);
 +  });
 +
-+  it('ignores the words in message text and in client tool names', () => {
-+    expect(
-+      declaresWebTool(
-+        body({
-+          messages: [{ role: 'user', content: 'what is web_search?' }],
-+          tools: [{ name: 'web_search_notes', input_schema: {} }],
-+        }),
-+      ),
-+    ).toBe(false);
++  it('refuses a tool type written with a JSON escape', () => {
++    const body = Buffer.from(
++      '{"tools":[{"type":"web\\u005fsearch_20250305","name":"w"}]}',
++    );
++    expect(body.includes('web_search')).toBe(false);
++    expect(refused(check(body))).toMatch(/web search/);
 +  });
 +
-+  it('is false for bodies with no tools or that are not JSON', () => {
-+    expect(declaresWebTool(body({ messages: [] }))).toBe(false);
-+    expect(declaresWebTool(Buffer.from('web_search not json'))).toBe(false);
-+    expect(declaresWebTool(Buffer.alloc(0))).toBe(false);
++  it('refuses a model request whose body is not UTF-8 JSON', () => {
++    for (const body of [
++      Buffer.from('{"tools":[{"type":"web_search_20250305"}'),
++      Buffer.from('web_search not json'),
++      Buffer.from([0xff, 0xfe, 0x7b, 0x00, 0x7d, 0x00]),
++      json([{ tools: [web] }]),
++      json('text'),
++    ]) {
++      expect(refused(check(body))).toMatch(/not UTF-8 JSON|not a JSON object/);
++      expect(refused(check(body, '/v1/messages/count_tokens'))).toMatch(
++        /^refused/,
++      );
++      expect(refused(check(body, '/anthropic/v1/messages'))).toMatch(
++        /^refused/,
++      );
++    }
++  });
++
++  it('refuses a web tool nested in a batch, or deeper', () => {
++    const batch = json({
++      requests: [{ custom_id: 'a', params: { messages: [], tools: [web] } }],
++    });
++    expect(refused(check(batch, '/v1/messages/batches'))).toMatch(/web search/);
++    expect(
++      refused(check(json({ a: [{ b: { c: { tools: [web] } } }] }))),
++    ).toMatch(/web search/);
++  });
++
++  it('refuses a body with a content encoding, on any path', () => {
++    const gz = gzipSync(json({ tools: [web] }));
++    for (const path of ['/v1/messages', '/api/hello', '/v1/files']) {
++      expect(refused(check(gz, path, 'gzip'))).toMatch(/content encoding/);
++      expect(refused(check(json({}), path, 'br'))).toMatch(/content encoding/);
++    }
++    // Compressed bytes with no header are not JSON.
++    expect(refused(check(gz))).toMatch(/not UTF-8 JSON/);
++    expect(refused(check(json({}), '/v1/messages', 'identity'))).toBe(
++      'allowed',
++    );
++  });
++
++  it('sends on what it checked: a duplicate key cannot hide a tool', () => {
++    const first = check(
++      Buffer.from('{"tools":[{"type":"web_search_20250305"}],"tools":[]}'),
++    );
++    // The parser keeps the last value, and only that value is sent on.
++    expect(first.allow && first.body.toString()).toBe('{"tools":[]}');
++    const last = check(
++      Buffer.from('{"tools":[],"tools":[{"type":"web_search_20250305"}]}'),
++    );
++    expect(refused(last)).toMatch(/web search/);
++    const bom = check(Buffer.from('﻿{"max_tokens": 1}'));
++    expect(bom.allow && bom.body.toString()).toBe('{"max_tokens":1}');
++  });
++
++  it('refuses the remote MCP connector', () => {
++    const server = { type: 'url', name: 'x', url: 'https://example.org/mcp' };
++    expect(refused(check(json({ mcp_servers: [server] })))).toMatch(
++      /mcp_servers/,
++    );
++    expect(
++      refused(
++        check(
++          json({ requests: [{ params: { mcp_servers: [server] } }] }),
++          '/v1/messages/batches',
++        ),
++      ),
++    ).toMatch(/mcp_servers/);
++    expect(
++      refused(
++        check(json({ tools: [{ type: 'mcp_toolset', mcp_server_name: 'x' }] })),
++      ),
++    ).toMatch(/mcp_toolset/);
++    expect(refused(check(json({ mcp_servers: [] })))).toBe('allowed');
++  });
++
++  it('refuses an image or document the provider would download', () => {
++    for (const type of ['image', 'document']) {
++      const body = json({
++        messages: [
++          {
++            role: 'user',
++            content: [
++              { type, source: { type: 'url', url: 'https://example.org/a' } },
++            ],
++          },
++        ],
++      });
++      expect(refused(check(body))).toMatch(/download a URL/);
++    }
++    const inline = json({
++      messages: [
++        {
++          role: 'user',
++          content: [
++            {
++              type: 'image',
++              source: { type: 'base64', media_type: 'image/png', data: 'AA==' },
++            },
++          ],
++        },
++      ],
++    });
++    expect(refused(check(inline))).toBe('allowed');
++  });
++
++  it('refuses the managed agents API by path, in any letter case', () => {
++    for (const path of [
++      '/v1/agents',
++      '/v1/sessions/abc/events?beta=true',
++      '/v1/environments',
++      '/V1/Sessions',
++      '/anthropic/v1/agents/',
++    ]) {
++      expect(refused(check(json({}), path))).toMatch(/managed agents/);
++      expect(refused(check(Buffer.alloc(0), path))).toMatch(/managed agents/);
++    }
++    expect(
++      refused(check(json({ tools: [{ type: 'agent_toolset_20260401' }] }))),
++    ).toMatch(/managed agent tool set/);
++  });
++
++  it('refuses a path that is not in plain form', () => {
++    for (const path of [
++      '/api/../v1/messages',
++      '/v1//messages',
++      '/v1/%6dessages',
++      '/v1/./messages',
++      '/v1/messages;x=1',
++      '/v1\\messages',
++      'http://example.org/v1/messages',
++      '',
++    ]) {
++      expect(refused(check(json({}), path))).toMatch(/plain form/);
++    }
++  });
++
++  it('allows an ordinary agent request and sends the same JSON on', () => {
++    const request = {
++      model: 'claude-x',
++      max_tokens: 1024,
++      stream: true,
++      system: [{ type: 'text', text: 'web_search mcp_servers' }],
++      messages: [
++        { role: 'user', content: 'what is web_search? 😀' },
++        {
++          role: 'assistant',
++          content: [
++            {
++              type: 'tool_use',
++              id: 't1',
++              name: 'mcp__nanoclaw__send_message',
++              // Arguments are data: none of this is read by the provider.
++              input: {
++                tools: [web],
++                mcp_servers: [{ url: 'https://example.org' }],
++                source: { type: 'url', url: 'https://example.org' },
++              },
++            },
++          ],
++        },
++        {
++          role: 'user',
++          content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }],
++        },
++      ],
++      tools: [
++        {
++          name: 'web_search_notes',
++          description: 'a client tool',
++          input_schema: {
++            type: 'object',
++            properties: {
++              mcp_servers: { type: 'array', default: [{ type: 'url' }] },
++              source: { type: 'object', default: { type: 'url' } },
++            },
++          },
++        },
++        { type: 'bash_20250124', name: 'bash' },
++        { type: 'custom', name: 'x', input_schema: { type: 'object' } },
++      ],
++    };
++    const verdict = check(json(request));
++    expect(verdict.allow).toBe(true);
++    if (!verdict.allow) return;
++    expect(JSON.parse(verdict.body.toString())).toEqual(request);
++    expect(verdict.unknownToolTypes).toEqual([]);
++    expect(verdict.otherPath).toBe(false);
++  });
++
++  it('keeps web search results in the history of a session that had web tools on', () => {
++    const body = json({
++      messages: [
++        {
++          role: 'assistant',
++          content: [
++            {
++              type: 'server_tool_use',
++              id: 's1',
++              name: 'web_search',
++              input: {},
++            },
++            {
++              type: 'web_search_tool_result',
++              tool_use_id: 's1',
++              content: [
++                {
++                  type: 'web_search_result',
++                  url: 'https://example.org',
++                  title: 't',
++                  encrypted_content: 'x',
++                },
++              ],
++            },
++          ],
++        },
++      ],
++      tools: [],
++    });
++    expect(refused(check(body))).toBe('allowed');
++  });
++
++  it('allows a tool type it does not know, and names it', () => {
++    const verdict = check(
++      json({
++        tools: [
++          { type: 'code_execution_20260120', name: 'code_execution' },
++          { type: 'something_new_20990101', name: 'n' },
++          { type: 'bash_20250124', name: 'bash' },
++        ],
++      }),
++    );
++    expect(verdict.allow && verdict.unknownToolTypes).toEqual([
++      'code_execution_20260120',
++      'something_new_20990101',
++    ]);
++  });
++
++  it('lets other paths through: empty bodies, the key exchange, an upload', () => {
++    const empty = check(Buffer.alloc(0), '/v1/models');
++    expect(empty.allow && empty.otherPath).toBe(true);
++    expect(
++      refused(
++        check(json({ raw: 'x' }), '/api/oauth/claude_cli/create_api_key'),
++      ),
++    ).toBe('allowed');
++    const upload = Buffer.from('--b\r\ncontent-disposition: form-data\r\n');
++    const sent = check(upload, '/v1/files');
++    expect(sent.allow && sent.body.equals(upload)).toBe(true);
++    // A JSON body on another path is still checked.
++    expect(refused(check(json({ tools: [web] }), '/v1/unknown'))).toMatch(
++      /web search/,
++    );
++  });
++
++  it('refuses a body nested too deeply to check', () => {
++    let deep = '{"tools":[{"type":"web_search_20250305"}]}';
++    for (let i = 0; i < 400; i++) deep = `{"a":${deep}}`;
++    expect(refused(check(Buffer.from(deep)))).toMatch(/^refused/);
++  });
++});
++
++describe('classifyProxyPath', () => {
++  it('names model paths with or without a base path', () => {
++    expect(classifyProxyPath('/v1/messages')).toBe('model');
++    expect(classifyProxyPath('/v1/messages?beta=true')).toBe('model');
++    expect(classifyProxyPath('/v1/messages/batches/b1/cancel')).toBe('model');
++    expect(classifyProxyPath('/anthropic/v1/messages/count_tokens')).toBe(
++      'model',
++    );
++    expect(classifyProxyPath('/v1/complete')).toBe('model');
++    expect(classifyProxyPath('/api/hello')).toBe('other');
++    expect(classifyProxyPath('/')).toBe('other');
++    expect(classifyProxyPath('/v1/models/claude-x:latest')).toBe('other');
 +  });
 +});
 diff --git a/src/web-tools.ts b/src/web-tools.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..54cab8b8fc7467ad37c93e33db66ee6957e495cc
+index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886117e370a
 --- /dev/null
 +++ b/src/web-tools.ts
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,219 @@
 +/**
 + * The web tools setting (AGENT_WEB_TOOLS), off by default.
 + *
@@ -9004,8 +9773,9 @@ index 0000000000000000000000000000000000000000..54cab8b8fc7467ad37c93e33db66ee69
 + *
 + * Off means two things: the container is not told to offer the tools
 + * (container/agent-runner/src/allowed-tools.ts), and the credential proxy
-+ * refuses a model request that declares a web search or web fetch tool. The
-+ * second check holds even if the agent rewrites its own runner.
++ * refuses a request that would make the provider contact an outside host
++ * (checkProxyRequest below). The second check is the boundary: it holds even
++ * if the agent rewrites its own runner or calls the proxy directly.
 + */
 +import { readEnvFile } from './env.js';
 +
@@ -9022,25 +9792,195 @@ index 0000000000000000000000000000000000000000..54cab8b8fc7467ad37c93e33db66ee69
 +}
 +
 +/**
-+ * True if a Messages API request body declares a provider-side web tool
-+ * (tool `type` starting with web_search or web_fetch). Bodies that are not
-+ * JSON, or have no tools, are not web tool requests.
++ * The proxy's check of one request while web tools are off.
++ *
++ * The container holds its run's proxy token and can write any request it
++ * likes, so the check trusts nothing the caller controls:
++ *
++ * - The body is always parsed. There is no search of the raw bytes: JSON
++ *   allows escapes, so a tool type can be written without its plain text.
++ * - A body that parsed is sent on re-serialised from the parsed value, never
++ *   as the caller's bytes. What was checked is what the provider reads
++ *   (duplicate keys, escapes and a byte order mark are gone).
++ * - On a model path a body that is not one UTF-8 JSON object is refused.
++ * - A body with a content encoding is refused: the proxy does not decode it.
++ * - The path must be in plain form, so that the path the proxy classified is
++ *   the path the provider routes.
++ *
++ * Refused, each because the provider would contact an outside host for the
++ * caller (read from the type definitions of @anthropic-ai/sdk 0.93.0, the
++ * version container/agent-runner pins; no live endpoint was called):
++ *
++ * - a web search or web fetch tool, in a `tools` list at any depth (a batch
++ *   request nests whole message requests);
++ * - the remote MCP connector: a non-empty `mcp_servers` list at any depth,
++ *   and an `mcp_toolset` tool;
++ * - an image or document the provider is asked to download
++ *   (`source: {type: "url"}`);
++ * - the managed agents API (`/v1/agents`, `/v1/sessions`,
++ *   `/v1/environments`): the provider runs an agent in its own container
++ *   with its own network and web tools, and its `agent_toolset` tool.
++ *
++ * A tool type that is not known here is allowed and reported once, so an
++ * operator can see it. A strict allowlist of tool types and of paths would
++ * be stronger; it is not used because a wrong entry would refuse every agent
++ * turn, and no live turn has been run to draw the list from.
 + */
-+export function declaresWebTool(body: Buffer): boolean {
-+  // Cheap pre-check: most requests carry no such tool.
-+  if (!body.includes('web_search') && !body.includes('web_fetch')) return false;
-+  let parsed: unknown;
-+  try {
-+    parsed = JSON.parse(body.toString('utf8'));
-+  } catch {
-+    return false;
++export interface ProxyRequestInput {
++  /** Path and query as the proxy will send them (no token prefix). */
++  path: string;
++  /** The content-encoding request header, if any. */
++  contentEncoding?: string | string[];
++  body: Buffer;
++}
++
++export type ProxyRequestVerdict =
++  | {
++      allow: true;
++      /** The bytes to send upstream. */
++      body: Buffer;
++      /** Tool types that are not known to this check. */
++      unknownToolTypes: string[];
++      /** True for a path that is neither a model path nor refused. */
++      otherPath: boolean;
++    }
++  | { allow: false; reason: string };
++
++const WEB_TOOL_TYPE = /^web_(search|fetch)/;
++/** Tools the caller runs itself, or that stay inside the provider. */
++const KNOWN_TOOL_TYPE =
++  /^(custom$|bash_|text_editor_|computer_|memory_|tool_search_tool_|advisor_)/;
++const MANAGED_AGENT_PATHS = new Set(['agents', 'sessions', 'environments']);
++const MODEL_PATHS = new Set(['messages', 'complete']);
++const PLAIN_SEGMENT = /^[A-Za-z0-9._~:@-]+$/;
++const MAX_DEPTH = 256;
++
++type PathKind = 'model' | 'managed-agents' | 'other' | 'malformed';
++
++/** Classify the path part of a request URL. The query is ignored. */
++export function classifyProxyPath(url: string): PathKind {
++  const q = url.indexOf('?');
++  const path = q === -1 ? url : url.slice(0, q);
++  if (!path.startsWith('/')) return 'malformed';
++  const segments = path.slice(1).split('/');
++  // One trailing slash is plain; an empty or dot segment anywhere else, or
++  // a percent escape, is not: the provider may route it differently.
++  if (segments.length > 1 && segments[segments.length - 1] === '')
++    segments.pop();
++  if (segments.length === 1 && segments[0] === '') return 'other';
++  for (const s of segments) {
++    if (!PLAIN_SEGMENT.test(s) || s === '.' || s === '..') return 'malformed';
 +  }
-+  const tools = (parsed as { tools?: unknown })?.tools;
-+  if (!Array.isArray(tools)) return false;
-+  return tools.some((t) => {
-+    const type = (t as { type?: unknown })?.type;
-+    return typeof type === 'string' && /^web_(search|fetch)/.test(type);
-+  });
++  const lower = segments.map((s) => s.toLowerCase());
++  let kind: PathKind = 'other';
++  for (let i = 0; i + 1 < lower.length; i++) {
++    if (lower[i] !== 'v1') continue;
++    if (MANAGED_AGENT_PATHS.has(lower[i + 1])) return 'managed-agents';
++    if (MODEL_PATHS.has(lower[i + 1])) kind = 'model';
++  }
++  return kind;
++}
++
++function isObject(v: unknown): v is Record<string, unknown> {
++  return typeof v === 'object' && v !== null && !Array.isArray(v);
++}
++
++/** Walk a parsed body. Returns a refusal reason, or null. */
++function findOutsideReach(root: unknown, unknown: Set<string>): string | null {
++  const stack: { value: unknown; depth: number }[] = [
++    { value: root, depth: 0 },
++  ];
++  while (stack.length) {
++    const { value, depth } = stack.pop()!;
++    if (depth > MAX_DEPTH) return 'the body is nested too deeply to check';
++    if (Array.isArray(value)) {
++      for (const item of value) stack.push({ value: item, depth: depth + 1 });
++      continue;
++    }
++    if (!isObject(value)) continue;
++    const blockType = value.type;
++    const isToolUse =
++      typeof blockType === 'string' && /(^|_)tool_use$/.test(blockType);
++    for (const [key, child] of Object.entries(value)) {
++      if (key === 'mcp_servers' && Array.isArray(child) && child.length)
++        return 'it names a remote MCP server (mcp_servers)';
++      if (key === 'source' && isObject(child) && child.type === 'url')
++        return 'it asks the provider to download a URL (source type url)';
++      if (key === 'tools' && Array.isArray(child)) {
++        for (const tool of child) {
++          const type = isObject(tool) ? tool.type : undefined;
++          if (typeof type !== 'string') continue;
++          if (WEB_TOOL_TYPE.test(type))
++            return 'it declares a web search or web fetch tool';
++          if (type === 'mcp_toolset')
++            return 'it declares a remote MCP tool set (mcp_toolset)';
++          if (type.startsWith('agent_toolset'))
++            return 'it declares a managed agent tool set';
++          if (!KNOWN_TOOL_TYPE.test(type)) unknown.add(type.slice(0, 80));
++        }
++      }
++      // Data the provider does not read as a request: a tool's JSON schema,
++      // and the arguments of a tool call in the conversation history.
++      if (key === 'input_schema') continue;
++      if (key === 'input' && isToolUse) continue;
++      stack.push({ value: child, depth: depth + 1 });
++    }
++  }
++  return null;
++}
++
++function parseJson(body: Buffer): { ok: true; value: unknown } | { ok: false } {
++  try {
++    const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
++    return { ok: true, value: JSON.parse(text) };
++  } catch {
++    return { ok: false };
++  }
++}
++
++/** Decide one request for the credential proxy while web tools are off. */
++export function checkProxyRequest(
++  input: ProxyRequestInput,
++): ProxyRequestVerdict {
++  const kind = classifyProxyPath(input.path);
++  if (kind === 'malformed')
++    return { allow: false, reason: 'the request path is not in plain form' };
++  if (kind === 'managed-agents')
++    return {
++      allow: false,
++      reason: 'the managed agents API runs tools with their own network',
++    };
++  const encoding = ([] as string[])
++    .concat(input.contentEncoding ?? [])
++    .join(',')
++    .trim()
++    .toLowerCase();
++  if (encoding && encoding !== 'identity')
++    return {
++      allow: false,
++      reason: 'the body has a content encoding the proxy does not read',
++    };
++  const otherPath = kind === 'other';
++  if (input.body.length === 0)
++    return { allow: true, body: input.body, unknownToolTypes: [], otherPath };
++  const parsed = parseJson(input.body);
++  if (!parsed.ok) {
++    if (kind === 'model')
++      return { allow: false, reason: 'the body is not UTF-8 JSON' };
++    // Not a model path: for example a file upload. Sent on as it came.
++    return { allow: true, body: input.body, unknownToolTypes: [], otherPath };
++  }
++  if (kind === 'model' && !isObject(parsed.value))
++    return { allow: false, reason: 'the body is not a JSON object' };
++  const unknown = new Set<string>();
++  const reason = findOutsideReach(parsed.value, unknown);
++  if (reason) return { allow: false, reason };
++  return {
++    allow: true,
++    body: Buffer.from(JSON.stringify(parsed.value), 'utf8'),
++    unknownToolTypes: [...unknown],
++    otherPath,
++  };
 +}
 diff --git a/start.sh b/start.sh
 index ff6fa6fecc5b724a58da75e76a6b796f74295b9a..6ae0ce705e5149976231899657a8f1dfdecd0a12 100755

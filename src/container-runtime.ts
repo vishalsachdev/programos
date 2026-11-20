@@ -189,6 +189,32 @@ export function _resetRestrictedNetworkForTests(): void {
   restrictedGateway = undefined;
 }
 
+/** True for an address only the host itself can reach. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
+/**
+ * The restricted network still routes to the host on the network's gateway
+ * address, so a host service that listens on all interfaces is reachable
+ * from the agent container. The webhook listener does that by default
+ * (WEBHOOK_HOST, src/channels/webhook.ts). The default is not changed here;
+ * the operator is told at each start.
+ */
+export function warnIfWebhookReachableFromContainers(): void {
+  const host = process.env.WEBHOOK_HOST || '0.0.0.0';
+  if (isLoopbackHost(host)) return;
+  logger.warn(
+    { webhookHost: host },
+    'CONTAINER_NETWORK is restricted, but the webhook listener is not on a ' +
+      'loopback address (WEBHOOK_HOST): the agent container can reach it, ' +
+      'and any other host service that listens on all interfaces, on the ' +
+      'network gateway address. Set WEBHOOK_HOST=127.0.0.1 in the process ' +
+      'environment and put a reverse proxy in front.',
+  );
+}
+
 /**
  * Address the credential proxy must bind to for the current network mode.
  * Restricted on Linux: the internal network's gateway address, the only host
@@ -206,11 +232,12 @@ export function resolveProxyBindHost(): string {
     );
     return PROXY_BIND_HOST;
   }
+  warnIfWebhookReachableFromContainers();
   if (usesDockerDesktop()) {
     ensureRestrictedNetwork();
     logger.warn(
       'CONTAINER_NETWORK=restricted is not verified on Docker Desktop. ' +
-        'Run scripts/check-container-egress.sh before you rely on it.',
+        'Run scripts/check-container-egress.ts before you rely on it.',
     );
     return PROXY_BIND_HOST;
   }

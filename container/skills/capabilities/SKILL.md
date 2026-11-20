@@ -36,7 +36,7 @@ Each directory is an installed skill. The directory name is the skill name (e.g.
 
 Read the allowed tools from your SDK configuration. You always have access to:
 - **Core:** Bash, Read, Write, Edit, Glob, Grep
-- **Web:** WebSearch, WebFetch
+- **Web:** WebSearch, WebFetch (only when the operator has turned web tools on; off by default. `echo $NANOCLAW_WEB_TOOLS` prints `1` when they are on)
 - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
 - **Other:** TodoWrite, ToolSearch, Skill, NotebookEdit
 - **MCP:** mcp__nanoclaw__* (messaging, tasks, group management)
@@ -76,13 +76,13 @@ Present the report as a clean, readable message. Example:
 📋 *NanoClaw Capabilities*
 
 *Installed Skills:*
-• /agent-browser — Browse the web, fill forms, extract data
+• /agent-browser — Browse the web, fill forms, extract data (needs the container's network open)
 • /capabilities — This report
 (list all found skills)
 
 *Tools:*
 • Core: Bash, Read, Write, Edit, Glob, Grep
-• Web: WebSearch, WebFetch
+• Web: WebSearch, WebFetch / off (web tools are not turned on)
 • Orchestration: Task, TeamCreate, SendMessage
 • MCP: send_message, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group
 

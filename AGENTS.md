@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 1,994 passing tests (1,761 from the source, 233 added here). One timing test
+   is 2,066 passing tests (1,761 from the source, 305 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -106,7 +106,9 @@ move up without starting again. "First start" means part 14.
   must be set, or the host refuses to start.
 - **What it does NOT give you:** no email, so no colleague can use it; no routed
   approval by mail; no public address; it stops when the laptop sleeps. It is a look at the
-  behaviour, not a service.
+  behaviour, not a service. On a laptop with Docker Desktop the agent container's
+  network is open by default (choice 17): what the agent reads can leave the
+  machine unseen. Use test data only.
 - **Steps that apply:** part 13 steps 1 to 6 with only the model, identity and
   Telegram settings; First start steps 1, 2, 3, 4 (the main group and the Telegram
   group; no email group), 5, 6 and 7. Skip "Inbound mail" and both optional webhooks.
@@ -139,9 +141,9 @@ move up without starting again. "First start" means part 14.
     questions).
 - **What it does NOT give you:** no channel for students or the public; no
   single sign-on; no retention or deletion of old mail (the code never deletes
-  from the program repo); no restriction on the agent container's network on
-  `main` (see "Coming" below); no second mail provider. Sender caps are in memory
-  and reset on restart.
+  from the program repo); no second mail provider; no web search, web fetch or
+  browsing for the agent unless you turn them on (choice 17). Sender caps are in
+  memory and reset on restart.
 - **Steps that apply:** all of part 13, all of First start, "Inbound mail", and
   the supported hosting recipe in `docs/deployment.md`. Add the two optional
   webhooks when the machine has its public HTTPS name.
@@ -150,10 +152,10 @@ move up without starting again. "First start" means part 14.
   has never run against a live Cloudflare account, mailbox or GitHub repo. Operator
   alerts by email have not been sent through a live mail provider. Plan one real
   test of each before colleagues are told the address.
-- **Known gap on `main`:** the agent in the container cannot push with an SSH
-  deploy key (`docs/deployment.md`, step 4). Until that is solved for the
-  deployment, the agent's commits can stay on the machine. Test a push from the
-  container before real users.
+- **How the agent's work reaches the git host:** the agent commits inside the
+  container and the host pushes (First start, step 5). The container holds no git
+  credential. The host's push has run against local test remotes only; First
+  start, step 9, checks it on this machine before real users.
 
 **The MVP, exactly.** The smallest setup that does these four things with a real
 colleague, not the operator:
@@ -209,13 +211,6 @@ the person. The pilot is not done until every line is ticked or has a written re
 - **Not verified:** no request from this repo has reached a real Foundry
   endpoint; the failover was tested against fake servers only. One university's
   open questions are under `docs/illinois/`; none of them is answered there.
-
-### Coming, not on `main`
-
-- **PR 40 (issues 32 and 33):** a restricted network for the agent container,
-  web search and web fetch off by default, and the host pushing the agent's
-  commits. Do not offer these as options until that pull request is merged and
-  this file lists them in part 5.
 
 ### Policy questions (ASK)
 
@@ -397,8 +392,9 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Code default:* the placeholder origin `example-org/program-repo`. Any other
   origin is refused until the pattern is set.
 - *First pilot:* a private repo; readers are the pilot team and the operator;
-  push rights for the admin, the bot's machine (a deploy key for that one repo)
-  and the intake service (a token for that one repo).
+  push rights for the admin, the bot's machine (a deploy key for that one repo,
+  held by the host user; the agent container gets no key) and the intake service
+  (a token for that one repo).
 - *Settings:* `PROGRAM_REPO`, `PROGRAM_ORIGIN_PATTERN`, `PROGRAM_READ_MIRROR`
   (process); `GITHUB_PUSH_WEBHOOK_SECRET` (.env or process).
 - *Detail:* part 11; First start, step 5; `docs/illinois/github-enterprise.md`;
@@ -417,7 +413,8 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Cost to the person:* a virtual machine from a cloud provider or their
   institution (check the provider's current pricing), and a DNS name for it.
 - *Settings:* `WEBHOOK_HOST=127.0.0.1`, `WEBHOOK_PORT`, `CREDENTIAL_PROXY_PORT`
-  (process); `TZ` (.env). Only when the host process runs as root, which the
+  (process); `TZ` (.env). `WEBHOOK_HOST` matters for choice 17 too: left unset,
+  the listener is on all interfaces and the agent container can reach it. Only when the host process runs as root, which the
   recipe does not do: `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID`,
   `CHECKOUT_OWNER_HOME` (process).
 - *Detail:* `docs/deployment.md`; `docs/illinois/hosting.md` (a stub).
@@ -514,6 +511,55 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *First pilot:* adapt the wording; keep the sensor off unless the ground-truth
   files are right for the project.
 - *Detail:* part 8.
+
+**17. What the agent can reach: the container's network and web tools**
+- *Plain words:* the agent works in a sealed workspace (a container). Two
+  settings decide whether anything it reads (the team's mail, the knowledge
+  base) can leave that workspace by a route other than a reply. The first is the
+  workspace's network. The second is whether the agent may search the web and
+  fetch pages. Neither route is checked by the delivery gate or written to the
+  audit log.
+- *Options for the network (`CONTAINER_NETWORK`):*
+  - `restricted`: the container reaches the credential proxy on the host and
+    nothing outside: no website, no git host, no outside name lookup.
+  - `open`: the container can reach any host. The host logs a warning at each start.
+- *Options for web tools (`AGENT_WEB_TOOLS`):* unset (off) or `1` (on). A web
+  search is run by the model provider, so the agent's query leaves through the
+  proxy even on the restricted network. Web fetch and `agent-browser` also need
+  the network `open`.
+- *Code default:* network `restricted` on Docker Engine on Linux and `open` on
+  Docker Desktop (macOS, Windows with WSL), where `restricted` was not verified.
+  Web tools off. Any other value of `CONTAINER_NETWORK` stops the start.
+- *First pilot:* `restricted` and web tools off, on a Linux machine. ASK before
+  you set `open` or turn web tools on, and write the answer in `setup-decisions.md`.
+- *What stops working with the pilot choice:* web search and web fetch;
+  `agent-browser`; `curl` and any other network use from the agent's shell;
+  `git pull` and `git push` inside the container (the host does both: First
+  start, step 5); a scheduled-task script that fetches a URL (the example in
+  `groups/global/references/scheduled-task-scripts.md` does). With web tools off
+  the proxy also refuses requests that would make the model provider reach an
+  outside host for the agent: a web search or fetch tool, a remote MCP server, an
+  image or document given as a URL, and the provider's managed agents API
+  ("Safety items").
+- *What the restricted network does not stop.* Tell the person each of these:
+  - **A host service that listens on all interfaces is reachable from the
+    container**, on the network's gateway address. The webhook listener does that
+    unless `WEBHOOK_HOST=127.0.0.1` is set, and the host logs a warning at each
+    start while it is not. Set it (choice 8).
+  - Whatever the agent puts in a model request goes to the model provider.
+  - The host runs git in the checkout, and the agent can write that checkout's
+    `.git/config` and hooks (`SPEC.md` section 11).
+- *Settings:* `CONTAINER_NETWORK`, `AGENT_WEB_TOOLS` (process, else .env; both
+  are read at start, so a change needs a restart); `CONTAINER_NETWORK_NAME`
+  (process; the Docker network's name, default `nanoclaw-agents`; change it only
+  if the name is taken); `CREDENTIAL_PROXY_HOST` (process; used on the open
+  network only).
+- *Not tested:* no real agent turn has run on the restricted network, and the
+  proxy's refusals have run against fake servers only. `restricted` is not
+  verified on Docker Desktop or on Docker older than 29. First start, step 9,
+  checks the network on the machine in use.
+- *Detail:* "Safety items"; First start, step 9; `SPEC.md` sections 2 and 11;
+  `docs/data-handling.md`, "The container's network".
 
 ## 6. Words to explain
 
@@ -672,18 +718,27 @@ and say so.
   host, unseen by the delivery gate and the audit log; the host logs a warning at each
   start. The default is `restricted` on Docker Engine on Linux, where it was checked
   with real containers, and `open` on Docker Desktop (macOS, WSL), where it was not.
-  ASK before you set `open`. Limits the user must know: the container still reaches any
-  host service that listens on all interfaces (keep `WEBHOOK_HOST=127.0.0.1`); and the
-  host runs git in the checkout, whose `.git/config` and hooks the agent can write, so
-  a planted hook runs on the host with the host's network (`SPEC.md` section 11).
+  ASK before you set `open` (choice 17). Limits the user must know:
+  - **The container still reaches any host service that listens on all interfaces.**
+    The webhook listener does so unless `WEBHOOK_HOST=127.0.0.1` is set in the process
+    environment; the code default is all interfaces, and the host warns at each start
+    while the network is restricted and that address is not loopback. Set it.
+  - The host runs git in the checkout, whose `.git/config` and hooks the agent can
+    write, so a planted hook runs on the host with the host's network (`SPEC.md`
+    section 11).
 - **Web search and web fetch are off by default.** `AGENT_WEB_TOOLS=1` turns them on
-  (`src/web-tools.ts`). Web search runs at the model provider, so the agent's query
-  leaves through the credential proxy even on the restricted network; while the
-  setting is off the proxy refuses such a request. Web fetch and `agent-browser` need
-  `CONTAINER_NETWORK=open` as well. With both off, `groups/main/CLAUDE.md` ("Search the
-  web", "Browse the web"), the `agent-browser` skill, and the "Web" lines of the
-  `capabilities` and `status` skills describe tools the agent does not have. ASK
-  before you turn either on.
+  (`src/web-tools.ts`). Web fetch and `agent-browser` need `CONTAINER_NETWORK=open` as
+  well. While the setting is off, the tools are removed from the agent's list, and the
+  credential proxy is the boundary: it reads every request the container sends, and
+  refuses one that would make the model provider contact an outside host. That is a
+  web search or web fetch tool, a remote MCP server (`mcp_servers`, `mcp_toolset`), an
+  image or document given as a URL, and the managed agents API (`/v1/agents`,
+  `/v1/sessions`, `/v1/environments`). On a model path it also refuses a body it
+  cannot read as JSON, or one with a content encoding. Limits: the list was drawn
+  from the type definitions of the pinned SDK, not from a live provider; a tool type
+  the proxy does not know is forwarded with one warning in the host log; and other
+  paths on the provider's host are forwarded (each logged once), so the proxy is not
+  an allowlist of what the agent may ask the provider. ASK before you turn web tools on.
 - **Mounts:** `config-examples/mount-allowlist.json` must list only the program repo. The email group is not the main group and it must write to the program repo in status-update mode, so `nonMainReadOnly` is `false` in the example. Keep the web chat group's own mount read-only in its group registration.
 - **Protected files are guarded for the agent's file-editing tools only.** `container/agent-runner/src/protected-write-guard.ts` blocks Write, Edit and NotebookEdit on protected paths. It does not inspect shell commands. The git-author check in `src/governance-protection.ts` is the second line. Do not describe this to the user as a hard block.
 - **Known gaps inherited from the source** (reported there): the conflict-check skill tells the agent to notify the admin with a Telegram tool that is not registered; two prompts and that skill disagree on how to record an uncorroborated spreadsheet fact (the skill is stricter: it goes to open questions); `groups/main/CLAUDE.md` is mostly upstream framework text.
@@ -809,7 +864,7 @@ Do these once, in this order, before the first test message:
    `Admin alert test NOT delivered` for each. Check that the user received each one,
    then remove the variable. For the email route, "delivered" means the mail provider
    accepted the mail; confirm it reached the inbox.
-8. Run `npx tsx scripts/check-container-egress.ts` as the service user, with the
+9. Run `npx tsx scripts/check-container-egress.ts` as the service user, with the
    service's environment. It starts containers the way the host does and must print
    PASS for each line: the container reaches the host's proxy address; on the
    restricted network it reaches no outside host and resolves no outside name; a

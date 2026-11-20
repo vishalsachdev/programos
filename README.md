@@ -43,11 +43,14 @@ You need: a host that can run Docker, a mail address for the bot, a git host for
 
 ## Start
 
+**Not technical? Read [`docs/start-here.md`](./docs/start-here.md) first.** It says in plain words what this is, what you need, and what your agent will ask you.
+
 1. Clone this repo.
 2. Open it with your coding agent (Claude Code, Codex, Cursor or another) and say: "Read `AGENTS.md` and help me adapt this for my project."
-3. The agent asks you six questions before it changes anything: which AI service is allowed, who approves, which address the bot uses, where data lives, what senders are told, and which channels you want.
-4. It creates your knowledge-base repo, fills in settings, replaces placeholders, and keeps the tests passing.
-5. You review a test exchange. You decide when to deploy.
+3. The agent explains three ways to start and asks which you want: **Try it** (one person, a laptop, Telegram only), **Pilot** (a small always-on machine, email, a handful of allowlisted colleagues; the recommended first version), or **Institutional** (the same on services your institution has approved).
+4. The agent asks you six policy questions before it changes anything: which AI service is allowed, who approves, which address the bot uses, where data lives, what senders are told, and which channels you want. It asks one thing at a time, explains each choice, and writes your answers down.
+5. It creates your knowledge-base repo, fills in settings, replaces placeholders, and keeps the tests passing.
+6. You review a test exchange. You decide when to deploy.
 
 ## How it is kept safe
 
@@ -68,7 +71,9 @@ The code is the source of truth. The documents below cover what the code cannot 
 |------|----------------|-------------------|
 | [`SPEC.md`](./SPEC.md) | The contract: components, channels, modes, knowledge-base layout, audit log, governance | Yes (rewritten 2026-11-14) |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How the parts fit and who owns each | Yes (rewritten 2026-11-14) |
-| [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: what to ask, what to replace, safety items, first start | Yes; checked against the code in review |
+| [`docs/start-here.md`](./docs/start-here.md) | For the person, in plain words: what this is, what you need, the three ways to start, what your agent will ask | Yes; repeats `AGENTS.md` |
+| [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: how to guide a person who is not technical, the three ways to start, every setup choice, what to replace, safety items, first start | Yes; checked against the code in review. A test checks that it names every setting |
+| [`docs/setup-reference.md`](./docs/setup-reference.md) | Every setting key, the inbound mail contract, the two optional webhooks | Yes; the same test |
 | [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; `src/program-repo-template.test.ts` runs the real parsers over it |
 | [`docs/deployment.md`](./docs/deployment.md) | What kind of host works, what to start with, and one recipe for a virtual machine | Partly run; each step says what was checked |
 | [`docs/data-handling.md`](./docs/data-handling.md) | What data reaches each outside service and each storage place, who can read it, what is and is not deleted, and what to decide before go-live | Yes; traced from the code 2026-11-19 |

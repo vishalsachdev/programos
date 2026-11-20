@@ -69,9 +69,10 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How the parts fit and who owns each | Yes (rewritten 2026-11-14) |
 | [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: what to ask, what to replace, safety items, first start | Yes; checked against the code in review |
 | [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; `src/program-repo-template.test.ts` runs the real parsers over it |
-| [`docs/deployment.md`](./docs/deployment.md) | What kind of host works and what to start with | Yes |
+| [`docs/deployment.md`](./docs/deployment.md) | What kind of host works, what to start with, and one recipe for a virtual machine | Partly run; each step says what was checked |
 | [`docs/data-handling.md`](./docs/data-handling.md) | What data reaches each outside service and each storage place, who can read it, what is and is not deleted, and what to decide before go-live | Yes; traced from the code 2026-11-19 |
 | [`docs/illinois/data-handling.md`](./docs/illinois/data-handling.md) | One university's open data questions, none verified | Open items only |
+| [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | The same recipe on a university virtual machine: open questions | Stub; not verified |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |

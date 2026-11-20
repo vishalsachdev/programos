@@ -68,7 +68,7 @@ Search for each placeholder (include tests; exclude `node_modules`):
 | `PeerAgent`, `averybot@gmail.com` | A second automated agent that also mails the bot | `src/config.ts` (`AGENT_INBOX_ADDRESSES`); empty the list if the user has none |
 | `CRS`, `ELC`, `LAB` plus three digits | Course-code prefixes | See "Academic examples" below |
 
-Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `PROGRAM_ORIGIN_PATTERN`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. `start.sh` and `ecosystem.config.cjs` hold a fixed path from the reference deployment; change them.
+Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `PROGRAM_ORIGIN_PATTERN`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. The supported way to run the bot is the systemd recipe in `docs/deployment.md`; `start.sh` and `ecosystem.config.cjs` are pm2 examples from the reference deployment.
 
 ## Academic examples
 
@@ -258,7 +258,8 @@ Do these once, in this order, before the first test message:
    file ownership and git credentials that work: the host's repository operations
    and the agent inside the container. When the host process runs as root, its
    repository operations run as user and group 1000 with home `/home/ubuntu`
-   (`src/checkout-fs.ts`, `src/program-repo.ts`), so a root-owned clone fails. The
+   unless `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID` and `CHECKOUT_OWNER_HOME` say
+   otherwise (`src/checkout-fs.ts`, `src/program-repo.ts`), so a root-owned clone fails. The
    container does not get the operator's SSH agent or home folder. Use a deploy key
    or token limited to the program repo. Before the first test message, run a pull,
    a commit and a push as each writer.

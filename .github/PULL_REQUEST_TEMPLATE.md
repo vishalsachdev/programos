@@ -25,6 +25,7 @@
 
 - [ ] Docs that state the changed behaviour are updated, and no doc restates code
 - [ ] A new doc is listed in the README docs table
+- [ ] A new or changed setup option, setting, channel or safety limit is in `AGENTS.md` part 5 and in `docs/setup-reference.md`, in plain words
 - [ ] A fact that is also on the public page (`site/public/index.html`) is changed there in this PR
 - [ ] Not needed for this change
 

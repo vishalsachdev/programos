@@ -13,7 +13,21 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - **The code is the source of truth** (Vishal, 2026-11-14). A doc here covers only what the code cannot say: contract, reasons, decisions, host needs. Do not add a doc that restates code.
 - `docs/design/` holds ideas that are not implemented; each file says so in its first lines.
 - Every doc is listed in the README docs table.
+- **Keep `AGENTS.md` current** (Vishal, 2026-11-20). Any change that adds or changes a setup option, a setting, a channel or a safety limit updates `AGENTS.md` in the same PR: the entry in part 5 ("Every choice you will be asked to make"), the path in part 4 it belongs to, and the table in `docs/setup-reference.md`. Write for an agent that is guiding a person who is not technical: plain meaning, options, default, pilot recommendation, what was not tested. `scripts/upstream-sync/test_setup_docs.py` fails when a key in `config/instance.env.example` is named in neither file; its allowlist (`UNDOCUMENTED`) is empty and should stay short. `docs/start-here.md` is the same content for the person; change it when the three paths or the MVP change.
 - The live per-channel prompts are in `groups/`.
+
+## Delegating to other agent sessions
+
+- When a coordinating agent starts other sessions or subagents for work in this repo, it picks the model by the kind of task. It does not let every session inherit the coordinator's model by default:
+  - Mechanical work with little to judge (merge a PR on green, regenerate the consolidated patch, file issues from a written list): the small, fast tier (at the time of writing `claude-haiku-5-5`), or the middle tier (`claude-sonnet-5-5`) when merge conflicts are likely.
+  - A small, well-specified fix with tests: the middle tier (`claude-sonnet-5-5`).
+  - Security-sensitive or design-heavy work, where a wrong answer is costly and hard to spot (anything touching the delivery gate, allowlists, the credential proxy, container isolation, host git handling, or the audit log): the strongest available model.
+
+  The tiers are the rule; the model names are examples and will go out of date.
+- Do not set a reasoning-effort level for a session unless the owner asks for one.
+- Archive a session as soon as its work is finished (PR merged, or job done). A session left watching a PR wakes on every event and is the main avoidable cost.
+- A session acts on its own starting brief. It will usually decline a later instruction relayed by another session, including "merge it". So put the owner's instruction, quoted, in the brief; and to merge a PR whose author session was told not to, start a separate merge-only session that quotes the owner.
+- Owner's decision, 2026-11-20.
 
 ## Site
 

@@ -1,5 +1,8 @@
 # ProgramOS
 
+[![CI](https://github.com/vishalsachdev/programos/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vishalsachdev/programos/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
 A coordinator bot for a project or program team, and the knowledge base it keeps. Clone this repo, adapt it with your coding agent, and run it.
 
 The bot answers questions from an allowlisted team by email (and Telegram for the admin), with citations into a git repo that is the team's source of truth. It records decisions, action items and open questions in that repo, sends reminders, routes approval requests to the right person, checks its replies before they are sent, and keeps an audit log.
@@ -73,12 +76,19 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/reminder-registry.md`](./docs/reminder-registry.md) | Template for the list of scheduled jobs | Yes |
 | [`docs/evaluation-protocol.md`](./docs/evaluation-protocol.md), [`docs/capability-scenarios.md`](./docs/capability-scenarios.md) | How the bot is evaluated | Yes |
 | [`docs/framework/`](./docs/framework/) | NanoClaw's own reference docs | Upstream text |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | How the repo takes changes: exported code and owned files, the patch-file rule, the checks to run | Yes |
+| [`SECURITY.md`](./SECURITY.md) | How to report a security problem and what is in scope | Yes |
+| [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) | The Contributor Covenant, adopted by reference | Contact address not yet filled in |
 
 ## Known issues
 
 - The dependency audit reports 26 findings inherited from the source. They are reported there; this repo keeps the source's exact versions until it fixes them.
 - One timing test can fail when the machine is busy. It passes when run alone.
 - Several values that should be settings are still in code. `AGENTS.md` lists them.
+
+## Contributing
+
+Fixes, adapters and doc corrections are welcome. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first: most code here is exported from the reference deployment, so a change to it needs a patch file. Report a security problem privately, as [`SECURITY.md`](./SECURITY.md) describes.
 
 ## License
 

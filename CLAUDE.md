@@ -35,9 +35,14 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - [ ] Run `inbound/` against a live Cloudflare domain and mailbox (never done; `inbound/README.md`, "Not verified"). After an export, reapply `scripts/upstream-sync/inbound-intake-2026-11-19.patch` (the host test for `inbound/`)
 - [ ] Proof numbers on the site, each from a dated query, in one data file
 - [ ] Foundry backup provider: live checks with a real key (`docs/illinois/model-foundry.md`, section 6), then decide the provider order
+- [ ] Host-owned repository: verify on a real host (git host, real container, upgrade of an existing deployment); see `SPEC.md` section 11 for what it does not cover
 - [ ] Take fixes from the source through `scripts/upstream-sync/` (wrong-chat Telegram reply, timing test, others in SPEC section 11)
 
 ## Session Log
+
+### 2026-11-20
+- Completed (draft PR, not merged): the host runs no git in the agent's checkout. New host-owned repository (`PROGRAM_HOST_REPO`, `src/host-repo.ts`): the audit log is written and committed there, commits leave the checkout through a fetch and are checked, the push goes to `PROGRAM_ORIGIN_URL`. The container pulls from a read-only export (`container/agent-runner/src/kb-upstream.ts`). Adversarial suite `src/host-git-trust.test.ts`; guard `src/host-git-guard.test.ts`; first-start check `scripts/check-host-git-trust.ts`. Exported-code edits: `scripts/upstream-sync/zz-host-git-trust-2026-11-20.patch`.
+- Next: run it on a real host (a git host, a real container; neither was run). If PR 40 merges second, its `src/checkout-sync.ts` goes away: `syncKnowledgeBase` in `src/audit-log.ts` already does the pull before a turn and the push after it.
 
 ### 2026-11-19
 - Completed (draft PR, not merged): model provider setting with Claude on Microsoft Foundry as a backup or primary (`MODEL_PROVIDERS`, `src/model-provider.ts`), a path prefix in `ANTHROPIC_BASE_URL` is now joined, `SENSOR_PROVIDER` for the reply sensor. The edits to exported code are recorded in `scripts/upstream-sync/model-provider-foundry-2026-11-19.patch`. Tested against fake servers only.

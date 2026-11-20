@@ -4,10 +4,14 @@
  * Appends every inbound message + agent response to daily log files
  * in the program-repo repo: discussions/audit-log/YYYY-MM-DD.md
  *
+ * The files are written in the HOST-OWNED repository (host-repo.ts), not in
+ * the agent's checkout: the agent cannot change an entry before it is
+ * committed, and the host commits and pushes without running git in a tree
+ * the agent can write. The agent sees the log after its next pull.
+ *
  * Commits are batched — written to disk immediately, committed periodically.
  */
 import path from 'path';
-import { execFile } from 'child_process';
 
 import {
   makeSensorId,
@@ -19,7 +23,12 @@ import { logger } from './logger.js';
 import { TIMEZONE } from './config.js';
 import { BOT_GIT_AUTHOR_EMAIL } from './instance-identity.js';
 import { localDateYmd, localTimeHms } from './timezone.js';
-import { checkoutGitOptions, getProgramRepoPath } from './program-repo.js';
+import {
+  ensureHostRepo,
+  getHostRepoPath,
+  syncHostRepo,
+  type SyncResult,
+} from './host-repo.js';
 import { appendToCheckout, checkoutHasLine } from './checkout-fs.js';
 
 const COMMIT_INTERVAL = 5 * 60 * 1000; // Commit every 5 minutes
@@ -28,12 +37,16 @@ let pendingWrites = 0;
 let commitTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * Resolved lazily (not a module const) so tests can stub PROGRAM_REPO
- * after import — the pattern logGateResult established, now shared by every
- * entry writer.
+ * Root of the host-owned repository, created on first use. Resolved lazily
+ * (not a module const) so tests can stub PROGRAM_HOST_REPO after import.
  */
+function auditRoot(): string {
+  ensureHostRepo();
+  return getHostRepoPath();
+}
+
 function auditDir(): string {
-  return path.join(getProgramRepoPath(), 'discussions', 'audit-log');
+  return path.join(getHostRepoPath(), 'discussions', 'audit-log');
 }
 
 /** Truncation cap for chat-entry bodies (inbound + outbound). */
@@ -57,12 +70,9 @@ function appendAuditEntry(
   try {
     const dir = auditDir();
     const target = file ?? path.join(dir, `${localDateYmd(TIMEZONE)}.md`);
-    // The checkout is container-writable: write as its owner, never root.
-    appendToCheckout(
-      getProgramRepoPath(),
-      target,
-      [...lines, '---', ''].join('\n'),
-    );
+    // As the repo's owner, never root, so git (which runs as that owner)
+    // can commit the file.
+    appendToCheckout(auditRoot(), target, [...lines, '---', ''].join('\n'));
     pendingWrites++;
     scheduleCommit();
     return target;
@@ -88,7 +98,7 @@ function inspectMarker(
     // avoids a full directory sweep on the event loop per call.
     // Read as the checkout owner: a planted FIFO or link in the
     // container-writable audit dir must not block or redirect a root read.
-    return checkoutHasLine(getProgramRepoPath(), onlyFile ?? auditDir(), marker)
+    return checkoutHasLine(auditRoot(), onlyFile ?? auditDir(), marker)
       ? 'recorded'
       : 'not-recorded';
   } catch (err) {
@@ -138,11 +148,10 @@ async function appendAuditEntryOnceAsync(
   return serializeAuditWrite(async () => {
     try {
       const dir = auditDir();
-      if (checkoutHasLine(getProgramRepoPath(), dir, marker))
-        return 'already-recorded';
+      if (checkoutHasLine(auditRoot(), dir, marker)) return 'already-recorded';
       const target = path.join(dir, `${localDateYmd(TIMEZONE)}.md`);
       appendToCheckout(
-        getProgramRepoPath(),
+        auditRoot(),
         target,
         [...lines, marker, '---', ''].join('\n'),
       );
@@ -687,97 +696,68 @@ export function logTerminalCommit(args: {
   );
 }
 
-/**
- * The git sequence behind commitAuditLog, with an injectable runner.
- * Push; if origin moved, rebase our commit on top (autostash any in-flight
- * audit-file write) and retry. On rebase failure, abort cleanly so the shared
- * working tree is never left conflicted; the commit stays local and is
- * retried next cycle (F5: a bare push once stranded commits on a moved origin).
- */
-export async function runAuditCommit(
-  count: number,
-  run: (args: string[]) => Promise<void>,
-): Promise<void> {
-  // kb-triage/ is staged too, so behaviour-sensor FAIL reports get pushed
-  // alongside the audit-log annotation that points to them.
-  await run(['add', 'discussions/audit-log/', 'discussions/kb-triage/']);
-  try {
-    await run([
-      'commit',
-      '-m',
-      `Audit log: ${count} entries`,
-      `--author=Coordinator <${BOT_GIT_AUTHOR_EMAIL}>`,
-      '--no-verify',
-    ]);
-  } catch (err) {
-    // Nothing staged (entries already in an earlier, unpushed commit): go on
-    // and push that commit. Anything else is a real commit failure.
-    try {
-      await run(['diff', '--cached', '--quiet']);
-    } catch {
-      throw err;
-    }
-  }
-  try {
-    await run(['push']);
-    return;
-  } catch {
-    // fall through to rebase-and-retry
-  }
-  try {
-    await run(['pull', '--rebase', '--autostash', 'origin', 'main']);
-    await run(['push']);
-  } catch (err) {
-    await run(['rebase', '--abort']).catch(() => {});
-    throw err;
-  }
-}
+let commitInFlight: Promise<SyncResult | void> = Promise.resolve();
 
 /**
- * Commit pending audit log changes to the program-repo repo. Git runs as the
- * checkout owner (uid 1000), never as root: containers can write .git/hooks
- * and .git/config, so root git here would run their code as root. Objects are
- * created uid-1000-owned, so no ownership repair is needed afterwards.
- */
-function gitAsCheckoutOwner(args: string[]): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    execFile('git', args, checkoutGitOptions(), (err, _stdout, stderr) =>
-      err ? reject(Object.assign(err, { stderr })) : resolve(),
-    );
-  });
-}
-
-let commitInFlight: Promise<void> = Promise.resolve();
-
-/**
+ * Commit pending audit log changes and push them. The work is syncHostRepo
+ * (host-repo.ts): commit in the host-owned repository; take checked commits
+ * from the agent checkout; push; if the origin moved, rebase and push again.
+ * No git runs in the agent checkout.
+ *
  * Returns a promise that settles when this commit (and any already running)
  * has finished, so shutdown can await it: the git steps are separate child
- * processes now, and process.exit would cut the sequence short. A failed
- * commit puts its entries back so the next cycle retries them.
+ * processes, and process.exit would cut the sequence short. A failed commit
+ * or push puts its entries back so the next cycle retries them.
+ *
+ * `sync` is injectable for tests.
  */
 export function commitAuditLog(
-  run: (args: string[]) => Promise<void> = gitAsCheckoutOwner,
+  sync: typeof syncHostRepo = syncHostRepo,
 ): Promise<void> {
   commitInFlight = commitInFlight.then(async () => {
     if (pendingWrites === 0) return;
-    const count = pendingWrites;
-    pendingWrites = 0;
-    try {
-      await runAuditCommit(count, run);
-      logger.info({ entries: count }, 'Audit log: committed and pushed');
-    } catch (err) {
-      pendingWrites += count;
-      scheduleCommit(); // retry next cycle
-      logger.warn(
-        {
-          err: (err as Error).message,
-          stderr: (err as { stderr?: string }).stderr,
-        },
-        'Audit log: commit failed; entries stay pending',
-      );
-    }
+    await runSyncWithPending(sync, {});
   });
-  return commitInFlight;
+  return commitInFlight.then(() => {});
+}
+
+async function runSyncWithPending(
+  sync: typeof syncHostRepo,
+  opts: { fetchOrigin?: boolean },
+): Promise<SyncResult> {
+  const count = pendingWrites;
+  pendingWrites = 0;
+  const result = await sync({ ...opts, count });
+  if (result.failed) {
+    pendingWrites += count;
+    if (count > 0) scheduleCommit(); // retry next cycle
+    logger.warn(
+      { failed: result.failed },
+      'Audit log: commit or push failed; entries stay pending',
+    );
+  } else if (count > 0) {
+    logger.info({ entries: count }, 'Audit log: committed and pushed');
+  }
+  return result;
+}
+
+/**
+ * Bring the knowledge base up to date around an agent turn, whether or not
+ * audit entries are pending: commit the host's writes, take the agent's
+ * commits out of its checkout, push, and refresh the export the container
+ * pulls from. `fetchOrigin` (before a turn) also fetches the origin first.
+ * Never throws.
+ */
+export function syncKnowledgeBase(
+  opts: { fetchOrigin?: boolean } = {},
+  sync: typeof syncHostRepo = syncHostRepo,
+): Promise<SyncResult> {
+  const run = commitInFlight.then(() => runSyncWithPending(sync, opts));
+  commitInFlight = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
 }
 
 /** Test hook: set the pending-entry count. */

@@ -24,6 +24,7 @@ import {
   updateTaskAfterRun,
 } from './db.js';
 import { parseActionItemSections } from './behaviour-sensor.js';
+import { syncKnowledgeBase } from './audit-log.js';
 import { buildOutreachRecipientRoster } from './outreach-recipient-roster.js';
 import { buildExceptionsReport } from './exceptions-report.js';
 import { getRepoReader } from './repo-reader.js';
@@ -522,6 +523,8 @@ async function runTask(
   };
 
   try {
+    // Fetch the origin and refresh the export the container pulls from.
+    await syncKnowledgeBase({ fetchOrigin: true });
     const output = await runContainerAgent(
       group,
       {
@@ -543,6 +546,8 @@ async function runTask(
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
+        // Push what the task committed before its result is forwarded.
+        if (streamedOutput.status === 'success') await syncKnowledgeBase();
         if (streamedOutput.result) {
           result = streamedOutput.result;
           // Forward result to user (sendMessage handles formatting). The

@@ -373,12 +373,14 @@ describe('RepoReader', () => {
     );
   });
 
-  it('init() bootstraps a missing mirror from the live checkout origin', () => {
-    // Fresh deployment: no mirror yet, but a live checkout (whose `origin`
-    // points at "github" — here the upstream fixture) exists.
-    const live = path.join(dir, 'live-checkout');
-    execFileSync('git', ['clone', upstream, live]);
-    vi.stubEnv('PROGRAM_REPO', live);
+  // Changed with host-repo.ts: the bootstrap used to run `git remote
+  // get-url origin` in the live checkout. It now clones PROGRAM_ORIGIN_URL,
+  // the operator's setting, and never asks the checkout.
+  it('init() bootstraps a missing mirror from PROGRAM_ORIGIN_URL', () => {
+    // Fresh deployment: no mirror yet; the operator named the origin
+    // ("github" — here the upstream fixture).
+    vi.stubEnv('PROGRAM_REPO', path.join(dir, 'no-live-checkout'));
+    vi.stubEnv('PROGRAM_ORIGIN_URL', upstream);
     vi.stubEnv('PROGRAM_ORIGIN_PATTERN', '^/');
 
     const freshMirror = path.join(dir, 'bootstrapped-mirror.git');
@@ -390,24 +392,42 @@ describe('RepoReader', () => {
     );
   });
 
-  it('bootstrap refuses an origin URL that is not the expected repo', () => {
-    // The live checkout's .git/config is container-writable; its origin must
-    // never reach a root `git clone` unchecked (option injection, ext::).
-    const live = path.join(dir, 'live-evil');
+  it('bootstrap does not take the origin from the live checkout', () => {
+    // The live checkout's .git/config is container-writable. With no
+    // PROGRAM_ORIGIN_URL there is no bootstrap, whatever the checkout says.
+    const live = path.join(dir, 'live-checkout');
     execFileSync('git', ['clone', upstream, live]);
+    vi.stubEnv('PROGRAM_REPO', live);
+    vi.stubEnv('PROGRAM_ORIGIN_PATTERN', '^/');
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const r = new RepoReader(path.join(dir, 'not-bootstrapped.git'));
+    expect(r.init()).toBe(false);
+    expect(
+      warn.mock.calls.some((c) =>
+        String(c[1]).includes('PROGRAM_ORIGIN_URL is not set'),
+      ),
+    ).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'not-bootstrapped.git'))).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('bootstrap refuses an origin URL that is not the expected repo', () => {
+    // The value must never reach `git clone` unchecked (option injection,
+    // ext::), also when it comes from the setting.
     for (const url of [
       '--upload-pack=touch /tmp/pwned',
       'ext::sh -c touch% /tmp/pwned',
       'https://github.com/attacker/program-repo.git',
     ]) {
-      execFileSync('git', ['-C', live, 'config', 'remote.origin.url', url]);
-      vi.stubEnv('PROGRAM_REPO', live);
+      vi.stubEnv('PROGRAM_ORIGIN_URL', url);
       const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const r = new RepoReader(path.join(dir, `m-${Math.random()}.git`));
       expect(r.init()).toBe(false);
       // Refused before any clone was attempted, not merely failed.
       expect(
-        warn.mock.calls.some((c) => String(c[1]).includes('unexpected origin')),
+        warn.mock.calls.some((c) =>
+          String(c[1]).includes('not the expected origin'),
+        ),
       ).toBe(true);
       expect(
         warn.mock.calls.some((c) => String(c[1]).includes('clone failed')),

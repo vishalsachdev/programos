@@ -35,7 +35,7 @@ Two changes are in progress and not described here as shipped: a second model pr
 | Transcript archive, `groups/<group>/conversations/` (`container/agent-runner/src/index.ts`) | A Markdown copy of the full conversation, written each time a long session is compacted. | No code deletes it. | By hand. |
 | Telegram files, `data/telegram-uploads/<group>/` and `groups/<group>/attachments/` (`src/telegram-upload-store.ts`, `src/image.ts`) | Documents sent on Telegram, with extracted text; resized photos. | No code deletes them. | By hand. |
 | Working context, `data/working-context/` (`src/working-context.ts`) | Short notes the agent keeps for each person between sessions. | Entries leave the live file after 14 days and are appended to an archive file beside it. No code deletes the archive. | By hand. |
-| Program repo checkout and read mirror (`PROGRAM_REPO`; `PROGRAM_READ_MIRROR`, default `/srv/repos/program-repo-read.git`) | Two full copies of the program repo, with history. | As the repo. | See "Retention and deletion". |
+| Program repo checkout, host repo and read mirror (`PROGRAM_REPO`; `PROGRAM_HOST_REPO`, default `/srv/repos/program-repo-host`; `PROGRAM_READ_MIRROR`, default `/srv/repos/program-repo-read.git`) | Three full copies of the program repo's history. The host repo also holds audit entries that are written and not yet committed, and its object folder is mounted read-only into the agent container (`src/host-repo.ts`). | As the repo. | See "Retention and deletion". |
 | Host process log (stdout and stderr, kept by your process manager) | Sender, subject and recipients of mail as it is handled; rejected senders; the first 160 characters of a reply the gate refused (`src/index.ts`). | Your process manager's setting. The code sets none. | Configure log rotation. |
 | Temporary `.eml` copies in the system temp folder (`src/channels/webhook.ts`) | One original mail while a request is handled. | Written with owner-only permissions and deleted at the end of the request. | Nothing to do. |
 | State snapshots (`scripts/state-snapshot.mjs`, `scripts/state-snapshot-pull.sh`) | The `scheduled_tasks` and `registered_groups` tables, with the full text of every scheduled prompt. The pull script commits this as `ops/state-snapshot/db-state.json` **in the checkout of the code repo** and pushes it to that repo's remote. These are example scripts from the reference deployment; the host does not run them. | Until removed from that repo, and then still in its history. | Do not run them, or point them at a private repo. Do not put names or addresses in a scheduled prompt if the snapshot goes to a repo that is more widely readable than the program repo. |
@@ -49,7 +49,7 @@ The audit log, the mail copies, the `.eml` originals and the extracted attachmen
 - **Count the machine identities.** The intake service, the host and the container each hold a credential that can read or write the repo (`AGENTS.md`, "First start"). So does any CI job, site build or integration you attach on the git host.
 - **Organization owners and git-host administrators** can usually read private repos. Ask your git host's administrator who that is.
 - **The agent can read all of it.** The email group mounts the program repo read-write, so a question from any allowlisted sender is answered by an agent that can open any mail in `discussions/raw/` and any day of the audit log. The prompts tell it what to cite; nothing in the code keeps one sender's mail from an answer to another.
-- **The agent can write it too.** `SPEC.md` section 6: "do not edit the log" is a rule, not a storage guarantee. Git history is the check.
+- **The agent can write it too, after the host has committed it.** The host writes and commits each entry in its own repository, out of the agent's reach (`src/host-repo.ts`). Once committed, the file is in the program repo and the agent can commit a change to it. `SPEC.md` section 6: "do not edit the log" is then a rule, not a storage guarantee. Git history is the check.
 
 ## Retention and deletion
 
@@ -61,7 +61,7 @@ What the code never deletes:
 - The `messages` table in SQLite, which holds every message and reply in full.
 - Transcript archives, Telegram files, and working-context archives on the host.
 
-**Git history keeps removed content.** Deleting a file from the program repo and committing removes it from the current version only. The content stays in the history, on the git host, in the host's checkout and read mirror, in the container's view of the checkout, and in every other clone. To remove it you must rewrite history, force-push, ask the git host to drop its cached copies, and re-clone every copy, including the read mirror on the bot's host. The repo has no tool for this. Decide your answer to "a person asks for their mail to be removed" before go-live, because it is a manual job that needs the repo admin.
+**Git history keeps removed content.** Deleting a file from the program repo and committing removes it from the current version only. The content stays in the history, on the git host, in the host's checkout, host repo and read mirror, in the container's view of the checkout, and in every other clone. To remove it you must rewrite history, force-push, ask the git host to drop its cached copies, and re-clone every copy, including the host repo and the read mirror on the bot's host. The repo has no tool for this. Decide your answer to "a person asks for their mail to be removed" before go-live, because it is a manual job that needs the repo admin.
 
 Copies outside your control are not reached by any of this: the model provider, the mail provider, the intake service's provider and Telegram each keep data under their own terms. Read those terms, or the agreement your institution has signed, for the retention that applies.
 
@@ -78,6 +78,8 @@ What you can do, none of it in the code today:
 - Run the containers on a network that allows only the host proxy and your git host.
 - Remove `WebSearch` and `WebFetch` from the agent's tool list if the team does not need them.
 - Keep the allowlist short, because allowlisted mail is the main way text reaches the agent. Remember that the agent also reads mail that an allowlisted sender forwards, and attachments.
+
+One path out of the container is closed in the code: the host's own git. The agent can write its checkout's `.git/config` and hooks, and until 2026-11-20 the host ran git there, so a tricked agent could have had a program run on the host, with the host's network and git credential. The host now runs git only in a repository that no container mounts, and pushes only to the origin in the host's settings (`src/host-repo.ts`; `SPEC.md` section 11 lists what remains).
 
 ## What the allowlist does and does not protect
 

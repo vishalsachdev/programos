@@ -33,7 +33,8 @@ describe('gate-result logging (G51 phase 1)', () => {
   beforeEach(() => {
     repo = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-log-'));
     fs.mkdirSync(path.join(repo, '.git')); // checkout-fs refuses a non-checkout
-    vi.stubEnv('PROGRAM_REPO', repo);
+    // The audit log is written in the host-owned repository (host-repo.ts).
+    vi.stubEnv('PROGRAM_HOST_REPO', repo);
   });
 
   afterEach(() => {

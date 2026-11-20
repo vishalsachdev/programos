@@ -25,6 +25,11 @@ import {
   ensureDirInTree,
   writeFileInTree,
 } from './host-fs-safety.js';
+import {
+  exportEnvFor,
+  exportMountsFor,
+  withoutHostOwnedGitPaths,
+} from './host-repo.js';
 import { logger } from './logger.js';
 import { getRepoReader } from './repo-reader.js';
 import { runnerSourceNeedsCopy } from './runner-cache.js';
@@ -357,7 +362,11 @@ function buildVolumeMounts(
       group.name,
       isMain,
     );
-    mounts.push(...validatedMounts);
+    // No extra mount may reach a host-owned git repository, and a container
+    // that has the checkout writable gets the host's read-only export to
+    // pull from (host-repo.ts).
+    const safeMounts = withoutHostOwnedGitPaths(validatedMounts, group.name);
+    mounts.push(...safeMounts, ...exportMountsFor(safeMounts));
   }
 
   return mounts;
@@ -452,6 +461,11 @@ function buildContainerArgs(
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
+
+  // Where the container's git finds the host's export and the checkout it
+  // updates from it (agent-runner kb-upstream.ts).
+  for (const [key, value] of Object.entries(exportEnvFor(mounts)))
+    args.push('-e', `${key}=${value}`);
 
   for (const mount of mounts) {
     if (mount.readonly) {

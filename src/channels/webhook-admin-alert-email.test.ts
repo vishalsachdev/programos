@@ -223,7 +223,8 @@ describe('webhook operator alerts with ADMIN_ALERT_ROUTE=email and no Telegram t
     _initTestDatabase();
     repo = fs.mkdtempSync(path.join(os.tmpdir(), 'admin-alert-route-'));
     fs.mkdirSync(path.join(repo, '.git')); // checkout-fs refuses a non-checkout
-    vi.stubEnv('PROGRAM_REPO', repo);
+    // The audit log is written in the host-owned repository (host-repo.ts).
+    vi.stubEnv('PROGRAM_HOST_REPO', repo);
     mocks.fetch.mockClear();
     mocks.sent.length = 0;
     mocks.openQuestions.value = '# Open questions\n\n## Routed Approvals\n';
@@ -263,7 +264,7 @@ describe('webhook operator alerts with ADMIN_ALERT_ROUTE=email and no Telegram t
   it('high-attachment receipt that could not be written to the audit log', async () => {
     const notADirectory = path.join(repo, 'not-a-directory');
     fs.writeFileSync(notADirectory, 'file');
-    vi.stubEnv('PROGRAM_REPO', notADirectory);
+    vi.stubEnv('PROGRAM_HOST_REPO', notADirectory);
     expect((await postMail(highAttachment)).status).toBe(503);
     await expectOneAlertMail('Email intake audit failed');
   });

@@ -82,6 +82,8 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
+| [`docs/service-ownership.md`](./docs/service-ownership.md) | Every credential and account a deployment holds: its owner role, where it is stored, how to rotate it, what breaks meanwhile, the handover checklist, the minimum for a pilot | Yes; traced from the code 2026-11-20. Provider screens and live rotation not verified |
+| [`docs/illinois/service-ownership.md`](./docs/illinois/service-ownership.md) | One university's open questions about unit service accounts and who approves | Open items only; not verified |
 | [`docs/model-providers.md`](./docs/model-providers.md) | Claude on Microsoft Foundry (Azure) as a backup or primary model provider: deployments, hosting option, settings, failover and its limits | Yes for the code; not yet checked against a live Foundry endpoint |
 | [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) | One university's open questions about that provider | Pointer and open items; not verified |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |

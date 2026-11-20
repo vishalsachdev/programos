@@ -81,6 +81,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | The same recipe on a university virtual machine: open questions | Stub; not verified |
 | [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
+| [`docs/illinois/institutional-address.md`](./docs/illinois/institutional-address.md) | One university: what sending as a campus address needs, and the questions to ask its central IT office | Open items only; not verified |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
 | [`docs/model-providers.md`](./docs/model-providers.md) | Claude on Microsoft Foundry (Azure) as a backup or primary model provider: deployments, hosting option, settings, failover and its limits | Yes for the code; not yet checked against a live Foundry endpoint |
 | [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) | One university's open questions about that provider | Pointer and open items; not verified |

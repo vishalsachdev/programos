@@ -35,6 +35,13 @@ import { recordEmailSent } from './email-delivery-check.js';
 import { logger } from './logger.js';
 import { getRepoReader } from './repo-reader.js';
 import {
+  getOutboundMailProvider,
+  loadSmtpConfig,
+  logSmtpRefusedRecipients,
+  submitViaSmtp,
+  type SmtpConfig,
+} from './outbound-email-smtp.js';
+import {
   getOutboxStore,
   MemoryOutboxStore,
   setOutboxStore,
@@ -526,7 +533,31 @@ async function executeSendOutboundEmailResult(
     'OPERATOR_CC_EMAIL',
   ]);
 
-  if (!resendEnv.RESEND_API_KEY) {
+  // OUTBOUND_MAIL_PROVIDER: unset means the HTTP provider below, unchanged.
+  const mailProvider = getOutboundMailProvider();
+  let smtpConfig: SmtpConfig | undefined;
+  if (mailProvider !== 'resend') {
+    const loaded =
+      mailProvider === 'smtp'
+        ? loadSmtpConfig()
+        : { ok: false as const, problems: ['unknown OUTBOUND_MAIL_PROVIDER'] };
+    if (!loaded.ok) {
+      logger.error(
+        { problems: loaded.problems },
+        'send_email: outbound mail provider settings unusable, skipping',
+      );
+      shortfall(intended, [], 'outbound-mail-config-invalid');
+      note([], intended, 'outbound-mail-config-invalid');
+      return {
+        status: 'failed',
+        reason: 'outbound-mail-config-invalid',
+        retryable: false,
+      };
+    }
+    smtpConfig = loaded.config;
+  }
+
+  if (!smtpConfig && !resendEnv.RESEND_API_KEY) {
     logger.warn('send_email: RESEND_API_KEY not set, skipping');
     shortfall(intended, [], 'resend-api-key-missing');
     note([], intended, 'resend-api-key-missing');
@@ -710,6 +741,122 @@ async function executeSendOutboundEmailResult(
   // scheduler) converges here. No body mutation may follow this check.
   const finalBodyGate = gateFinalEmailBody(plainText, bodyContext);
   if (!finalBodyGate.ok) return refuseBody(finalBodyGate);
+
+  if (smtpConfig) {
+    // Same message as the HTTP provider is given below: same From, To, Cc,
+    // Subject, Reply-To, Message-ID and threading headers, same plain text.
+    const outcome = await submitViaSmtp(
+      smtpConfig,
+      {
+        deliveryId: opts.deliveryId,
+        fromName: resendEnv.SEND_FROM_NAME || 'Coordinator',
+        fromEmail: botEmail,
+        to: toList,
+        cc: ccList,
+        subject: email.subject,
+        text: plainText,
+        replyTo,
+        messageId: msgId,
+        inReplyTo: opts.inReplyTo,
+        extraHeaders: opts.extraHeaders,
+      },
+      providerDeadlineMs,
+    );
+    if (outcome.kind === 'failed') {
+      logger.error(
+        { reason: outcome.reason, to: email.to, subject: email.subject },
+        'send_email SMTP submission failed',
+      );
+      shortfall(intended, [], outcome.reason);
+      if (!outcome.retryable) note([], intended, outcome.reason);
+      return {
+        status: 'failed',
+        reason: outcome.reason,
+        retryable: outcome.retryable,
+      };
+    }
+
+    // The server took the message for `delivered`. Recipients it refused at
+    // RCPT TO did not get it: report them (G46), record them, do not retry.
+    const refusedKeys = new Set(
+      outcome.refused.map((r) => r.address.toLowerCase()),
+    );
+    const delivered = [...toList, ...ccList].filter(
+      (addr) => !refusedKeys.has(addr.toLowerCase()),
+    );
+    const refusedReason = outcome.refused.length
+      ? `smtp-recipient-refused: ${outcome.refused
+          .map((r) => `${r.address} (${r.detail})`)
+          .join('; ')}`
+      : '';
+    const ccLogged = ccList.length ? ccList.join(', ') : undefined;
+    logger.info(
+      {
+        to: email.to,
+        cc: ccLogged,
+        subject: email.subject,
+        emailId: outcome.providerId,
+        msgId,
+        refused: outcome.refused.map((r) => r.address),
+        sourceGroup: opts.sourceGroup,
+      },
+      'Proactive email sent via SMTP',
+    );
+    // Not registered with the delivery check: SMTP reports no delivery
+    // events, so every send would be reported as unconfirmed.
+    if (!opts.deferAudit) {
+      logOutboundEmail({
+        deliveryId: opts.deliveryId,
+        to: email.to,
+        cc: ccLogged,
+        ...(opts.ccDroppedNote ? { ccDropped: opts.ccDroppedNote } : {}),
+        subject: email.subject,
+        sourceGroup: opts.sourceGroup,
+        resendId: outcome.providerId,
+        body: plainText,
+      });
+    }
+    if (outcome.refused.length) {
+      shortfall(
+        outcome.refused.map((r) => r.address),
+        delivered,
+        refusedReason,
+      );
+      logSmtpRefusedRecipients({
+        providerId: outcome.providerId,
+        subject: email.subject,
+        refused: outcome.refused,
+      });
+    }
+    const newlyAllowed = addressesMissingFromLastSnapshot(delivered);
+    if (newlyAllowed.length && !ccRejected.length && !outcome.refused.length) {
+      note(
+        delivered,
+        [],
+        `allowlist-updated-since-session-start: ${newlyAllowed.join(', ')}`,
+      );
+    }
+    if (ccRejected.length || outcome.refused.length) {
+      note(
+        delivered,
+        [
+          ...ccRejected.map((r) => r.addr),
+          ...outcome.refused.map((r) => r.address),
+        ],
+        [
+          ccRejected.length
+            ? `cc-recipient-not-allowlisted: ${ccRejected
+                .map((r) => `${r.addr} (${r.reason})`)
+                .join('; ')}`
+            : '',
+          refusedReason,
+        ]
+          .filter(Boolean)
+          .join('; '),
+      );
+    }
+    return { status: 'sent', resendId: outcome.providerId };
+  }
 
   const fetchPromise = fetch('https://api.resend.com/emails', {
     method: 'POST',

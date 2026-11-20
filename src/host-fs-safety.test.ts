@@ -9,8 +9,10 @@ import {
   chownTreeNoFollow,
   copyDirInTree,
   ensureDirInTree,
+  listFilesInTree,
   readFileInTree,
   readFileInTreeAsync,
+  unlinkFileInTree,
   writeFileInTree,
 } from './host-fs-safety.js';
 
@@ -323,5 +325,56 @@ describe('readFileInTreeAsync', () => {
     await expect(readFileInTreeAsync(root, 'fifo.json')).rejects.toThrow(
       /refused/,
     );
+  });
+});
+
+describe('listFilesInTree and unlinkFileInTree', () => {
+  it('lists and deletes a plain file, and reports a missing one', () => {
+    fs.mkdirSync(path.join(root, 'old'));
+    fs.writeFileSync(path.join(root, 'old', 'a.md'), 'a');
+    expect(listFilesInTree(root, 'old')?.map((f) => f.name)).toEqual(['a.md']);
+    expect(unlinkFileInTree(root, 'old/a.md')).toBe(true);
+    expect(unlinkFileInTree(root, 'old/a.md')).toBe(false);
+    expect(listFilesInTree(root, 'old')).toEqual([]);
+  });
+
+  it('creates no folder when the folder is absent', () => {
+    expect(listFilesInTree(root, 'absent')).toBeNull();
+    expect(unlinkFileInTree(root, 'absent/a.md')).toBe(false);
+    expect(fs.existsSync(path.join(root, 'absent'))).toBe(false);
+  });
+
+  it('refuses a linked folder and leaves the files behind it', () => {
+    fs.symlinkSync(outside, path.join(root, 'old'));
+    expect(() => listFilesInTree(root, 'old')).toThrow(/not a real directory/);
+    expect(() => unlinkFileInTree(root, 'old/secret.env')).toThrow(
+      /not a real directory/,
+    );
+    expect(fs.readFileSync(path.join(outside, 'secret.env'), 'utf8')).toBe(
+      'KEEP=1\n',
+    );
+  });
+
+  it('leaves a link, a folder and a hard link out of the list, and refuses to delete them', () => {
+    fs.symlinkSync(path.join(outside, 'secret.env'), path.join(root, 'l.md'));
+    fs.mkdirSync(path.join(root, 'd.md'));
+    fs.linkSync(path.join(outside, 'secret.env'), path.join(root, 'h.md'));
+    expect(listFilesInTree(root)).toEqual([]);
+    for (const name of ['l.md', 'd.md', 'h.md']) {
+      expect(() => unlinkFileInTree(root, name)).toThrow(
+        /not a single-link regular file/,
+      );
+      expect(fs.lstatSync(path.join(root, name))).toBeTruthy();
+    }
+    expect(fs.readFileSync(path.join(outside, 'secret.env'), 'utf8')).toBe(
+      'KEEP=1\n',
+    );
+  });
+
+  it('refuses a path that leaves the tree', () => {
+    expect(() => unlinkFileInTree(root, '../../outside/secret.env')).toThrow(
+      /outside/,
+    );
+    expect(fs.existsSync(path.join(outside, 'secret.env'))).toBe(true);
   });
 });

@@ -28,6 +28,12 @@ import {
 } from './routed-approvals.js';
 
 /** Subset of RepoReader the report needs (tests inject a stub). */
+/**
+ * How far back the digest reads task runs. Retention (src/retention.ts)
+ * keeps task runs at least this long, whatever its setting says.
+ */
+export const EXCEPTIONS_REPORT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface ReportReader {
   refresh(opts?: { force?: boolean }): unknown;
   readFile(relPath: string): string | null;

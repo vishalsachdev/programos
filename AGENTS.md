@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,154 passing tests (1,761 from the source, 393 added here). One timing test
+   is 2,213 passing tests (1,761 from the source, 452 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -141,7 +141,8 @@ move up without starting again. "First start" means part 14.
     questions).
 - **What it does NOT give you:** no channel for students or the public; no
   single sign-on; no retention or deletion of old mail (the code never deletes
-  from the program repo); no second mail provider; no web search, web fetch or
+  from the program repo; the bot's own machine keeps its stores forever unless
+  you set a period, choice 14); no second mail provider; no web search, web fetch or
   browsing for the agent unless you turn them on (choice 17). Sender caps are in
   memory and reset on restart.
 - **Steps that apply:** all of part 13, all of First start, "Inbound mail", and
@@ -487,15 +488,41 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Plain words:* where the team's messages go, who can read them, and how long
   they are kept.
 - *What the code does:* message text reaches the model provider, the mail
-  provider, the intake service, Telegram if used, and the git host. The code
-  never deletes anything from the program repo, and there is no retention setting.
-- *First pilot:* the conservative default in `docs/data-handling.md`: staff
-  senders only, no student records, the reply sensor off, a private repo, web
-  chat off. Take that page to the people who approve data use, and write each
-  answer in `setup-decisions.md`.
-- *Settings:* none for retention. Leave `LOG_LEVEL` unset.
-- *Detail:* `docs/data-handling.md`; `docs/illinois/data-handling.md` (open
-  questions only).
+  provider, the intake service, Telegram if used, and the git host. On the
+  bot's own machine, logs and working files are cleared after 3 to 7 days, and
+  everything else (the full text of every message and reply, files sent on
+  Telegram, old conversation copies) is kept forever unless you set a number
+  of days for it.
+- *Options:* eight settings, one per kind of stored data, each a whole number
+  of days. `0` or absent means keep forever. Above `0`, the bot deletes what is
+  older, once a day. It never deletes something it still has to act on: a
+  message it has not answered, an approval still open, a task still scheduled.
+  The shortest period is one day; a negative number, a fraction or a word
+  stops the bot at startup with a message naming the setting.
+- *What no setting does:* nothing deletes from the program repo or the audit
+  log. Mail copies, attachments' text and the log stay until a person removes
+  them by hand, and a removed file is still in the repo's history. Mail from a
+  sender who is not on the list is stored too. `docs/data-handling.md`,
+  "Retention and deletion", gives the manual steps and what they cost.
+- *Code default:* all eight at `0`. Nothing is deleted.
+- *First pilot:* leave all eight unset until the people who approve data use
+  give a period (ASK; do not pick a number for them). When they do, run
+  `npx tsx scripts/retention-prune.ts` with the values first: it prints how
+  much each would delete and deletes nothing. Otherwise the conservative
+  default in `docs/data-handling.md`: staff senders only, no student records,
+  the reply sensor off, a private repo, web chat off. Take that page to the
+  people who approve data use, and write each answer in `setup-decisions.md`.
+- *Not tested:* the prune has run only against data made by the tests, never
+  on a deployment with real data. Deleting old messages shortens what the bot
+  can recall of a chat; deleting old Telegram files means it can no longer
+  open them.
+- *Settings:* `RETENTION_MESSAGES_DAYS`, `RETENTION_ROUTED_APPROVALS_DAYS`,
+  `RETENTION_TASKS_DAYS`, `RETENTION_TRANSCRIPT_ARCHIVE_DAYS`,
+  `RETENTION_UPLOADS_DAYS`, `RETENTION_WORKING_CONTEXT_ARCHIVE_DAYS`,
+  `RETENTION_EVALS_DAYS`, `RETENTION_IPC_ERRORS_DAYS` (.env or the process
+  environment). Leave `LOG_LEVEL` unset.
+- *Detail:* `docs/data-handling.md`; `docs/setup-reference.md`, "Retention";
+  `docs/illinois/data-handling.md` (open questions only).
 
 **15. What senders are told**
 - *Plain words:* the words colleagues see about where their mail goes.

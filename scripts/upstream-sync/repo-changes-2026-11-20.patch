@@ -1025,6 +1025,121 @@ index e2dce1affabbcbdd2801e66bbc60224e564e5109..be7f049b7b953dc337c22eabe7134ca2
  log "Discarding lockfile churn so pull won't conflict…"
  git checkout -- package-lock.json 2>/dev/null || true
  
+diff --git a/scripts/retention-prune.ts b/scripts/retention-prune.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..138215ea045275933fb16fb406e4cec5f81e3713
+--- /dev/null
++++ b/scripts/retention-prune.ts
+@@ -0,0 +1,109 @@
++/**
++ * Show, or run by hand, the retention prune (src/retention.ts).
++ *
++ *   npx tsx scripts/retention-prune.ts              dry run: deletes nothing
++ *   npx tsx scripts/retention-prune.ts --dry-run    the same, said out loud
++ *   npx tsx scripts/retention-prune.ts --apply      delete now
++ *
++ * It reads the same RETENTION_*_DAYS settings as the host, from the process
++ * environment and `.env`, and prints one line per store with counts only.
++ * Run it from the install folder as the user the bot runs as. A setting at 0
++ * (the default) is reported as "off" and nothing in that store is counted.
++ * To see what a value would delete before you set it for the host, pass it
++ * for this one command:
++ *
++ *   RETENTION_MESSAGES_DAYS=180 npx tsx scripts/retention-prune.ts
++ *
++ * The running host does the same prune once a day when a setting is above 0;
++ * --apply is for a prune you do not want to wait for. Exit code 1 when a
++ * setting is invalid or the database cannot be opened.
++ */
++import fs from 'fs';
++import path from 'path';
++
++import Database from 'better-sqlite3';
++
++import { STORE_DIR } from '../src/config.js';
++import { assertSafeDbPath } from '../src/host-fs-safety.js';
++import { getRepoReader } from '../src/repo-reader.js';
++import {
++  readRetentionConfig,
++  RETENTION_SETTINGS,
++  runRetention,
++  type RetentionStore,
++} from '../src/retention.js';
++import { OPEN_QUESTIONS_PATH } from '../src/routed-approvals.js';
++
++async function main(): Promise<number> {
++  const args = process.argv.slice(2);
++  const unknown = args.filter((a) => a !== '--dry-run' && a !== '--apply');
++  if (
++    unknown.length > 0 ||
++    (args.includes('--dry-run') && args.includes('--apply'))
++  ) {
++    console.error(
++      'Usage: npx tsx scripts/retention-prune.ts [--dry-run | --apply]',
++    );
++    return 1;
++  }
++  const dryRun = !args.includes('--apply');
++
++  let config;
++  try {
++    config = readRetentionConfig();
++  } catch (err) {
++    console.error((err as Error).message);
++    return 1;
++  }
++
++  const dbPath = path.join(STORE_DIR, 'messages.db');
++  if (!fs.existsSync(dbPath)) {
++    console.error(`No database at ${dbPath}; nothing to prune.`);
++    return 1;
++  }
++  assertSafeDbPath(dbPath);
++  const db = new Database(dbPath, { fileMustExist: true, readonly: dryRun });
++  db.pragma('busy_timeout = 5000');
++  try {
++    const report = await runRetention(
++      config,
++      {
++        db,
++        readOpenQuestions: () =>
++          getRepoReader().readFileAsync(OPEN_QUESTIONS_PATH),
++      },
++      { dryRun },
++    );
++    console.log(dryRun ? 'DRY RUN: nothing was deleted.' : 'APPLIED.');
++    for (const store of Object.keys(RETENTION_SETTINGS) as RetentionStore[]) {
++      const key = RETENTION_SETTINGS[store];
++      const result = report[store];
++      if (!result) {
++        console.log(`${key}=0  off, everything kept`);
++        continue;
++      }
++      const parts = [
++        `${dryRun ? 'would delete' : 'deleted'} ${result.deleted}`,
++        ...(result.keptNeeded
++          ? [`kept ${result.keptNeeded} still needed`]
++          : []),
++        ...(result.refused
++          ? [`refused ${result.refused} (link or unsafe path)`]
++          : []),
++        ...(result.skipped ? [`skipped: ${result.skipped}`] : []),
++      ];
++      console.log(`${key}=${config[store]}  ${parts.join('; ')}`);
++    }
++    return 0;
++  } finally {
++    db.close();
++  }
++}
++
++main().then(
++  (code) => process.exit(code),
++  (err) => {
++    console.error(err);
++    process.exit(1);
++  },
++);
 diff --git a/scripts/seed-optimization-tasks.ts b/scripts/seed-optimization-tasks.ts
 index 913d0bb3c3b0ba01a2cb26964c27e02ecf17980e..0c17a12078585f8306efbc49fce3d7c093a57900 100644
 --- a/scripts/seed-optimization-tasks.ts
@@ -7439,6 +7554,23 @@ index 0000000000000000000000000000000000000000..14bdca3ba3ffdd5a304e1c1b461e6da4
 +    expect(seen).toBeGreaterThanOrEqual(inConfig.length + 2);
 +  });
 +});
+diff --git a/src/exceptions-report.ts b/src/exceptions-report.ts
+index 37356de7cbd7e2b428ad5b686463977961abe8da..86c1bcd1136000271394815d051cbbf714cca8c1 100644
+--- a/src/exceptions-report.ts
++++ b/src/exceptions-report.ts
+@@ -28,6 +28,12 @@ import {
+ } from './routed-approvals.js';
+ 
+ /** Subset of RepoReader the report needs (tests inject a stub). */
++/**
++ * How far back the digest reads task runs. Retention (src/retention.ts)
++ * keeps task runs at least this long, whatever its setting says.
++ */
++export const EXCEPTIONS_REPORT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
++
+ export interface ReportReader {
+   refresh(opts?: { force?: boolean }): unknown;
+   readFile(relPath: string): string | null;
 diff --git a/src/gate-result-log.test.ts b/src/gate-result-log.test.ts
 index 058ff50a6135ffa71842a50726373d71c2294ab6..13ef7e2b59305f7bcdb53d235d321c450682f264 100644
 --- a/src/gate-result-log.test.ts
@@ -7480,6 +7612,166 @@ index 05dbe220c127d8ab2da5993de36338796ec942ab..2e40b8804c5d612f0ea750c5645a0f29
  }
  
  export function protectedGovernanceRule(
+diff --git a/src/host-fs-safety.test.ts b/src/host-fs-safety.test.ts
+index 0f2613fef79cb20736da765189c43e4704810d42..d8ff57db3e4696276d7cdaf21ecdc6552cdd5d8c 100644
+--- a/src/host-fs-safety.test.ts
++++ b/src/host-fs-safety.test.ts
+@@ -9,8 +9,10 @@ import {
+   chownTreeNoFollow,
+   copyDirInTree,
+   ensureDirInTree,
++  listFilesInTree,
+   readFileInTree,
+   readFileInTreeAsync,
++  unlinkFileInTree,
+   writeFileInTree,
+ } from './host-fs-safety.js';
+ 
+@@ -325,3 +327,54 @@ describe('readFileInTreeAsync', () => {
+     );
+   });
+ });
++
++describe('listFilesInTree and unlinkFileInTree', () => {
++  it('lists and deletes a plain file, and reports a missing one', () => {
++    fs.mkdirSync(path.join(root, 'old'));
++    fs.writeFileSync(path.join(root, 'old', 'a.md'), 'a');
++    expect(listFilesInTree(root, 'old')?.map((f) => f.name)).toEqual(['a.md']);
++    expect(unlinkFileInTree(root, 'old/a.md')).toBe(true);
++    expect(unlinkFileInTree(root, 'old/a.md')).toBe(false);
++    expect(listFilesInTree(root, 'old')).toEqual([]);
++  });
++
++  it('creates no folder when the folder is absent', () => {
++    expect(listFilesInTree(root, 'absent')).toBeNull();
++    expect(unlinkFileInTree(root, 'absent/a.md')).toBe(false);
++    expect(fs.existsSync(path.join(root, 'absent'))).toBe(false);
++  });
++
++  it('refuses a linked folder and leaves the files behind it', () => {
++    fs.symlinkSync(outside, path.join(root, 'old'));
++    expect(() => listFilesInTree(root, 'old')).toThrow(/not a real directory/);
++    expect(() => unlinkFileInTree(root, 'old/secret.env')).toThrow(
++      /not a real directory/,
++    );
++    expect(fs.readFileSync(path.join(outside, 'secret.env'), 'utf8')).toBe(
++      'KEEP=1\n',
++    );
++  });
++
++  it('leaves a link, a folder and a hard link out of the list, and refuses to delete them', () => {
++    fs.symlinkSync(path.join(outside, 'secret.env'), path.join(root, 'l.md'));
++    fs.mkdirSync(path.join(root, 'd.md'));
++    fs.linkSync(path.join(outside, 'secret.env'), path.join(root, 'h.md'));
++    expect(listFilesInTree(root)).toEqual([]);
++    for (const name of ['l.md', 'd.md', 'h.md']) {
++      expect(() => unlinkFileInTree(root, name)).toThrow(
++        /not a single-link regular file/,
++      );
++      expect(fs.lstatSync(path.join(root, name))).toBeTruthy();
++    }
++    expect(fs.readFileSync(path.join(outside, 'secret.env'), 'utf8')).toBe(
++      'KEEP=1\n',
++    );
++  });
++
++  it('refuses a path that leaves the tree', () => {
++    expect(() => unlinkFileInTree(root, '../../outside/secret.env')).toThrow(
++      /outside/,
++    );
++    expect(fs.existsSync(path.join(outside, 'secret.env'))).toBe(true);
++  });
++});
+diff --git a/src/host-fs-safety.ts b/src/host-fs-safety.ts
+index dcc5fa391b5a5f511454122d489f590b01f5b6ec..0bfa6095739d7c95db72f2b2d4a715a37943d434 100644
+--- a/src/host-fs-safety.ts
++++ b/src/host-fs-safety.ts
+@@ -213,6 +213,85 @@ export function writeFileInTree(
+   }
+ }
+ 
++/**
++ * True when every component from `root` to `dir` is a real directory; false
++ * when one is missing. Throws when one is a link or not a directory. Unlike
++ * assertRealDirChain it creates nothing: a delete must not make folders.
++ */
++function realDirChainExists(root: string, dir: string): boolean {
++  const rel = path.relative(root, dir);
++  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
++    throw new Error(`refused: ${dir} is outside ${root}`);
++  let current = root;
++  for (const part of ['', ...rel.split(path.sep).filter(Boolean)]) {
++    current = part ? path.join(current, part) : current;
++    let st: fs.Stats;
++    try {
++      st = fs.lstatSync(current);
++    } catch (err) {
++      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
++      throw err;
++    }
++    if (st.isSymbolicLink() || !st.isDirectory())
++      throw new Error(`refused: ${current} is not a real directory`);
++  }
++  return true;
++}
++
++/** One plain file found by listFilesInTree. */
++export interface TreeFile {
++  name: string;
++  mtimeMs: number;
++  size: number;
++}
++
++/**
++ * The single-link regular files directly inside `root/relDir`, or null when
++ * the folder is absent. Links, folders, FIFOs and hard-linked files are left
++ * out, so a caller that deletes from this list never acts on one. Throws
++ * when a component of the path is a link.
++ */
++export function listFilesInTree(root: string, relDir = ''): TreeFile[] | null {
++  const dir = path.resolve(root, relDir);
++  if (!realDirChainExists(path.resolve(root), dir)) return null;
++  const files: TreeFile[] = [];
++  for (const name of fs.readdirSync(dir)) {
++    let st: fs.Stats;
++    try {
++      st = fs.lstatSync(path.join(dir, name));
++    } catch {
++      continue; // removed meanwhile
++    }
++    if (!st.isFile() || st.nlink > 1) continue;
++    files.push({ name, mtimeMs: st.mtimeMs, size: st.size });
++  }
++  return files;
++}
++
++/**
++ * Delete the file `root/relPath` and nothing else. Every folder on the way
++ * is checked to be a real folder, and the name itself must be a single-link
++ * regular file: a link, a folder or a hard-linked file is refused. unlink()
++ * removes a name and never follows a link at it. Returns false when the
++ * file is already gone. The residual race in the header applies.
++ */
++export function unlinkFileInTree(root: string, relPath: string): boolean {
++  const target = path.resolve(root, relPath);
++  if (!realDirChainExists(path.resolve(root), path.dirname(target)))
++    return false;
++  let st: fs.Stats;
++  try {
++    st = fs.lstatSync(target);
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
++    throw err;
++  }
++  if (!st.isFile() || st.nlink > 1)
++    throw new Error(`refused: ${target} is not a single-link regular file`);
++  fs.unlinkSync(target);
++  return true;
++}
++
+ /**
+  * Change ownership of `root` and everything under it without following
+  * symlinks: links are lchown'd themselves and never descended into.
 diff --git a/src/host-git-guard.test.ts b/src/host-git-guard.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..f32ed4d63ac1a21437b6ec2ccedbb9cbf237593d
@@ -10469,7 +10761,7 @@ index 0000000000000000000000000000000000000000..8d5ed4ff95e4e60490caee25e48a6e1e
 +  );
 +}
 diff --git a/src/index.ts b/src/index.ts
-index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011dab2598b49 100644
+index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..8849df9bb2dbee0f22affa00cad0391e376ee418 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -13,6 +13,12 @@ import {
@@ -10494,7 +10786,15 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
  } from './container-runtime.js';
  import {
    getAllChats,
-@@ -48,6 +54,7 @@ import {
+@@ -36,6 +42,7 @@ import {
+   getAllSessions,
+   deleteSession,
+   getAllTasks,
++  getDatabase,
+   getLastBotMessageTimestamp,
+   getMessagesSince,
+   getNewMessages,
+@@ -48,6 +55,7 @@ import {
    storeMessage,
  } from './db.js';
  import { readEnvFile } from './env.js';
@@ -10502,7 +10802,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
  import { GroupQueue } from './group-queue.js';
  import {
    readGroupTemplate,
-@@ -61,7 +68,6 @@ import {
+@@ -61,7 +69,6 @@ import {
    trustedBodyAddressesFromContext,
    formatGateRefusal,
    type DeliveryGateContext,
@@ -10510,7 +10810,16 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    setDeliveryShortfallAlerter,
    warnIfShortReply,
  } from './delivery-gate.js';
-@@ -90,6 +96,7 @@ import { prepareWorkingContext } from './working-context.js';
+@@ -76,6 +83,8 @@ import {
+   loadSenderAllowlist,
+   shouldDropMessage,
+ } from './sender-allowlist.js';
++import { readRetentionConfig, startRetention } from './retention.js';
++import { OPEN_QUESTIONS_PATH } from './routed-approvals.js';
+ import { startSessionCleanup } from './session-cleanup.js';
+ import { startDeliveryCheck } from './email-delivery-check.js';
+ import { startSchedulerLoop } from './task-scheduler.js';
+@@ -90,6 +99,7 @@ import { prepareWorkingContext } from './working-context.js';
  import { logger } from './logger.js';
  import {
    flushAuditLog,
@@ -10518,7 +10827,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    logCcContextSuppressionOnce,
    logDeadLetterOnce,
    logDeliveryProblem,
-@@ -121,6 +128,13 @@ import {
+@@ -121,6 +131,13 @@ import {
    type SentAuditArgs,
  } from './delivery-processor.js';
  import { stripMarkdown } from './email-format.js';
@@ -10532,7 +10841,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
  import {
    shutdownOutboundEmailQueue,
    startOutboundEmailQueue,
-@@ -134,7 +148,7 @@ let messageLoopRunning = false;
+@@ -134,7 +151,7 @@ let messageLoopRunning = false;
  
  const channels: Channel[] = [];
  const queue = new GroupQueue();
@@ -10541,7 +10850,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    logger.error({ text }, 'Alert channel is not initialized');
    // Never resolve silently: an unsent alert must not look delivered to the
    // shortfall-replay layer, which deletes an alert only on confirmation.
-@@ -647,6 +661,9 @@ async function runAgent(
+@@ -647,6 +664,9 @@ async function runAgent(
      if (output.result !== null && output.result !== undefined) {
        sawUsableResult = true;
      }
@@ -10551,7 +10860,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
      if (onOutput) await onOutput(output);
    };
  
-@@ -689,6 +706,9 @@ async function runAgent(
+@@ -689,6 +709,9 @@ async function runAgent(
      .join('\n\n');
  
    try {
@@ -10561,12 +10870,14 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
      const imageAttachments =
        agentMode === 'normal' ? parseImageReferences(prompt) : [];
  
-@@ -866,6 +886,22 @@ function ensureContainerSystemRunning(): void {
+@@ -866,6 +889,24 @@ function ensureContainerSystemRunning(): void {
  }
  
  async function main(): Promise<void> {
 +  // Before anything starts: a real program repo needs real identity settings.
 +  assertIdentitySettingsConfigured();
++  // A retention setting that is not a whole number of days stops the host.
++  const retentionConfig = readRetentionConfig();
 +
 +  // The host-owned repository must not sit inside the agent's checkout.
 +  const hostRepoProblem = hostRepoPlacementProblem();
@@ -10584,7 +10895,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    ensureContainerSystemRunning();
    initDatabase();
    logger.info('Database initialized');
-@@ -875,7 +911,7 @@ async function main(): Promise<void> {
+@@ -875,7 +916,7 @@ async function main(): Promise<void> {
    // Start credential proxy (containers route API calls through this)
    const proxyServer = await startCredentialProxy(
      CREDENTIAL_PROXY_PORT,
@@ -10593,7 +10904,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    );
  
    // Graceful shutdown handlers
-@@ -1028,7 +1064,10 @@ async function main(): Promise<void> {
+@@ -1028,7 +1069,10 @@ async function main(): Promise<void> {
    // fire-and-forget catch it themselves; the shortfall-alert replay layer needs
    // the rejection, because a swallowed failure there reads as a confirmed
    // delivery and drops the alert permanently (round-3 review P1).
@@ -10605,7 +10916,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
      const alertJid = resolveDeadLetterJid();
      const alertChannel = findChannel(channels, alertJid);
      if (!alertChannel) {
-@@ -1044,18 +1083,36 @@ async function main(): Promise<void> {
+@@ -1044,18 +1088,36 @@ async function main(): Promise<void> {
        throw new Error(`Alert delivery failed: ${outcome.reason}`);
      }
    };
@@ -10645,7 +10956,18 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    /**
     * G46-gated send for non-streaming paths (scheduler forwards, IPC
     * messages): validates against the owning channel's declared profile.
-@@ -1149,6 +1206,13 @@ async function main(): Promise<void> {
+@@ -1143,12 +1205,24 @@ async function main(): Promise<void> {
+     },
+   });
+   startSessionCleanup();
++  // Off unless a RETENTION_*_DAYS setting is above 0 (src/retention.ts).
++  startRetention(retentionConfig, {
++    db: getDatabase(),
++    readOpenQuestions: () => getRepoReader().readFileAsync(OPEN_QUESTIONS_PATH),
++  });
+   startDeliveryCheck({
+     timezone: TIMEZONE,
+     // Late-bound: sendDeadLetterAlert is reassigned once channels connect.
      notify: (text) => sendDeadLetterAlert(text),
      logProblem: logDeliveryProblem,
    });
@@ -13379,6 +13701,1794 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..8972c1c2a828a9e6851829bfdf380def
      singleton.init();
    }
    return singleton;
+diff --git a/src/retention.test.ts b/src/retention.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f67e3dccf735c9b938dfd7a188a39067225ab70
+--- /dev/null
++++ b/src/retention.test.ts
+@@ -0,0 +1,1070 @@
++import { execFileSync } from 'child_process';
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++
++import Database from 'better-sqlite3';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++import {
++  _closeDatabase,
++  _initTestDatabase,
++  createTask,
++  getDatabase,
++  getMessagesSince,
++  insertRoutedApproval,
++  logTaskRun,
++  setRouterState,
++  storeChatMetadata,
++  storeMessage,
++  updateTask,
++  type RoutedApprovalRow,
++} from './db.js';
++import { logger } from './logger.js';
++import {
++  parseRetentionDays,
++  readRetentionConfig,
++  RETENTION_SETTINGS,
++  retentionEnabled,
++  runRetention,
++  startRetention,
++  type RetentionConfig,
++  type RetentionDeps,
++} from './retention.js';
++
++// Retention deletes data. These tests hold it to: off by default; only what
++// is older than the window; nothing a pending operation needs; no link
++// followed; bad values stop the host; a dry run changes nothing and reports
++// what the real run then deletes.
++
++const DAY = 24 * 60 * 60 * 1000;
++const NOW = Date.parse('2026-11-20T12:00:00.000Z');
++const BOT = 'Coordinator';
++const iso = (daysAgo: number): string =>
++  new Date(NOW - daysAgo * DAY).toISOString();
++
++const OFF: RetentionConfig = {
++  messages: 0,
++  routedApprovals: 0,
++  tasks: 0,
++  transcriptArchives: 0,
++  uploads: 0,
++  workingContextArchive: 0,
++  evals: 0,
++  ipcErrors: 0,
++};
++const ALL_30: RetentionConfig = {
++  messages: 30,
++  routedApprovals: 30,
++  tasks: 30,
++  transcriptArchives: 30,
++  uploads: 30,
++  workingContextArchive: 30,
++  evals: 30,
++  ipcErrors: 30,
++};
++
++let base: string;
++let outside: string;
++let openQuestions: string | null;
++
++function deps(): RetentionDeps {
++  return {
++    db: getDatabase(),
++    readOpenQuestions: async () => openQuestions,
++    now: () => NOW,
++    botPrefix: BOT,
++    paths: {
++      storeDir: path.join(base, 'store'),
++      dataDir: path.join(base, 'data'),
++      groupsDir: path.join(base, 'groups'),
++    },
++  };
++}
++
++function file(rel: string, daysAgo: number, content = 'x'): string {
++  const p = path.join(base, rel);
++  fs.mkdirSync(path.dirname(p), { recursive: true });
++  fs.writeFileSync(p, content);
++  const at = new Date(NOW - daysAgo * DAY);
++  fs.utimesSync(p, at, at);
++  return p;
++}
++
++function message(
++  id: string,
++  chat: string,
++  daysAgo: number,
++  opts: { bot?: boolean; content?: string } = {},
++): void {
++  storeMessage({
++    id,
++    chat_jid: chat,
++    sender: opts.bot ? 'bot' : 'avery@example.edu',
++    sender_name: opts.bot ? BOT : 'Avery Morgan',
++    content: opts.content ?? `text of ${id}`,
++    timestamp: iso(daysAgo),
++    is_from_me: opts.bot === true,
++    is_bot_message: opts.bot === true,
++  });
++}
++
++function messageIds(): string[] {
++  return (
++    getDatabase().prepare('SELECT id FROM messages ORDER BY id').all() as {
++      id: string;
++    }[]
++  ).map((r) => r.id);
++}
++
++function setCursors(seenDaysAgo: number, perChat: Record<string, number>) {
++  setRouterState('last_timestamp', iso(seenDaysAgo));
++  setRouterState(
++    'last_agent_timestamp',
++    JSON.stringify(
++      Object.fromEntries(
++        Object.entries(perChat).map(([jid, d]) => [jid, iso(d)]),
++      ),
++    ),
++  );
++}
++
++function approval(
++  key: string,
++  patch: Partial<RoutedApprovalRow> = {},
++): RoutedApprovalRow {
++  const row: RoutedApprovalRow = {
++    key,
++    title: `Title ${key}`,
++    sender: 'sender@example.edu',
++    quotes: ['the words'],
++    trustedAddresses: [],
++    status: 'closed',
++    createdAt: NOW - 90 * DAY,
++    closedAt: NOW - 60 * DAY,
++    relayCount: 1,
++    relaySubmitted: 1,
++    ...patch,
++  };
++  insertRoutedApproval(row);
++  return row;
++}
++
++function approvalKeys(): string[] {
++  return (
++    getDatabase()
++      .prepare('SELECT key FROM routed_approvals ORDER BY key')
++      .all() as { key: string }[]
++  ).map((r) => r.key);
++}
++
++function task(
++  id: string,
++  status: 'active' | 'paused' | 'completed',
++  lastRunDaysAgo: number,
++) {
++  createTask({
++    id,
++    group_folder: 'main',
++    chat_jid: 'tg:1',
++    prompt: `prompt of ${id}`,
++    schedule_type: 'once',
++    schedule_value: iso(lastRunDaysAgo),
++    context_mode: 'isolated',
++    next_run: null,
++    status: 'active',
++    created_at: iso(lastRunDaysAgo + 1),
++  });
++  getDatabase()
++    .prepare('UPDATE scheduled_tasks SET last_run = ? WHERE id = ?')
++    .run(iso(lastRunDaysAgo), id);
++  updateTask(id, { status });
++}
++
++function run(taskId: string, daysAgo: number): void {
++  logTaskRun({
++    task_id: taskId,
++    run_at: iso(daysAgo),
++    duration_ms: 5,
++    status: 'success',
++    result: `result of ${taskId}`,
++    error: null,
++  });
++}
++
++const count = (table: string): number =>
++  (
++    getDatabase().prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as {
++      n: number;
++    }
++  ).n;
++
++function evalsDb(rows: number[]): string {
++  const p = path.join(base, 'store', 'evals.db');
++  fs.mkdirSync(path.dirname(p), { recursive: true });
++  const db = new Database(p);
++  db.exec(
++    `CREATE TABLE response_evals (id INTEGER PRIMARY KEY AUTOINCREMENT,
++       chat_jid TEXT NOT NULL, channel TEXT NOT NULL, timestamp TEXT NOT NULL,
++       confidence TEXT NOT NULL, has_citation INTEGER NOT NULL,
++       category TEXT NOT NULL, topics TEXT NOT NULL,
++       response_length INTEGER NOT NULL, eval_notes TEXT)`,
++  );
++  const ins = db.prepare(
++    `INSERT INTO response_evals (chat_jid, channel, timestamp, confidence,
++       has_citation, category, topics, response_length, eval_notes)
++     VALUES ('tg:1', 'telegram', ?, 'high', 1, 'question', '[]', 10, 'note')`,
++  );
++  for (const d of rows) ins.run(iso(d));
++  db.close();
++  return p;
++}
++
++function evalCount(p: string): number {
++  const db = new Database(p, { readonly: true });
++  try {
++    return (
++      db.prepare('SELECT COUNT(*) AS n FROM response_evals').get() as {
++        n: number;
++      }
++    ).n;
++  } finally {
++    db.close();
++  }
++}
++
++/** Every file under base (not through links) with its content, plus row counts. */
++function snapshot(): string {
++  const out: string[] = [];
++  const walk = (dir: string): void => {
++    for (const name of fs.readdirSync(dir).sort()) {
++      const p = path.join(dir, name);
++      const st = fs.lstatSync(p);
++      const rel = path.relative(base, p);
++      if (st.isSymbolicLink()) out.push(`${rel} -> ${fs.readlinkSync(p)}`);
++      else if (st.isDirectory()) walk(p);
++      else if (/evals\.db-(wal|shm)$/.test(name)) continue;
++      else if (name === 'evals.db') out.push(`${rel} rows=${evalCount(p)}`);
++      else out.push(`${rel} = ${fs.readFileSync(p, 'utf8')}`);
++    }
++  };
++  walk(base);
++  for (const t of [
++    'messages',
++    'routed_approvals',
++    'scheduled_tasks',
++    'task_run_logs',
++  ])
++    out.push(`${t} rows=${count(t)}`);
++  return out.join('\n');
++}
++
++/** One fixture with something old and something recent in every store. */
++function populate(): void {
++  storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++  message('m-old', 'tg:1', 60);
++  message('m-old-reply', 'tg:1', 59, { bot: true });
++  message('m-recent', 'tg:1', 2);
++  message('m-recent-reply', 'tg:1', 1, { bot: true });
++  setCursors(1, { 'tg:1': 1 });
++  approval('discussions/raw/a.md');
++  approval('discussions/raw/b.md', { closedAt: NOW - 2 * DAY });
++  openQuestions = '## Routed Approvals\n';
++  task('t-done-old', 'completed', 60);
++  run('t-done-old', 60);
++  task('t-active', 'active', 60);
++  run('t-active', 60);
++  run('t-active', 1);
++  file('groups/main/conversations/2026-09-01-old-talk.md', 80);
++  file('groups/main/conversations/2026-11-19-new-talk.md', 1);
++  file('data/telegram-uploads/main/old.pdf', 60);
++  file('data/telegram-uploads/main/old.pdf.extracted.md', 60);
++  file('data/telegram-uploads/main/new.pdf', 1);
++  file('groups/main/attachments/img-1700000000000-ab12.jpg', 60);
++  file('groups/main/attachments/img-1790000000000-cd34.jpg', 1);
++  file(
++    'data/working-context/avery.archive.json',
++    0,
++    JSON.stringify([
++      { ts: iso(90), type: 'thread', text: 'old note' },
++      { ts: iso(3), type: 'thread', text: 'new note' },
++    ]),
++  );
++  file('data/working-context/avery.json', 0, '[]\n');
++  evalsDb([60, 1]);
++  file('data/ipc/errors/main-old.json', 60, '{}');
++  file('data/ipc/errors/main-new.json', 1, '{}');
++}
++
++beforeEach(() => {
++  base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'retention-'));
++  outside = path.join(base, 'outside');
++  fs.mkdirSync(outside);
++  for (const d of ['store', 'data', 'groups']) fs.mkdirSync(path.join(base, d));
++  _initTestDatabase();
++  openQuestions = '## Routed Approvals\n';
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  vi.useRealTimers();
++  _closeDatabase();
++  fs.rmSync(base, { recursive: true, force: true });
++});
++
++describe('settings', () => {
++  it('defaults every store to 0, which keeps everything', () => {
++    const config = readRetentionConfig({}, {});
++    expect(config).toEqual(OFF);
++    expect(retentionEnabled(config)).toBe(false);
++  });
++
++  it('reads whole days from the environment, which wins over .env', () => {
++    const config = readRetentionConfig(
++      { RETENTION_MESSAGES_DAYS: '180', RETENTION_TASKS_DAYS: ' 30 ' },
++      { RETENTION_MESSAGES_DAYS: '7', RETENTION_UPLOADS_DAYS: '90' },
++    );
++    expect(config).toEqual({ ...OFF, messages: 180, tasks: 30, uploads: 90 });
++    expect(retentionEnabled(config)).toBe(true);
++  });
++
++  it.each([
++    '-1',
++    '-30',
++    'abc',
++    '30d',
++    '1e3',
++    '0.5',
++    '1.5',
++    '+3',
++    '0x10',
++    '7 days',
++  ])('refuses "%s"', (bad) => {
++    expect(() => parseRetentionDays('RETENTION_MESSAGES_DAYS', bad)).toThrow(
++      /RETENTION_MESSAGES_DAYS must be a whole number of days/,
++    );
++  });
++
++  it('refuses a value over 100 years', () => {
++    expect(() => parseRetentionDays('RETENTION_EVALS_DAYS', '36501')).toThrow(
++      /at most 36500/,
++    );
++    expect(parseRetentionDays('RETENTION_EVALS_DAYS', '36500')).toBe(36500);
++  });
++
++  it('accepts 0, 1 and an empty value', () => {
++    expect(parseRetentionDays('K', '0')).toBe(0);
++    expect(parseRetentionDays('K', '1')).toBe(1);
++    expect(parseRetentionDays('K', '')).toBe(0);
++    expect(parseRetentionDays('K', undefined)).toBe(0);
++  });
++
++  it('names every bad setting in one error that stops the host', () => {
++    expect(() =>
++      readRetentionConfig(
++        { RETENTION_MESSAGES_DAYS: '-1', RETENTION_UPLOADS_DAYS: 'soon' },
++        { RETENTION_TASKS_DAYS: '0.5' },
++      ),
++    ).toThrow(
++      /will not start.*RETENTION_MESSAGES_DAYS.*RETENTION_TASKS_DAYS.*RETENTION_UPLOADS_DAYS/s,
++    );
++  });
++
++  it('is read in main() before the database is opened', () => {
++    const source = fs.readFileSync(
++      path.join(process.cwd(), 'src', 'index.ts'),
++      'utf8',
++    );
++    const main = source.slice(source.indexOf('async function main()'));
++    const read = main.indexOf('readRetentionConfig()');
++    expect(read).toBeGreaterThan(-1);
++    expect(read).toBeLessThan(main.indexOf('initDatabase()'));
++    expect(read).toBeLessThan(main.indexOf('startCredentialProxy('));
++  });
++
++  it('has one setting per store', () => {
++    expect(Object.keys(RETENTION_SETTINGS).sort()).toEqual(
++      Object.keys(OFF).sort(),
++    );
++    for (const key of Object.values(RETENTION_SETTINGS))
++      expect(key).toMatch(/^RETENTION_[A-Z_]+_DAYS$/);
++  });
++});
++
++describe('the default', () => {
++  it('deletes nothing and starts no timer', async () => {
++    populate();
++    const before = snapshot();
++    vi.useFakeTimers();
++    const stop = startRetention(OFF, deps());
++    expect(vi.getTimerCount()).toBe(0);
++    stop();
++    vi.useRealTimers();
++    expect(await runRetention(OFF, deps())).toEqual({});
++    expect(snapshot()).toBe(before);
++  });
++
++  it('starts a first run and a daily run when a setting is on', async () => {
++    populate();
++    vi.useFakeTimers();
++    const stop = startRetention({ ...OFF, ipcErrors: 30 }, deps());
++    expect(vi.getTimerCount()).toBe(2);
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(
++      fs.existsSync(path.join(base, 'data/ipc/errors/main-old.json')),
++    ).toBe(false);
++    expect(
++      fs.existsSync(path.join(base, 'data/ipc/errors/main-new.json')),
++    ).toBe(true);
++    stop();
++    expect(vi.getTimerCount()).toBe(0);
++  });
++
++  it('touches only the stores whose setting is on', async () => {
++    populate();
++    const report = await runRetention({ ...OFF, ipcErrors: 30 }, deps());
++    expect(report).toEqual({ ipcErrors: { deleted: 1 } });
++    expect(messageIds()).toHaveLength(4);
++    expect(approvalKeys()).toHaveLength(2);
++    expect(
++      fs.existsSync(path.join(base, 'data/telegram-uploads/main/old.pdf')),
++    ).toBe(true);
++  });
++});
++
++describe('messages', () => {
++  const only = { ...OFF, messages: 30 };
++
++  it('deletes answered messages older than the window and keeps newer ones', async () => {
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    message('a-45', 'tg:1', 45);
++    message('b-45-reply', 'tg:1', 44, { bot: true });
++    message('c-31', 'tg:1', 31);
++    message('d-29', 'tg:1', 29);
++    message('e-1-reply', 'tg:1', 1, { bot: true });
++    setCursors(1, { 'tg:1': 1 });
++    const report = await runRetention(only, deps());
++    expect(report.messages).toEqual({ deleted: 3, keptNeeded: 0 });
++    expect(messageIds()).toEqual(['d-29', 'e-1-reply']);
++  });
++
++  it('keeps a message that has not been answered, however old', async () => {
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    message('answered', 'tg:1', 90);
++    message('reply', 'tg:1', 89, { bot: true });
++    message('waiting-1', 'tg:1', 60);
++    message('waiting-2', 'tg:1', 40);
++    setCursors(1, { 'tg:1': 80 });
++    const pendingBefore = getMessagesSince('tg:1', iso(80), BOT);
++    const report = await runRetention(only, deps());
++    expect(report.messages).toEqual({ deleted: 1, keptNeeded: 3 });
++    expect(messageIds()).toEqual(['reply', 'waiting-1', 'waiting-2']);
++    expect(getMessagesSince('tg:1', iso(80), BOT)).toEqual(pendingBefore);
++  });
++
++  it('keeps a message the message loop has not seen yet', async () => {
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    message('seen', 'tg:1', 90);
++    message('unseen', 'tg:1', 50);
++    // The per-chat cursor is ahead of the seen cursor (a recovered cursor).
++    setCursors(70, { 'tg:1': 40 });
++    await runRetention(only, deps());
++    expect(messageIds()).toEqual(['unseen']);
++  });
++
++  it('keeps everything when no message has ever been seen', async () => {
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    message('old', 'tg:1', 90);
++    setRouterState('last_agent_timestamp', JSON.stringify({ 'tg:1': iso(1) }));
++    const report = await runRetention(only, deps());
++    expect(report.messages).toEqual({ deleted: 0, keptNeeded: 1 });
++  });
++
++  it('keeps every message of a chat with no cursor and no bot message', async () => {
++    storeChatMetadata('tg:2', iso(0), 'Quiet chat', 'telegram', true);
++    message('q1', 'tg:2', 90);
++    message('q2', 'tg:2', 60);
++    setCursors(1, {});
++    const report = await runRetention(only, deps());
++    expect(report.messages).toEqual({ deleted: 0, keptNeeded: 2 });
++    expect(messageIds()).toEqual(['q1', 'q2']);
++  });
++
++  it('keeps the newest bot message, which rebuilds a lost cursor', async () => {
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    message('q-old', 'tg:1', 90);
++    message('reply-old', 'tg:1', 89, { bot: true });
++    message('q-last', 'tg:1', 61);
++    message('reply-last', 'tg:1', 60, { bot: true });
++    message('legacy-prefix', 'tg:1', 70, { content: `${BOT}: an old reply` });
++    // The saved per-chat cursor is lost: the host falls back to the newest
++    // bot message, and so does the prune.
++    setCursors(1, {});
++    await runRetention(only, deps());
++    expect(messageIds()).toEqual(['reply-last']);
++    // With the cursor rebuilt from that row nothing is answered twice.
++    expect(getMessagesSince('tg:1', iso(60), BOT)).toEqual([]);
++  });
++
++  it('treats each chat by its own cursor', async () => {
++    storeChatMetadata('tg:1', iso(0), 'One', 'telegram', true);
++    storeChatMetadata('tg:2', iso(0), 'Two', 'telegram', true);
++    message('one-old', 'tg:1', 50);
++    message('two-old', 'tg:2', 50);
++    setCursors(1, { 'tg:1': 10, 'tg:2': 55 });
++    await runRetention(only, deps());
++    expect(messageIds()).toEqual(['two-old']);
++  });
++
++  it('deletes nothing when the saved cursors cannot be read', async () => {
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    message('old', 'tg:1', 90);
++    message('reply', 'tg:1', 80, { bot: true });
++    setRouterState('last_timestamp', iso(1));
++    setRouterState('last_agent_timestamp', '{not json');
++    const report = await runRetention(only, deps());
++    expect(report.messages).toEqual({
++      deleted: 0,
++      skipped: 'saved cursors unreadable',
++    });
++    expect(messageIds()).toEqual(['old', 'reply']);
++  });
++
++  it('leaves a row whose timestamp is not an ISO time', async () => {
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    message('odd', 'tg:1', 90);
++    getDatabase()
++      .prepare(`UPDATE messages SET timestamp = '1700000000' WHERE id = 'odd'`)
++      .run();
++    message('reply', 'tg:1', 1, { bot: true });
++    setCursors(1, { 'tg:1': 1 });
++    await runRetention(only, deps());
++    expect(messageIds()).toEqual(['odd', 'reply']);
++  });
++});
++
++describe('routed approvals', () => {
++  const only = { ...OFF, routedApprovals: 30 };
++
++  it('deletes rows closed or removed before the window', async () => {
++    approval('raw/closed-old.md');
++    approval('raw/removed-old.md', { status: 'removed' });
++    approval('raw/closed-recent.md', { closedAt: NOW - 29 * DAY });
++    const report = await runRetention(only, deps());
++    expect(report.routedApprovals).toEqual({ deleted: 2, keptNeeded: 0 });
++    expect(approvalKeys()).toEqual(['raw/closed-recent.md']);
++  });
++
++  it('keeps an approval that is still open, however old', async () => {
++    for (const status of ['pending', 'relayed', 'held'] as const)
++      approval(`raw/${status}.md`, {
++        status: status as RoutedApprovalRow['status'],
++        closedAt: undefined,
++        createdAt: NOW - 400 * DAY,
++      });
++    const report = await runRetention(only, deps());
++    expect(report.routedApprovals).toEqual({ deleted: 0, keptNeeded: 0 });
++    expect(approvalKeys()).toHaveLength(3);
++  });
++
++  it('keeps a closed row with a notice still owed or a relay not yet recorded', async () => {
++    approval('raw/notice.md', { status: 'removed', pendingNotice: 'removed' });
++    approval('raw/relay.md', { relaySubmitted: 2, relayCount: 1 });
++    const report = await runRetention(only, deps());
++    expect(report.routedApprovals?.deleted).toBe(0);
++    expect(approvalKeys()).toEqual(['raw/notice.md', 'raw/relay.md']);
++  });
++
++  it('keeps a closed row whose entry is open again in OPEN_QUESTIONS.md', async () => {
++    approval('discussions/raw/reopened.md');
++    approval('discussions/raw/still-closed.md');
++    approval('discussions/raw/gone.md');
++    openQuestions = [
++      '## Routed Approvals',
++      '- [ ] **Reopened** Raw: discussions/raw/reopened.md',
++      '- [x] **Closed** Raw: discussions/raw/still-closed.md',
++      '',
++    ].join('\n');
++    const report = await runRetention(only, deps());
++    expect(report.routedApprovals).toEqual({ deleted: 2, keptNeeded: 1 });
++    expect(approvalKeys()).toEqual(['discussions/raw/reopened.md']);
++  });
++
++  it('deletes nothing when OPEN_QUESTIONS.md cannot be read', async () => {
++    approval('raw/closed-old.md');
++    openQuestions = null;
++    expect((await runRetention(only, deps())).routedApprovals).toEqual({
++      deleted: 0,
++      skipped: 'OPEN_QUESTIONS.md unavailable',
++    });
++    const failing = {
++      ...deps(),
++      readOpenQuestions: () => Promise.reject(new Error('mirror down')),
++    };
++    expect((await runRetention(only, failing)).routedApprovals?.deleted).toBe(
++      0,
++    );
++    expect(approvalKeys()).toEqual(['raw/closed-old.md']);
++  });
++});
++
++describe('scheduled tasks and run records', () => {
++  it('deletes finished one-time tasks and old run records only', async () => {
++    task('done-old', 'completed', 45);
++    run('done-old', 45);
++    task('done-recent', 'completed', 10);
++    run('done-recent', 10);
++    task('active-old', 'active', 45);
++    run('active-old', 45);
++    run('active-old', 5);
++    task('paused-old', 'paused', 400);
++    const report = await runRetention({ ...OFF, tasks: 30 }, deps());
++    expect(report.tasks).toEqual({ deleted: 3 });
++    const ids = (
++      getDatabase()
++        .prepare('SELECT id FROM scheduled_tasks ORDER BY id')
++        .all() as { id: string }[]
++    ).map((r) => r.id);
++    expect(ids).toEqual(['active-old', 'done-recent', 'paused-old']);
++    const runs = getDatabase()
++      .prepare('SELECT task_id, run_at FROM task_run_logs ORDER BY run_at')
++      .all();
++    expect(runs).toEqual([
++      { task_id: 'done-recent', run_at: iso(10) },
++      { task_id: 'active-old', run_at: iso(5) },
++    ]);
++  });
++
++  it('never deletes the approved email-outreach task', async () => {
++    task('outreach-approved', 'completed', 400);
++    run('outreach-approved', 400);
++    task('other-done', 'completed', 400);
++    const report = await runRetention(
++      { ...OFF, tasks: 30 },
++      { ...deps(), protectedTaskIds: ['outreach-approved'] },
++    );
++    // The other task and the protected task's old run record.
++    expect(report.tasks).toEqual({ deleted: 2 });
++    expect(
++      getDatabase().prepare('SELECT id FROM scheduled_tasks').all(),
++    ).toEqual([{ id: 'outreach-approved' }]);
++  });
++
++  it('keeps the seven days of run records the exceptions digest reads', async () => {
++    task('done', 'completed', 3);
++    run('done', 3);
++    task('active', 'active', 6);
++    run('active', 6);
++    run('active', 8);
++    const report = await runRetention({ ...OFF, tasks: 1 }, deps());
++    expect(report.tasks).toEqual({ deleted: 1 });
++    expect(count('scheduled_tasks')).toBe(2);
++    expect(count('task_run_logs')).toBe(2);
++  });
++});
++
++describe('files', () => {
++  it('deletes transcript archives older than the window, by the hook’s name only', async () => {
++    const old = file('groups/main/conversations/2026-08-01-budget.md', 100);
++    const recent = file('groups/main/conversations/2026-11-10-budget.md', 10);
++    const other = file('groups/main/conversations/notes.md', 100);
++    const elsewhere = file('groups/main/2026-08-01-budget.md', 100);
++    const nested = file('groups/main/conversations/sub/2026-08-01-x.md', 100);
++    const report = await runRetention(
++      { ...OFF, transcriptArchives: 30 },
++      deps(),
++    );
++    expect(report.transcriptArchives).toEqual({ deleted: 1 });
++    expect(fs.existsSync(old)).toBe(false);
++    for (const kept of [recent, other, elsewhere, nested])
++      expect(fs.existsSync(kept)).toBe(true);
++  });
++
++  it('deletes old Telegram files and host-written photos, and nothing else', async () => {
++    const gone = [
++      file('data/telegram-uploads/main/report.pdf', 40),
++      file('data/telegram-uploads/main/report.pdf.extracted.md', 40),
++      file('groups/main/attachments/img-1700000000000-ab12.jpg', 40),
++    ];
++    const kept = [
++      file('data/telegram-uploads/main/fresh.pdf', 29),
++      file('groups/main/attachments/img-1790000000000-zz99.jpg', 2),
++      file('groups/main/attachments/my-own-chart.jpg', 400),
++      file('groups/main/CLAUDE.md', 400),
++      file('groups/main/logs/run.log', 400),
++      file('data/sessions/main/.claude/projects/-workspace-group/s.jsonl', 400),
++    ];
++    const report = await runRetention({ ...OFF, uploads: 30 }, deps());
++    expect(report.uploads).toEqual({ deleted: 3 });
++    for (const p of gone) expect(fs.existsSync(p)).toBe(false);
++    for (const p of kept) expect(fs.existsSync(p)).toBe(true);
++  });
++
++  it('keeps a file named in a message that has not been answered', async () => {
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    message('answered', 'tg:1', 50, {
++      content: '[Document: /workspace/telegram-uploads/done.pdf]',
++    });
++    message('reply', 'tg:1', 49, { bot: true });
++    message('waiting', 'tg:1', 40, {
++      content:
++        '[Document: /workspace/telegram-uploads/waiting.pdf] and [Image: attachments/img-1700000000001-ab12.jpg] see these',
++    });
++    setCursors(1, { 'tg:1': 45 });
++    const needed = [
++      file('data/telegram-uploads/main/waiting.pdf', 40),
++      file('data/telegram-uploads/main/waiting.pdf.extracted.md', 40),
++      file('groups/main/attachments/img-1700000000001-ab12.jpg', 40),
++    ];
++    const done = file('data/telegram-uploads/main/done.pdf', 50);
++    const report = await runRetention(
++      { ...OFF, uploads: 30, messages: 30 },
++      deps(),
++    );
++    expect(report.uploads).toEqual({ deleted: 1, keptNeeded: 3 });
++    expect(fs.existsSync(done)).toBe(false);
++    for (const p of needed) expect(fs.existsSync(p)).toBe(true);
++    expect(messageIds()).toEqual(['reply', 'waiting']);
++  });
++
++  it('drops old entries from the working-context archive and leaves the live file', async () => {
++    const archive = file(
++      'data/working-context/avery.archive.json',
++      0,
++      JSON.stringify([
++        { ts: iso(100), type: 'thread', text: 'old' },
++        { ts: iso(5), type: 'thread', text: 'new' },
++        { type: 'thread', text: 'no time' },
++        'not an entry',
++      ]),
++    );
++    const live = file(
++      'data/working-context/avery.json',
++      0,
++      JSON.stringify([{ ts: iso(100), type: 'thread', text: 'live and old' }]),
++    );
++    const corrupt = file('data/working-context/sam.archive.json', 0, '{nope');
++    const report = await runRetention(
++      { ...OFF, workingContextArchive: 30 },
++      deps(),
++    );
++    expect(report.workingContextArchive).toEqual({ deleted: 1 });
++    expect(JSON.parse(fs.readFileSync(archive, 'utf8'))).toEqual([
++      { ts: iso(5), type: 'thread', text: 'new' },
++      { type: 'thread', text: 'no time' },
++      'not an entry',
++    ]);
++    expect(JSON.parse(fs.readFileSync(live, 'utf8'))).toHaveLength(1);
++    expect(fs.readFileSync(corrupt, 'utf8')).toBe('{nope');
++  });
++
++  it('deletes old eval rows and never creates the eval database', async () => {
++    const only = { ...OFF, evals: 30 };
++    expect((await runRetention(only, deps())).evals).toEqual({ deleted: 0 });
++    expect(fs.existsSync(path.join(base, 'store', 'evals.db'))).toBe(false);
++    const p = evalsDb([100, 31, 29, 0]);
++    expect((await runRetention(only, deps())).evals).toEqual({ deleted: 2 });
++    expect(evalCount(p)).toBe(2);
++  });
++
++  it('deletes old set-aside IPC requests', async () => {
++    const old = file('data/ipc/errors/main-1.json', 31, '{}');
++    const recent = file('data/ipc/errors/main-2.json', 29, '{}');
++    const live = file('data/ipc/main/messages/3.json', 400, '{}');
++    const report = await runRetention({ ...OFF, ipcErrors: 30 }, deps());
++    expect(report.ipcErrors).toEqual({ deleted: 1 });
++    expect(fs.existsSync(old)).toBe(false);
++    expect(fs.existsSync(recent)).toBe(true);
++    expect(fs.existsSync(live)).toBe(true);
++  });
++});
++
++describe('path safety', () => {
++  const secret = (): string => {
++    const p = path.join(outside, '2026-01-01-secret.md');
++    fs.writeFileSync(p, 'KEEP');
++    const at = new Date(NOW - 400 * DAY);
++    fs.utimesSync(p, at, at);
++    return p;
++  };
++  const on = {
++    ...OFF,
++    transcriptArchives: 30,
++    uploads: 30,
++    workingContextArchive: 30,
++    ipcErrors: 30,
++  };
++
++  it('does not delete through a folder that is a link', async () => {
++    const target = secret();
++    const img = path.join(outside, 'img-1700000000000-ab12.jpg');
++    fs.writeFileSync(img, 'KEEP');
++    fs.utimesSync(img, new Date(NOW - 400 * DAY), new Date(NOW - 400 * DAY));
++    fs.mkdirSync(path.join(base, 'groups/main'), { recursive: true });
++    fs.symlinkSync(outside, path.join(base, 'groups/main/conversations'));
++    fs.symlinkSync(outside, path.join(base, 'groups/main/attachments'));
++    fs.mkdirSync(path.join(base, 'data/ipc'), { recursive: true });
++    fs.symlinkSync(outside, path.join(base, 'data/ipc/errors'));
++    const report = await runRetention(on, deps());
++    expect(report.transcriptArchives).toEqual({ deleted: 0, refused: 1 });
++    expect(report.uploads).toEqual({ deleted: 0, refused: 1 });
++    expect(report.ipcErrors).toEqual({ deleted: 0, refused: 1 });
++    expect(fs.readFileSync(target, 'utf8')).toBe('KEEP');
++    expect(fs.readFileSync(img, 'utf8')).toBe('KEEP');
++  });
++
++  it('does not enter a group folder that is a link', async () => {
++    const target = secret();
++    fs.mkdirSync(path.join(outside, 'conversations'));
++    const inner = path.join(outside, 'conversations', '2026-01-01-x.md');
++    fs.writeFileSync(inner, 'KEEP');
++    fs.utimesSync(inner, new Date(NOW - 400 * DAY), new Date(NOW - 400 * DAY));
++    fs.symlinkSync(outside, path.join(base, 'groups/linked'));
++    fs.mkdirSync(path.join(base, 'data/telegram-uploads'), { recursive: true });
++    fs.symlinkSync(outside, path.join(base, 'data/telegram-uploads/linked'));
++    const report = await runRetention(on, deps());
++    expect(report.transcriptArchives).toEqual({ deleted: 0 });
++    expect(report.uploads).toEqual({ deleted: 0 });
++    expect(fs.readFileSync(inner, 'utf8')).toBe('KEEP');
++    expect(fs.readFileSync(target, 'utf8')).toBe('KEEP');
++  });
++
++  it('leaves a planted link and a hard link where an old file would be', async () => {
++    const target = secret();
++    const dir = path.join(base, 'groups/main/conversations');
++    fs.mkdirSync(dir, { recursive: true });
++    fs.symlinkSync(target, path.join(dir, '2026-01-01-link.md'));
++    fs.linkSync(target, path.join(dir, '2026-01-01-hard.md'));
++    const real = file('groups/main/conversations/2026-01-01-real.md', 400);
++    const report = await runRetention(on, deps());
++    expect(report.transcriptArchives).toEqual({ deleted: 1 });
++    expect(fs.existsSync(real)).toBe(false);
++    expect(fs.readFileSync(target, 'utf8')).toBe('KEEP');
++    expect(fs.lstatSync(path.join(dir, '2026-01-01-link.md'))).toBeTruthy();
++    expect(fs.lstatSync(path.join(dir, '2026-01-01-hard.md'))).toBeTruthy();
++  });
++
++  it('does not rewrite a working-context archive that is a link', async () => {
++    const target = path.join(outside, 'target.json');
++    const body = JSON.stringify([{ ts: iso(400), type: 'thread', text: 'x' }]);
++    fs.writeFileSync(target, body);
++    fs.mkdirSync(path.join(base, 'data/working-context'), { recursive: true });
++    fs.symlinkSync(
++      target,
++      path.join(base, 'data/working-context/avery.archive.json'),
++    );
++    const report = await runRetention(on, deps());
++    expect(report.workingContextArchive).toEqual({ deleted: 0 });
++    expect(fs.readFileSync(target, 'utf8')).toBe(body);
++  });
++});
++
++describe('guards', () => {
++  it('refuses a window under one day even if a caller passes one', async () => {
++    populate();
++    const before = snapshot();
++    const bad = Object.fromEntries(
++      Object.keys(OFF).map((k) => [k, 0.5]),
++    ) as RetentionConfig;
++    const errors = vi.spyOn(logger, 'error').mockImplementation(() => {});
++    const report = await runRetention(bad, deps());
++    for (const result of Object.values(report)) {
++      expect(result?.deleted).toBe(0);
++      expect(result?.skipped).toMatch(/failed/);
++    }
++    expect(errors).toHaveBeenCalledTimes(8);
++    expect(snapshot()).toBe(before);
++  });
++
++  it('keeps going when one store fails', async () => {
++    populate();
++    vi.spyOn(logger, 'error').mockImplementation(() => {});
++    const report = await runRetention(
++      { ...OFF, messages: 30, ipcErrors: 30 },
++      {
++        ...deps(),
++        db: new Proxy(
++          {},
++          {
++            get: () => () => {
++              throw new Error('db gone');
++            },
++          },
++        ) as never,
++      },
++    );
++    expect(report.messages).toEqual({
++      deleted: 0,
++      skipped: 'failed; see the error above',
++    });
++    expect(report.ipcErrors).toEqual({ deleted: 1 });
++  });
++
++  it('writes one log line per run, with counts and no content', async () => {
++    populate();
++    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
++    await runRetention(ALL_30, deps());
++    expect(info).toHaveBeenCalledTimes(1);
++    const line = JSON.stringify(info.mock.calls[0]);
++    expect(line).toContain('Retention prune');
++    for (const content of [
++      'text of',
++      'm-old',
++      'old.pdf',
++      'old-talk',
++      'old note',
++      'prompt of',
++      'discussions/raw',
++      'example.edu',
++      'tg:1',
++      'main',
++    ])
++      expect(line).not.toContain(content);
++    expect(info.mock.calls[0][0]).toMatchObject({
++      dryRun: false,
++      stores: { messages: { deleted: 2 }, ipcErrors: { deleted: 1 } },
++    });
++  });
++});
++
++describe('dry run', () => {
++  it('deletes nothing and reports the counts the real run then deletes', async () => {
++    populate();
++    // One of each "still needed" kind, so those counts are compared too.
++    storeChatMetadata('tg:9', iso(0), 'Other chat', 'telegram', true);
++    message('m-waiting', 'tg:9', 45, {
++      content: '[Document: /workspace/telegram-uploads/held.pdf]',
++    });
++    setCursors(1, { 'tg:1': 1, 'tg:9': 50 });
++    file('data/telegram-uploads/main/held.pdf', 60);
++    approval('discussions/raw/open-again.md');
++    openQuestions =
++      '## Routed Approvals\n- [ ] **Again** Raw: discussions/raw/open-again.md\n';
++    const before = snapshot();
++
++    const dry = await runRetention(ALL_30, deps(), { dryRun: true });
++    expect(snapshot()).toBe(before);
++    expect(dry).toEqual({
++      uploads: { deleted: 3, keptNeeded: 1 },
++      messages: { deleted: 2, keptNeeded: 1 },
++      routedApprovals: { deleted: 1, keptNeeded: 1 },
++      tasks: { deleted: 3 },
++      transcriptArchives: { deleted: 1 },
++      workingContextArchive: { deleted: 1 },
++      evals: { deleted: 1 },
++      ipcErrors: { deleted: 1 },
++    });
++
++    const real = await runRetention(ALL_30, deps());
++    expect(real).toEqual(dry);
++    expect(snapshot()).not.toBe(before);
++    // A second real run finds nothing more to delete.
++    const again = await runRetention(ALL_30, deps());
++    for (const result of Object.values(again)) expect(result?.deleted).toBe(0);
++  });
++
++  it('says in the log line that nothing was deleted', async () => {
++    populate();
++    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
++    await runRetention(ALL_30, deps(), { dryRun: true });
++    expect(info.mock.calls[0][0]).toMatchObject({ dryRun: true });
++    expect(info.mock.calls[0][1]).toBe('Retention dry run: nothing deleted');
++  });
++});
++
++describe('scripts/retention-prune.ts', () => {
++  const script = path.join(process.cwd(), 'scripts', 'retention-prune.ts');
++  const tsx = path.join(process.cwd(), 'node_modules', '.bin', 'tsx');
++
++  function install(): string {
++    const dir = fs.mkdtempSync(
++      path.join(fs.realpathSync(os.tmpdir()), 'retention-cli-'),
++    );
++    fs.mkdirSync(path.join(dir, 'store'));
++    _initTestDatabase(path.join(dir, 'store', 'messages.db'));
++    storeChatMetadata('tg:1', iso(0), 'Team chat', 'telegram', true);
++    const at = (daysAgo: number) =>
++      new Date(Date.now() - daysAgo * DAY).toISOString();
++    for (const [id, daysAgo, bot] of [
++      ['old', 60, false],
++      ['old-reply', 59, true],
++      ['last-reply', 1, true],
++    ] as const)
++      storeMessage({
++        id,
++        chat_jid: 'tg:1',
++        sender: 's',
++        sender_name: 'S',
++        content: `text of ${id}`,
++        timestamp: at(daysAgo),
++        is_from_me: bot,
++        is_bot_message: bot,
++      });
++    setRouterState('last_timestamp', at(1));
++    setRouterState('last_agent_timestamp', JSON.stringify({ 'tg:1': at(1) }));
++    getDatabase().pragma('wal_checkpoint(TRUNCATE)');
++    return dir;
++  }
++
++  function cli(dir: string, args: string[], env: Record<string, string>) {
++    try {
++      const stdout = execFileSync(tsx, [script, ...args], {
++        cwd: dir,
++        env: { PATH: process.env.PATH ?? '', LOG_LEVEL: 'silent', ...env },
++        encoding: 'utf8',
++        stdio: ['ignore', 'pipe', 'pipe'],
++      });
++      return { code: 0, stdout, stderr: '' };
++    } catch (err) {
++      const e = err as { status: number; stdout: string; stderr: string };
++      return { code: e.status, stdout: e.stdout, stderr: e.stderr };
++    }
++  }
++
++  it('is a dry run unless --apply is given, and the two report the same count', () => {
++    const dir = install();
++    try {
++      const env = { RETENTION_MESSAGES_DAYS: '30' };
++      for (const args of [[], ['--dry-run']]) {
++        const dry = cli(dir, args, env);
++        expect(dry.code).toBe(0);
++        expect(dry.stdout).toContain('DRY RUN: nothing was deleted.');
++        expect(dry.stdout).toContain(
++          'RETENTION_MESSAGES_DAYS=30  would delete 2',
++        );
++        expect(dry.stdout).toContain(
++          'RETENTION_UPLOADS_DAYS=0  off, everything kept',
++        );
++        expect(dry.stdout).not.toContain('text of');
++        expect(count('messages')).toBe(3);
++      }
++      const applied = cli(dir, ['--apply'], env);
++      expect(applied.code).toBe(0);
++      expect(applied.stdout).toContain('RETENTION_MESSAGES_DAYS=30  deleted 2');
++      expect(messageIds()).toEqual(['last-reply']);
++    } finally {
++      fs.rmSync(dir, { recursive: true, force: true });
++    }
++  }, 60_000);
++
++  it('deletes nothing with no setting, and stops on a bad one', () => {
++    const dir = install();
++    try {
++      const off = cli(dir, ['--apply'], {});
++      expect(off.code).toBe(0);
++      expect(off.stdout).toContain(
++        'RETENTION_MESSAGES_DAYS=0  off, everything kept',
++      );
++      const bad = cli(dir, ['--apply'], { RETENTION_MESSAGES_DAYS: '-5' });
++      expect(bad.code).toBe(1);
++      expect(bad.stderr).toMatch(
++        /RETENTION_MESSAGES_DAYS must be a whole number of days/,
++      );
++      const usage = cli(dir, ['--force'], { RETENTION_MESSAGES_DAYS: '30' });
++      expect(usage.code).toBe(1);
++      expect(count('messages')).toBe(3);
++    } finally {
++      fs.rmSync(dir, { recursive: true, force: true });
++    }
++  }, 60_000);
++});
+diff --git a/src/retention.ts b/src/retention.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7f7663ef083c1e95bfb3bad5f687cc169780150e
+--- /dev/null
++++ b/src/retention.ts
+@@ -0,0 +1,706 @@
++/**
++ * Retention for the stores on the host that no other code prunes.
++ *
++ * Each store has one setting, a whole number of days. The default, 0, means
++ * "keep forever": with no retention setting the host starts no timer and
++ * deletes nothing here, exactly as before this file existed.
++ *
++ * Rules every store follows:
++ *  - Nothing a pending operation needs is deleted. Each store's function
++ *    says what that is for it.
++ *  - Files are found and removed through src/host-fs-safety.ts, so a link
++ *    planted by a container is never followed and never deleted through.
++ *  - A run is planned first and then applied: a dry run and a real run over
++ *    the same state report the same counts.
++ *  - One log line per run, with counts and no content.
++ *
++ * The program repo and the audit log are not pruned here or anywhere:
++ * docs/data-handling.md, "Retention and deletion".
++ */
++import fs from 'fs';
++import path from 'path';
++
++import Database from 'better-sqlite3';
++
++import { ASSISTANT_NAME, DATA_DIR, GROUPS_DIR, STORE_DIR } from './config.js';
++import { readEnvFile } from './env.js';
++import { EXCEPTIONS_REPORT_LOOKBACK_MS } from './exceptions-report.js';
++import { isValidGroupFolder } from './group-folder.js';
++import {
++  assertSafeDbPath,
++  listFilesInTree,
++  unlinkFileInTree,
++} from './host-fs-safety.js';
++import { logger } from './logger.js';
++import { parseRoutedApprovals } from './routed-approvals.js';
++import { approvedEmailOutreachTaskId } from './send-email-capability.js';
++import { pruneWorkingContextArchives } from './working-context.js';
++
++const DAY_MS = 24 * 60 * 60 * 1000;
++/** 100 years. A larger value is a typing mistake, not a retention period. */
++const MAX_DAYS = 36_500;
++
++export const RETENTION_SETTINGS = {
++  messages: 'RETENTION_MESSAGES_DAYS',
++  routedApprovals: 'RETENTION_ROUTED_APPROVALS_DAYS',
++  tasks: 'RETENTION_TASKS_DAYS',
++  transcriptArchives: 'RETENTION_TRANSCRIPT_ARCHIVE_DAYS',
++  uploads: 'RETENTION_UPLOADS_DAYS',
++  workingContextArchive: 'RETENTION_WORKING_CONTEXT_ARCHIVE_DAYS',
++  evals: 'RETENTION_EVALS_DAYS',
++  ipcErrors: 'RETENTION_IPC_ERRORS_DAYS',
++} as const;
++
++export type RetentionStore = keyof typeof RETENTION_SETTINGS;
++/** Days per store; 0 keeps everything. */
++export type RetentionConfig = Record<RetentionStore, number>;
++
++const STORES = Object.keys(RETENTION_SETTINGS) as RetentionStore[];
++
++/**
++ * One setting's value in days. Empty or absent is 0. Anything that is not a
++ * whole number from 0 to MAX_DAYS throws: a negative number, a fraction
++ * (which would delete data less than a day old), text, or a unit suffix.
++ */
++export function parseRetentionDays(
++  key: string,
++  raw: string | undefined,
++): number {
++  const value = (raw ?? '').trim();
++  if (value === '') return 0;
++  if (!/^\d+$/.test(value)) {
++    throw new Error(
++      `${key} must be a whole number of days, 0 or more (got "${value}"). ` +
++        '0 keeps everything. A fraction is refused because the shortest ' +
++        'window is one day.',
++    );
++  }
++  const days = Number(value);
++  if (days > MAX_DAYS) {
++    throw new Error(`${key} must be at most ${MAX_DAYS} days (got "${value}")`);
++  }
++  return days;
++}
++
++/**
++ * Read every retention setting from the process environment, then `.env`
++ * (the process environment wins, as in config.ts). Throws one error that
++ * names every bad value. main() calls this first, so a bad value stops the
++ * host before anything starts.
++ */
++export function readRetentionConfig(
++  env: Record<string, string | undefined> = process.env,
++  envFile: Record<string, string> = readEnvFile(
++    Object.values(RETENTION_SETTINGS),
++  ),
++): RetentionConfig {
++  const problems: string[] = [];
++  const config = {} as RetentionConfig;
++  for (const store of STORES) {
++    const key = RETENTION_SETTINGS[store];
++    try {
++      config[store] = parseRetentionDays(key, env[key] || envFile[key]);
++    } catch (err) {
++      config[store] = 0;
++      problems.push((err as Error).message);
++    }
++  }
++  if (problems.length > 0) {
++    throw new Error(
++      `The host will not start with an invalid retention setting. ${problems.join(' ')} ` +
++        'See config/instance.env.example.',
++    );
++  }
++  return config;
++}
++
++export function retentionEnabled(config: RetentionConfig): boolean {
++  return STORES.some((store) => config[store] > 0);
++}
++
++/** What one store's prune did (or, in a dry run, would do). */
++export interface StoreResult {
++  /** Rows, files or entries removed. */
++  deleted: number;
++  /** Old enough to delete, kept because something still needs it. */
++  keptNeeded?: number;
++  /** Refused by the path-safety checks (a link, a hard link). */
++  refused?: number;
++  /** The whole store was left alone, and why. */
++  skipped?: string;
++}
++
++export type RetentionReport = Partial<Record<RetentionStore, StoreResult>>;
++
++export interface RetentionPaths {
++  storeDir: string;
++  dataDir: string;
++  groupsDir: string;
++}
++
++export interface RetentionDeps {
++  /** The host's main SQLite store (store/messages.db). */
++  db: Database.Database;
++  /** `discussions/OPEN_QUESTIONS.md` as the host reads it, or null. */
++  readOpenQuestions: () => Promise<string | null>;
++  now?: () => number;
++  paths?: Partial<RetentionPaths>;
++  /** Prefix of a bot message stored before the is_bot_message column. */
++  botPrefix?: string;
++  /**
++   * Task ids that are never deleted. Default: the approved email-outreach
++   * task (EMAIL_OUTREACH_TASK_ID), whose lifecycle belongs to the operator.
++   */
++  protectedTaskIds?: string[];
++}
++
++const ISO_GLOB = '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*';
++
++function cutoffFor(now: number, days: number): number {
++  const cutoff = now - days * DAY_MS;
++  // parseRetentionDays already guarantees this; checked again where the
++  // delete is decided, so no caller can pass a shorter window.
++  if (!Number.isInteger(days) || days < 1 || cutoff > now - DAY_MS) {
++    throw new Error(
++      `refused: a retention window of ${days} days is under one day`,
++    );
++  }
++  return cutoff;
++}
++
++function deleteRowids(
++  db: Database.Database,
++  table: string,
++  rowids: number[],
++): void {
++  const stmt = db.prepare(`DELETE FROM ${table} WHERE rowid = ?`);
++  db.transaction((ids: number[]) => {
++    for (const id of ids) stmt.run(id);
++  })(rowids);
++}
++
++interface ChatCursor {
++  chatJid: string;
++  /** Messages after this are not yet answered. '' when unknown. */
++  cursor: string;
++  /** Timestamp of the newest bot message, the host's fallback cursor. */
++  lastBot: string | null;
++}
++
++/**
++ * The same cursor the host uses (src/index.ts, getOrRecoverCursor): the
++ * saved per-chat cursor, else the newest bot message, else none. Returns
++ * null when the saved state cannot be read; the caller then deletes nothing.
++ */
++function chatCursors(
++  db: Database.Database,
++  botPrefix: string,
++): { seen: string; chats: ChatCursor[] } | null {
++  const state = (key: string): string | undefined =>
++    (
++      db.prepare('SELECT value FROM router_state WHERE key = ?').get(key) as
++        | { value: string }
++        | undefined
++    )?.value;
++  let saved: Record<string, unknown> = {};
++  const rawCursors = state('last_agent_timestamp');
++  if (rawCursors) {
++    try {
++      const parsed: unknown = JSON.parse(rawCursors);
++      if (
++        typeof parsed !== 'object' ||
++        parsed === null ||
++        Array.isArray(parsed)
++      )
++        return null;
++      saved = parsed as Record<string, unknown>;
++    } catch {
++      return null;
++    }
++  }
++  const chats = (
++    db.prepare('SELECT DISTINCT chat_jid AS jid FROM messages').all() as {
++      jid: string;
++    }[]
++  ).map(({ jid }): ChatCursor => {
++    const lastBot =
++      (
++        db
++          .prepare(
++            `SELECT MAX(timestamp) AS ts FROM messages
++             WHERE chat_jid = ? AND (is_bot_message = 1 OR content LIKE ?)`,
++          )
++          .get(jid, `${botPrefix}:%`) as { ts: string | null }
++      ).ts ?? null;
++    const own = saved[jid];
++    return {
++      chatJid: jid,
++      cursor: typeof own === 'string' && own ? own : (lastBot ?? ''),
++      lastBot,
++    };
++  });
++  return { seen: state('last_timestamp') ?? '', chats };
++}
++
++/**
++ * `messages`: rows older than the window that the host has already
++ * answered. Kept whatever their age:
++ *  - a message after its chat's cursor (not yet processed; in a chat that
++ *    needs a trigger word these wait as context for the next trigger);
++ *  - a message the message loop has not seen yet;
++ *  - every message of a chat with no cursor and no bot message;
++ *  - the newest bot message of each chat, which the host uses to rebuild a
++ *    lost cursor. Without it a restart with lost state would answer the
++ *    whole remaining history again.
++ */
++function pruneMessages(
++  db: Database.Database,
++  cutoffMs: number,
++  dryRun: boolean,
++  botPrefix: string,
++): StoreResult {
++  const cursors = chatCursors(db, botPrefix);
++  if (!cursors) return { deleted: 0, skipped: 'saved cursors unreadable' };
++  const cutoff = new Date(cutoffMs).toISOString();
++  const rowids: number[] = [];
++  let keptNeeded = 0;
++  const old = db.prepare(
++    `SELECT rowid AS rowid, timestamp FROM messages
++     WHERE chat_jid = ? AND timestamp < ? AND timestamp GLOB '${ISO_GLOB}'`,
++  );
++  for (const chat of cursors.chats) {
++    for (const row of old.all(chat.chatJid, cutoff) as {
++      rowid: number;
++      timestamp: string;
++    }[]) {
++      const done =
++        chat.cursor !== '' &&
++        row.timestamp <= chat.cursor &&
++        cursors.seen !== '' &&
++        row.timestamp <= cursors.seen &&
++        row.timestamp !== chat.lastBot;
++      if (done) rowids.push(row.rowid);
++      else keptNeeded++;
++    }
++  }
++  if (!dryRun) deleteRowids(db, 'messages', rowids);
++  return { deleted: rowids.length, keptNeeded };
++}
++
++/** Text of every message the host has not answered yet, in every chat. */
++function pendingMessageText(db: Database.Database, botPrefix: string): string {
++  const cursors = chatCursors(db, botPrefix);
++  const all = (where: string, ...args: string[]): string[] =>
++    (
++      db.prepare(`SELECT content FROM messages ${where}`).all(...args) as {
++        content: string | null;
++      }[]
++    ).map((r) => r.content ?? '');
++  // Unreadable state: treat every stored message as pending.
++  if (!cursors) return all('').join('\n');
++  return cursors.chats
++    .flatMap((chat) =>
++      all('WHERE chat_jid = ? AND timestamp > ?', chat.chatJid, chat.cursor),
++    )
++    .join('\n');
++}
++
++/**
++ * `routed_approvals`: rows closed or removed before the window. Kept
++ * whatever their age:
++ *  - a row still waiting on someone (any status but closed or removed);
++ *  - a row with a notice to the operator still owed;
++ *  - a row with a relay handed to the outbox and not yet recorded;
++ *  - a row whose entry is still open in OPEN_QUESTIONS.md. The scan creates
++ *    a row for an open entry it has no row for, and a new row sends a new
++ *    relay to the approver; the old row is what stops that.
++ * When OPEN_QUESTIONS.md cannot be read, nothing is deleted.
++ */
++async function pruneRoutedApprovals(
++  db: Database.Database,
++  cutoffMs: number,
++  dryRun: boolean,
++  readOpenQuestions: () => Promise<string | null>,
++): Promise<StoreResult> {
++  let md: string | null = null;
++  try {
++    md = await readOpenQuestions();
++  } catch {
++    md = null;
++  }
++  if (md === null)
++    return { deleted: 0, skipped: 'OPEN_QUESTIONS.md unavailable' };
++  const openKeys = new Set(
++    parseRoutedApprovals(md)
++      .filter((e) => e.open)
++      .map((e) => e.key),
++  );
++  const rows = db
++    .prepare(
++      `SELECT rowid AS rowid, key FROM routed_approvals
++       WHERE status IN ('closed', 'removed')
++         AND closed_at IS NOT NULL AND closed_at < ?
++         AND pending_notice IS NULL
++         AND relay_submitted <= relay_count`,
++    )
++    .all(cutoffMs) as { rowid: number; key: string }[];
++  const rowids = rows.filter((r) => !openKeys.has(r.key)).map((r) => r.rowid);
++  if (!dryRun) deleteRowids(db, 'routed_approvals', rowids);
++  return { deleted: rowids.length, keptNeeded: rows.length - rowids.length };
++}
++
++/**
++ * `scheduled_tasks` and `task_run_logs`: one-time tasks that have run
++ * (status `completed`), and run records, older than the window. An active or
++ * paused task is never deleted, and neither are the run records of a task
++ * that still exists and ran inside the window. The exceptions digest reads
++ * the last seven days of run records, so the window used here is never
++ * shorter than that. The approved email-outreach task is never deleted:
++ * only the operator ends it. The count is tasks plus run records.
++ */
++function pruneTasks(
++  db: Database.Database,
++  cutoffMs: number,
++  now: number,
++  dryRun: boolean,
++  protectedTaskIds: string[],
++): StoreResult {
++  const cutoff = new Date(
++    Math.min(cutoffMs, now - EXCEPTIONS_REPORT_LOOKBACK_MS),
++  ).toISOString();
++  const tasks = (
++    db
++      .prepare(
++        `SELECT rowid AS rowid, id FROM scheduled_tasks
++         WHERE status = 'completed'
++           AND COALESCE(last_run, created_at) < ?
++           AND COALESCE(last_run, created_at) GLOB '${ISO_GLOB}'`,
++      )
++      .all(cutoff) as { rowid: number; id: string }[]
++  ).filter((t) => !protectedTaskIds.includes(t.id));
++  const goneTasks = new Set(tasks.map((t) => t.id));
++  const runs = (
++    db
++      .prepare(`SELECT rowid AS rowid, task_id, run_at FROM task_run_logs`)
++      .all() as { rowid: number; task_id: string; run_at: string }[]
++  ).filter(
++    (r) =>
++      goneTasks.has(r.task_id) ||
++      (r.run_at < cutoff && /^\d{4}-\d{2}-\d{2}T/.test(r.run_at)),
++  );
++  if (!dryRun) {
++    // Run records first: they reference the task.
++    deleteRowids(
++      db,
++      'task_run_logs',
++      runs.map((r) => r.rowid),
++    );
++    deleteRowids(
++      db,
++      'scheduled_tasks',
++      tasks.map((t) => t.rowid),
++    );
++  }
++  return { deleted: tasks.length + runs.length };
++}
++
++/** The real group folders under groups/, by name. Links are left out. */
++function groupFolders(groupsDir: string): string[] {
++  let names: string[];
++  try {
++    names = fs.readdirSync(groupsDir);
++  } catch {
++    return [];
++  }
++  return names.filter((name) => {
++    if (!isValidGroupFolder(name)) return false;
++    try {
++      const st = fs.lstatSync(path.join(groupsDir, name));
++      return st.isDirectory() && !st.isSymbolicLink();
++    } catch {
++      return false;
++    }
++  });
++}
++
++/**
++ * Delete the files directly in `root/relDir` that are older than the window
++ * and that `wanted` accepts. Only single-link regular files are considered;
++ * a link anywhere on the path makes the folder count as refused.
++ */
++function pruneFolder(
++  root: string,
++  relDir: string,
++  cutoffMs: number,
++  dryRun: boolean,
++  wanted: (name: string) => 'delete' | 'needed' | 'ignore',
++  result: StoreResult,
++): void {
++  let files;
++  try {
++    files = listFilesInTree(root, relDir);
++  } catch {
++    result.refused = (result.refused ?? 0) + 1;
++    return;
++  }
++  for (const file of files ?? []) {
++    if (file.mtimeMs >= cutoffMs) continue;
++    const verdict = wanted(file.name);
++    if (verdict === 'ignore') continue;
++    if (verdict === 'needed') {
++      result.keptNeeded = (result.keptNeeded ?? 0) + 1;
++      continue;
++    }
++    if (dryRun) {
++      result.deleted++;
++      continue;
++    }
++    try {
++      if (unlinkFileInTree(root, path.join(relDir, file.name)))
++        result.deleted++;
++    } catch {
++      result.refused = (result.refused ?? 0) + 1;
++    }
++  }
++}
++
++/** The name the container hook gives a transcript archive. */
++const TRANSCRIPT_ARCHIVE_RE = /^\d{4}-\d{2}-\d{2}-.+\.md$/;
++/** The name src/image.ts gives a resized Telegram photo. */
++const HOST_IMAGE_RE = /^img-\d+-[a-z0-9]{1,4}\.jpg$/;
++
++/**
++ * `groups/<group>/conversations/`: the Markdown transcript copies written
++ * at compaction, by the name the hook gives them. Nothing reads them back.
++ * Other files in that folder, and other folders, are not touched.
++ */
++function pruneTranscriptArchives(
++  groupsDir: string,
++  cutoffMs: number,
++  dryRun: boolean,
++): StoreResult {
++  const result: StoreResult = { deleted: 0 };
++  for (const group of groupFolders(groupsDir)) {
++    pruneFolder(
++      path.join(groupsDir, group),
++      'conversations',
++      cutoffMs,
++      dryRun,
++      (name) => (TRANSCRIPT_ARCHIVE_RE.test(name) ? 'delete' : 'ignore'),
++      result,
++    );
++  }
++  return result;
++}
++
++/**
++ * Telegram files: documents and their extracted text in
++ * `data/telegram-uploads/<group>/`, and the resized photos the host wrote to
++ * `groups/<group>/attachments/` (by the name the host gives them; anything
++ * else there belongs to the agent). A file named in a message that has not
++ * been answered yet is kept, with its extracted text.
++ */
++function pruneUploads(
++  db: Database.Database,
++  paths: RetentionPaths,
++  cutoffMs: number,
++  dryRun: boolean,
++  botPrefix: string,
++): StoreResult {
++  const result: StoreResult = { deleted: 0 };
++  const pending = pendingMessageText(db, botPrefix);
++  const needed = (name: string): boolean =>
++    pending.includes(name) ||
++    (name.endsWith('.extracted.md') &&
++      pending.includes(name.slice(0, -'.extracted.md'.length)));
++  const uploadsRoot = path.join(paths.dataDir, 'telegram-uploads');
++  for (const group of groupFolders(uploadsRoot)) {
++    pruneFolder(
++      uploadsRoot,
++      group,
++      cutoffMs,
++      dryRun,
++      (name) => (needed(name) ? 'needed' : 'delete'),
++      result,
++    );
++  }
++  for (const group of groupFolders(paths.groupsDir)) {
++    pruneFolder(
++      path.join(paths.groupsDir, group),
++      'attachments',
++      cutoffMs,
++      dryRun,
++      (name) =>
++        !HOST_IMAGE_RE.test(name)
++          ? 'ignore'
++          : needed(name)
++            ? 'needed'
++            : 'delete',
++      result,
++    );
++  }
++  return result;
++}
++
++/**
++ * `store/evals.db`, table `response_evals`: one row of scores and a short
++ * note per reply. Only the dashboard reads it. The file is opened only when
++ * it exists; this never creates it.
++ */
++function pruneEvals(
++  storeDir: string,
++  cutoffMs: number,
++  dryRun: boolean,
++): StoreResult {
++  const dbPath = path.join(storeDir, 'evals.db');
++  if (!fs.existsSync(dbPath)) return { deleted: 0 };
++  assertSafeDbPath(dbPath); // store/ is writable for the main group
++  const evals = new Database(dbPath, {
++    fileMustExist: true,
++    readonly: dryRun,
++  });
++  try {
++    evals.pragma('busy_timeout = 5000');
++    const hasTable = evals
++      .prepare(
++        `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'response_evals'`,
++      )
++      .get();
++    if (!hasTable) return { deleted: 0 };
++    const rowids = (
++      evals
++        .prepare(
++          `SELECT rowid AS rowid FROM response_evals
++           WHERE timestamp < ? AND timestamp GLOB '${ISO_GLOB}'`,
++        )
++        .all(new Date(cutoffMs).toISOString()) as { rowid: number }[]
++    ).map((r) => r.rowid);
++    if (!dryRun) deleteRowids(evals, 'response_evals', rowids);
++    return { deleted: rowids.length };
++  } finally {
++    evals.close();
++  }
++}
++
++/**
++ * `data/ipc/errors/`: requests from a container that the host could not
++ * process and set aside (src/ipc.ts). Nothing reads them back.
++ */
++function pruneIpcErrors(
++  dataDir: string,
++  cutoffMs: number,
++  dryRun: boolean,
++): StoreResult {
++  const result: StoreResult = { deleted: 0 };
++  pruneFolder(
++    path.join(dataDir, 'ipc'),
++    'errors',
++    cutoffMs,
++    dryRun,
++    (name) => (name.endsWith('.json') ? 'delete' : 'ignore'),
++    result,
++  );
++  return result;
++}
++
++/**
++ * Run every store whose setting is above 0. A store that throws is reported
++ * as skipped and does not stop the others. With `dryRun` nothing is changed.
++ */
++export async function runRetention(
++  config: RetentionConfig,
++  deps: RetentionDeps,
++  opts: { dryRun?: boolean } = {},
++): Promise<RetentionReport> {
++  const dryRun = opts.dryRun === true;
++  const now = (deps.now ?? Date.now)();
++  const paths: RetentionPaths = {
++    storeDir: STORE_DIR,
++    dataDir: DATA_DIR,
++    groupsDir: GROUPS_DIR,
++    ...deps.paths,
++  };
++  const botPrefix = deps.botPrefix ?? ASSISTANT_NAME;
++  const report: RetentionReport = {};
++  const run = async (
++    store: RetentionStore,
++    prune: (cutoffMs: number) => StoreResult | Promise<StoreResult>,
++  ): Promise<void> => {
++    if (config[store] === 0) return;
++    try {
++      report[store] = await prune(cutoffFor(now, config[store]));
++    } catch (err) {
++      logger.error({ err, store }, 'Retention: store failed, left as it was');
++      report[store] = { deleted: 0, skipped: 'failed; see the error above' };
++    }
++  };
++
++  // Uploads first: it reads the pending messages before any row is removed.
++  await run('uploads', (c) =>
++    pruneUploads(deps.db, paths, c, dryRun, botPrefix),
++  );
++  await run('messages', (c) => pruneMessages(deps.db, c, dryRun, botPrefix));
++  await run('routedApprovals', (c) =>
++    pruneRoutedApprovals(deps.db, c, dryRun, deps.readOpenQuestions),
++  );
++  const protectedTaskIds = deps.protectedTaskIds ?? [
++    approvedEmailOutreachTaskId(),
++  ];
++  await run('tasks', (c) =>
++    pruneTasks(deps.db, c, now, dryRun, protectedTaskIds),
++  );
++  await run('transcriptArchives', (c) =>
++    pruneTranscriptArchives(paths.groupsDir, c, dryRun),
++  );
++  await run('workingContextArchive', (c) => {
++    const { deleted } = pruneWorkingContextArchives(c, dryRun, paths.dataDir);
++    return { deleted };
++  });
++  await run('evals', (c) => pruneEvals(paths.storeDir, c, dryRun));
++  await run('ipcErrors', (c) => pruneIpcErrors(paths.dataDir, c, dryRun));
++
++  // Counts and store names only: never a sender, a subject or a file name.
++  logger.info(
++    { dryRun, days: activeDays(config), stores: report },
++    dryRun ? 'Retention dry run: nothing deleted' : 'Retention prune',
++  );
++  return report;
++}
++
++function activeDays(config: RetentionConfig): Partial<RetentionConfig> {
++  return Object.fromEntries(
++    STORES.filter((s) => config[s] > 0).map((s) => [s, config[s]]),
++  );
++}
++
++const PRUNE_INTERVAL_MS = DAY_MS;
++const STARTUP_DELAY_MS = 60_000;
++
++/**
++ * Called from main() beside the session cleanup, on the same pattern: once
++ * shortly after start, then daily. With every setting at 0 it starts
++ * nothing. Returns a function that stops the timers.
++ */
++export function startRetention(
++  config: RetentionConfig,
++  deps: RetentionDeps,
++): () => void {
++  if (!retentionEnabled(config)) return () => {};
++  const tick = (): void => {
++    runRetention(config, deps).catch((err) =>
++      logger.error({ err }, 'Retention prune failed'),
++    );
++  };
++  const first = setTimeout(tick, STARTUP_DELAY_MS);
++  const daily = setInterval(tick, PRUNE_INTERVAL_MS);
++  first.unref?.();
++  daily.unref?.();
++  logger.info(
++    { days: activeDays(config) },
++    'Retention is on: old data in these stores will be deleted daily',
++  );
++  return () => {
++    clearTimeout(first);
++    clearInterval(daily);
++  };
++}
 diff --git a/src/routed-approvals.ts b/src/routed-approvals.ts
 index cc2c2810d96d86f312f77509c25326b1c7834d1b..7e7a7dae5fdf67d6052e2b976b97e5cd0de44457 100644
 --- a/src/routed-approvals.ts
@@ -13603,18 +15713,42 @@ index 9cc2bde5a82893a8aa066e50a461c8ee07b39abe..854a3baa28a73f3575d3fb1e39184e5c
    if (obj.chats && typeof obj.chats === 'object') {
      for (const [jid, entry] of Object.entries(
 diff --git a/src/task-scheduler.ts b/src/task-scheduler.ts
-index 48915fac34f7932485ce8d03bcdd10201ae237ff..5c9b0eeb9d26360b2a85c31fbd2cb14a4bd332f0 100644
+index 48915fac34f7932485ce8d03bcdd10201ae237ff..0452f730011784fe1882aad7b0f50cdfc6f9fe54 100644
 --- a/src/task-scheduler.ts
 +++ b/src/task-scheduler.ts
-@@ -24,6 +24,7 @@ import {
+@@ -24,8 +24,12 @@ import {
    updateTaskAfterRun,
  } from './db.js';
  import { parseActionItemSections } from './behaviour-sensor.js';
 +import { syncKnowledgeBase } from './audit-log.js';
  import { buildOutreachRecipientRoster } from './outreach-recipient-roster.js';
- import { buildExceptionsReport } from './exceptions-report.js';
+-import { buildExceptionsReport } from './exceptions-report.js';
++import {
++  buildExceptionsReport,
++  EXCEPTIONS_REPORT_LOOKBACK_MS,
++} from './exceptions-report.js';
  import { getRepoReader } from './repo-reader.js';
-@@ -522,6 +523,8 @@ async function runTask(
+ import {
+   maskRoutedActionItems,
+@@ -333,7 +337,7 @@ async function runTask(
+   if (needsEvalReport) {
+     try {
+       const since = new Date(
+-        Date.now() - 7 * 24 * 60 * 60 * 1000,
++        Date.now() - EXCEPTIONS_REPORT_LOOKBACK_MS,
+       ).toISOString();
+       const report = exportEvalReport(since);
+       writeIpcFile(task.group_folder, 'eval_report.md', report);
+@@ -356,7 +360,7 @@ async function runTask(
+   if (needsExceptionsReport) {
+     try {
+       const since = new Date(
+-        Date.now() - 7 * 24 * 60 * 60 * 1000,
++        Date.now() - EXCEPTIONS_REPORT_LOOKBACK_MS,
+       ).toISOString();
+       const workingContextEntries = await loadWorkingContextAsync(
+         resolveAdminUserKey(),
+@@ -522,6 +526,8 @@ async function runTask(
    };
  
    try {
@@ -13623,7 +15757,7 @@ index 48915fac34f7932485ce8d03bcdd10201ae237ff..5c9b0eeb9d26360b2a85c31fbd2cb14a
      const output = await runContainerAgent(
        group,
        {
-@@ -543,6 +546,8 @@ async function runTask(
+@@ -543,6 +549,8 @@ async function runTask(
        (proc, containerName) =>
          deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
        async (streamedOutput: ContainerOutput) => {
@@ -14514,6 +16648,73 @@ index 0000000000000000000000000000000000000000..f90683f5079ccb503bf566cd7007663c
 +    unknownToolTypes: [...unknown],
 +  };
 +}
+diff --git a/src/working-context.ts b/src/working-context.ts
+index 7c8a48082ab11aa58366f22e3f54af8473e69ef4..840b2857b593a3231062cb91fe5a495f84d238dc 100644
+--- a/src/working-context.ts
++++ b/src/working-context.ts
+@@ -39,6 +39,7 @@ import { DATA_DIR, TIMEZONE } from './config.js';
+ import { handoffExample, parseHandoff } from './handoff.js';
+ import {
+   ensureDirInTree,
++  listFilesInTree,
+   readFileInTree,
+   readFileInTreeAsync,
+   writeFileInTree,
+@@ -335,6 +336,54 @@ export function pruneStaleEntries(
+   }
+ }
+ 
++/**
++ * Retention (src/retention.ts): drop archive entries written before
++ * `cutoffMs` from every `<userKey>.archive.json`. The archive is kept for
++ * inspection and never read back, so no pending work depends on it. The live
++ * store file is not touched. An element without a readable `ts`, and a file
++ * that is not a JSON array, are left as they are. With `dryRun` nothing is
++ * written and the counts are the ones a real run removes.
++ */
++export function pruneWorkingContextArchives(
++  cutoffMs: number,
++  dryRun: boolean,
++  baseDir: string = DATA_DIR,
++): { deleted: number; kept: number } {
++  const dir = getWorkingContextDir(baseDir);
++  let deleted = 0;
++  let kept = 0;
++  for (const file of listFilesInTree(dir) ?? []) {
++    if (!file.name.endsWith('.archive.json')) continue;
++    if (!isValidUserKey(file.name.slice(0, -'.archive.json'.length))) continue;
++    let parsed: unknown;
++    try {
++      const raw = readFileInTree(dir, file.name);
++      parsed = raw === null ? null : JSON.parse(raw);
++    } catch {
++      continue; // unreadable, linked or corrupt: leave it
++    }
++    if (!Array.isArray(parsed)) continue;
++    const isOld = (e: unknown): boolean => {
++      const ts = (e as { ts?: unknown } | null)?.ts;
++      if (typeof ts !== 'string') return false;
++      const at = Date.parse(ts);
++      return Number.isFinite(at) && at < cutoffMs;
++    };
++    const fresh = parsed.filter((e) => !isOld(e));
++    const removed = parsed.length - fresh.length;
++    deleted += removed;
++    kept += fresh.length;
++    if (removed === 0 || dryRun) continue;
++    writeFileInTree(
++      dir,
++      file.name,
++      JSON.stringify(fresh, null, 2) + '\n',
++      CONTAINER_OWNER,
++    );
++  }
++  return { deleted, kept };
++}
++
+ /** Ensure the store dir (and the user's file) exist so the container mount
+  *  has something to bind and the agent has a file to edit. */
+ export function ensureWorkingContextStore(
 diff --git a/start.sh b/start.sh
 index ff6fa6fecc5b724a58da75e76a6b796f74295b9a..6ae0ce705e5149976231899657a8f1dfdecd0a12 100755
 --- a/start.sh

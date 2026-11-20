@@ -5,6 +5,8 @@ import { readEnvFile } from './env.js';
  * identities that code compares against. Each is read from `.env` or the
  * process environment (the process environment wins, as in config.ts) and
  * defaults to the repo's placeholder. Values are fixed at import.
+ * INSTITUTION_DOMAIN and ADMIN_AUTHOR_EMAILS have no usable default on a
+ * real program repo; see identity-settings-check.ts.
  *
  * A value that is set but malformed throws at startup: these settings feed
  * access decisions, and a silent fallback to a placeholder would be worse
@@ -62,15 +64,23 @@ function emailListSetting(key: string, fallback: string[]): string[] {
   return items;
 }
 
+/** The institution domain this repo ships with. It is nobody's. */
+export const PLACEHOLDER_INSTITUTION_DOMAIN = 'example.edu';
+
 /**
  * The institution's mail domain. A blocked sender on this domain (or a
  * subdomain) gets the one-time "access closed" reply, and a route named in
- * an allowlist row resolves to `<name>@<this domain>`.
+ * an allowlist row resolves to `<name>@<this domain>`. With a real program
+ * repo the setting is required and must not be the placeholder:
+ * identity-settings-check.ts stops the host at startup.
  */
 export const INSTITUTION_DOMAIN = domainSetting(
   'INSTITUTION_DOMAIN',
-  'example.edu',
+  PLACEHOLDER_INSTITUTION_DOMAIN,
 );
+
+/** False when INSTITUTION_DOMAIN fell back to the placeholder. */
+export const INSTITUTION_DOMAIN_IS_SET = raw('INSTITUTION_DOMAIN') !== '';
 
 /**
  * The bot's own mail domain: the default bot mailbox, the Message-ID
@@ -95,15 +105,26 @@ export const INTAKE_GIT_AUTHOR_EMAIL = emailSetting(
 );
 
 /**
+ * The admin identities this repo ships with. They belong to nobody, and a
+ * git author address is not verified, so on a real program repo anyone with
+ * push access could commit as one of them.
+ */
+export const PLACEHOLDER_ADMIN_AUTHOR_EMAILS: readonly string[] = [
+  'avery.personal@gmail.com',
+  'avery@example.edu',
+  '1000001+example-org@users.noreply.github.com',
+];
+
+/**
  * Git author identities allowed to change protected governance files.
  * Setting ADMIN_AUTHOR_EMAILS replaces the placeholder list; it does not
- * add to it.
+ * add to it. With a real program repo the setting is required and must not
+ * name a placeholder: identity-settings-check.ts stops the host at startup.
  */
 export const ADMIN_AUTHOR_EMAILS: readonly string[] = emailListSetting(
   'ADMIN_AUTHOR_EMAILS',
-  [
-    'avery.personal@gmail.com',
-    'avery@example.edu',
-    '1000001+example-org@users.noreply.github.com',
-  ],
+  [...PLACEHOLDER_ADMIN_AUTHOR_EMAILS],
 );
+
+/** False when ADMIN_AUTHOR_EMAILS fell back to the placeholder list. */
+export const ADMIN_AUTHOR_EMAILS_IS_SET = raw('ADMIN_AUTHOR_EMAILS') !== '';

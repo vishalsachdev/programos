@@ -7,11 +7,12 @@ import http from 'http';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const TEST_PORT = 39348;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 const SECRET = 'webhook-auth-test-secret';
 
 vi.hoisted(() => {
-  process.env.WEBHOOK_PORT = '39348';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
   delete process.env.WEBHOOK_SECRET;
 });
@@ -37,6 +38,7 @@ vi.mock('../repo-reader.js', () => ({
 }));
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { _closeDatabase, _initTestDatabase } from '../db.js';
 import { getChannelFactory } from './registry.js';
 
@@ -82,7 +84,7 @@ describe('inbound mail webhook: the WEBHOOK_SECRET check', () => {
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
   });
 
   afterAll(async () => {

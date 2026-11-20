@@ -18,10 +18,11 @@ import {
 // principal 10; the first over-cap message alerts Avery once and sends a
 // person (never an agent) one notice.
 
-const TEST_PORT = 39343;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 
 vi.hoisted(() => {
-  process.env.WEBHOOK_PORT = '39343';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
 });
 
@@ -81,6 +82,7 @@ vi.mock('../outbound-email.js', async (importOriginal) => {
 });
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { flushAuditLog } from '../audit-log.js';
 import type { NewMessage } from '../types.js';
 import { getChannelFactory } from './registry.js';
@@ -157,7 +159,7 @@ describe('G19 tiered sender cap at the webhook', () => {
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
   });
 
   beforeEach(() => {

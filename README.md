@@ -47,10 +47,11 @@ You need: a host that can run Docker, a mail address for the bot, a git host for
 
 1. Clone this repo.
 2. Open it with your coding agent (Claude Code, Codex, Cursor or another) and say: "Read `AGENTS.md` and help me adapt this for my project."
-3. The agent explains three ways to start and asks which you want: **Try it** (one person, a laptop, Telegram only), **Pilot** (a small always-on machine, email, a handful of allowlisted colleagues; the recommended first version), or **Institutional** (the same on services your institution has approved).
-4. The agent asks you six policy questions before it changes anything: which AI service is allowed, who approves, which address the bot uses, where data lives, what senders are told, and which channels you want. It asks one thing at a time, explains each choice, and writes your answers down.
-5. It creates your knowledge-base repo, fills in settings, replaces placeholders, and keeps the tests passing.
-6. You review a test exchange. You decide when to deploy.
+3. The agent first asks whether you are setting this up at the University of Illinois or somewhere else. That picks the pages it uses with you: the **Illinois track** ([`docs/illinois/`](./docs/illinois/README.md): what the university's public pages say, and the questions only its offices can answer) or the **general track** ([`docs/general/`](./docs/general/README.md): your own domain, a cloud virtual machine, the default mail provider or SMTP, the intake worker, Telegram or email alerts). The code is the same on both.
+4. The agent explains three ways to start and asks which you want: **Try it** (one person, a laptop, Telegram only), **Pilot** (a small always-on machine, email, a handful of allowlisted colleagues; the recommended first version), or **Institutional** (the same on services your institution has approved).
+5. The agent asks you six policy questions before it changes anything: which AI service is allowed, who approves, which address the bot uses, where data lives, what senders are told, and which channels you want. It asks one thing at a time, explains each choice, and writes your answers down.
+6. It creates your knowledge-base repo, fills in settings, replaces placeholders, and keeps the tests passing.
+7. You review a test exchange. You decide when to deploy.
 
 ## How it is kept safe
 
@@ -75,13 +76,17 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: how to guide a person who is not technical, the three ways to start, every setup choice, what to replace, safety items, first start | Yes; checked against the code in review. A test checks that it names every setting |
 | [`docs/setup-reference.md`](./docs/setup-reference.md) | Every setting key, the inbound mail contract, the two optional webhooks | Yes; the same test |
 | [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; `src/program-repo-template.test.ts` runs the real parsers over it |
+| [`docs/general/README.md`](./docs/general/README.md) | The general track: the pages to read, in order, for a team with its own domain, a cloud virtual machine, the default mail provider or SMTP, the intake worker, and Telegram or email alerts | Index; links only |
+| [`docs/illinois/README.md`](./docs/illinois/README.md) | The Illinois track: the university-specific page for each choice, in order, and the shared pages | Index; links only |
 | [`docs/deployment.md`](./docs/deployment.md) | What kind of host works, what to start with, and one recipe for a virtual machine | Partly run; each step says what was checked |
+| [`docs/cloud-vm.md`](./docs/cloud-vm.md) | What cloud machine to ask for, why app-hosting services that cannot start containers do not work, and the Azure specifics | Not run on Azure; Microsoft facts from public pages read 2026-11-20 |
+| [`docs/costs.md`](./docs/costs.md) | Each monthly cost line (machine, model use, mail, intake, domain) with the vendor's pricing page, and a worked example with its assumptions | Prices read 2026-11-20; the example is arithmetic, not a measured bill |
 | [`docs/data-handling.md`](./docs/data-handling.md) | What data reaches each outside service and each storage place, who can read it, what is and is not deleted, and what to decide before go-live | Yes; traced from the code 2026-11-19 |
 | [`docs/illinois/data-handling.md`](./docs/illinois/data-handling.md) | One university's open data questions, none verified | Open items only |
-| [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | The same recipe on a university virtual machine: open questions | Stub; not verified |
+| [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | Getting a virtual machine in the university's Azure: what its public pages say, and the open questions | Quotes from public pages read 2026-11-20; the rest not verified |
 | [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
-| [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
-| [`docs/illinois/institutional-address.md`](./docs/illinois/institutional-address.md) | One university: what sending as a campus address needs, and the questions to ask its central IT office | Open items only; not verified |
+| [`docs/illinois/email-quickstart.md`](./docs/illinois/email-quickstart.md) | One university: a unit mailbox that redirects to the bot's domain, the intake worker, and the reply by the default provider or SMTP | Yes for the settings and the flow (rewritten 2026-11-20); never run end to end. University claims quoted from public pages or marked not verified |
+| [`docs/illinois/institutional-address.md`](./docs/illinois/institutional-address.md) | One university: what sending as a campus address needs, and the questions to ask its central IT office | One public page quoted; the rest not verified |
 | [`docs/illinois/mail-authentication.md`](./docs/illinois/mail-authentication.md) | One university: how to read the mail server names for sender authentication off a real forwarded message | Open items only; not verified |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
 | [`docs/dependency-audit.md`](./docs/dependency-audit.md) | Each `npm audit` finding: fixed, not reachable (and why), or accepted (risk and owner); counts before and after | Yes; run 2026-11-20 |

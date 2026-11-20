@@ -73,18 +73,75 @@ these rules in every message.
 9. **Stop when an answer is "I do not know".** Help the person find who can answer.
    Do not pick for them on a policy question.
 
-### Your first reply
+### Your first replies
 
 Do not start with questions about servers. In your first reply:
 
 1. Say in three sentences what this is (part 1, first bullet, in plain words).
 2. Say that you will ask one thing at a time and write the answers in
    `setup-decisions.md`, and that nothing is sent or deployed without their yes.
-3. Describe the three ways to start (part 4), each in two or three plain sentences.
-4. Recommend one, and ask which they want. If they only want to see it work, that
-   is "Try it". If they have a real team in mind, that is "Pilot".
+3. Name the three ways to start (part 4) in one line each, and say you will
+   help them choose in your next message.
+4. Ask the track question (below), with its explanation. It is the only
+   question in this reply.
+
+In your second reply, record the track, then describe the three ways to start,
+each in two or three plain sentences, with the notes for their track (below).
+Recommend one, and ask which they want. If they only want to see it work, that
+is "Try it". If they have a real team in mind, that is "Pilot". If you do not
+know yet which they want, say which you would pick in each case.
 
 Then ask the policy questions in part 4 that apply to the chosen path, one at a time.
+
+### The track question: which set of pages applies
+
+The code, the three ways to start and every choice in part 5 are the same for
+everyone. What differs is the set of pages you read alongside them. One
+university has its own set; everyone else uses the general set.
+
+- *Ask:* "Are you setting this up at the University of Illinois, or somewhere
+  else?"
+- *Explain first, in plain words:* this repo keeps one university's notes
+  (what its public IT pages say, and the questions only its offices can answer)
+  in a separate folder. If that is their university, you will use those notes
+  at each step; if not, you will skip them. The answer changes no code and
+  costs nothing.
+- *Record it* in `setup-decisions.md` as the first line, with the date.
+
+**General track** (anywhere else, including another university): read
+[`docs/general/README.md`](./docs/general/README.md) and follow its order. It
+assumes a domain the team controls, a virtual machine from a cloud provider,
+the default mail provider or SMTP, the intake worker in `inbound/`, and
+Telegram or email alerts. An institution's own rules are still asked for in
+the policy questions; this repo does not know them.
+
+**Illinois track:** read [`docs/illinois/README.md`](./docs/illinois/README.md).
+At each choice below, open the Illinois page that the index names for it
+(choice 1: `model-foundry.md`; choices 5 and 6: `email-quickstart.md` and
+`institutional-address.md`; choice 7: `github-enterprise.md`; choice 8:
+`hosting.md`; choice 9: `service-ownership.md`; choice 14: `data-handling.md`).
+Those pages quote public university pages, with links and dates, and mark the
+rest "not verified". Tell the person what a page quotes and what it leaves
+open. Never present a quote as an approval for their unit, and never fill an
+open item with a guess: help them write the question for the office named.
+Notes for each way to start, on the Illinois track:
+
+- *Try it:* the Illinois pages barely matter, unless the person must use a
+  university-approved model even for a trial (`model-foundry.md`).
+- *Pilot:* most of the waiting is here. The mail flow is a unit mailbox that
+  redirects to a domain the unit controls (`email-quickstart.md`). The
+  university's public pages restrict auto-forwarding for individual employees
+  and say non-individual accounts are not affected; whether a unit mailbox's
+  redirect to an outside domain is accepted is not verified. The same pages say
+  password logins are disabled for university accounts, so replying as an
+  `@illinois.edu` address with the SMTP provider is not expected to work; start
+  with replies from the bot's own domain.
+- *Institutional:* add `model-foundry.md`, `hosting.md` (the Azure request
+  page and its open questions) and `data-handling.md`; the sign-off questions
+  there come first.
+
+Both tracks share `SPEC.md`, `ARCHITECTURE.md`, `docs/12-governance.md`,
+`templates/program-repo/` and the generic pages under `docs/`.
 
 ## 4. Three ways to start
 
@@ -224,8 +281,9 @@ the person. The pilot is not done until every line is ticked or has a written re
 - **Steps that apply:** the pilot's steps, with the approved values. Do the live
   checks in `docs/model-providers.md`, section 6, before the person relies on Foundry.
 - **Not verified:** no request from this repo has reached a real Foundry
-  endpoint; the failover was tested against fake servers only. One university's
-  open questions are under `docs/illinois/`; none of them is answered there.
+  endpoint; the failover was tested against fake servers only. On the Illinois
+  track, `docs/illinois/` quotes the university's public pages where they exist
+  and lists the rest as open questions; none of them is answered for a unit there.
 
 ### Policy questions (ASK)
 
@@ -236,12 +294,23 @@ matching choice in part 5.
 1. **Which AI service may this team's mail reach?** The agent sends message text to
    a model. The user's institution may limit this. The code uses Claude through the
    Claude Agent SDK. Other model families need a different agent runner (not included).
-   The destinations the code supports:
-   - the Anthropic API or a Claude subscription (the default);
-   - an endpoint that serves the Anthropic API, set with `ANTHROPIC_BASE_URL`;
+   The destinations the code supports, each with its data-approval status:
+   - the Anthropic API or a Claude subscription (the default). Approval:
+     ask your institution;
+   - an endpoint that serves the Anthropic API, set with `ANTHROPIC_BASE_URL`.
+     Approval: ask your institution, for that endpoint by name;
    - Claude on Microsoft Foundry in the user's own Azure subscription
      (`MODEL_PROVIDERS`, [`docs/model-providers.md`](./docs/model-providers.md)).
      Tested here against fake servers only; that page has the live checks.
+     Approval: ask your institution, for the hosting option and region too.
+
+   This repo records no approval for any of them. The open questions to take to
+   the institution: is this destination approved for the team's mail, including
+   mail that mentions students; under which agreement; with which hosting option
+   and region; does the approval cover the reply sensor's calls as well as the
+   agent's; and who signs. On the Illinois track they are in
+   `docs/illinois/model-foundry.md` and `docs/illinois/data-handling.md`,
+   items 2 and 3, all not verified.
 
    `MODEL_PROVIDERS` is an ordered list. A second entry is a backup, and it
    receives the same mail text when the first fails, so ASK about **every**
@@ -305,8 +374,9 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   backup is a second place your team's mail goes, and the failover has run only
   against fake servers.
 - *Cost to the person:* an account with the provider and a key; usage is billed
-  by the provider (check Anthropic's or Microsoft's current pricing). For
-  Foundry, an Azure subscription and three deployments.
+  by the provider (check Anthropic's or Microsoft's current pricing;
+  [`docs/costs.md`](./docs/costs.md) lists the pricing pages with the date they
+  were read). For Foundry, an Azure subscription and three deployments.
 - *Settings:* `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (one of the two),
   `ANTHROPIC_BASE_URL`, `MODEL_PROVIDERS` (`anthropic`, `foundry`,
   `anthropic,foundry`, `foundry,anthropic`), `ANTHROPIC_FOUNDRY_RESOURCE` or
@@ -398,6 +468,8 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Settings:* `WEBHOOK_SECRET`, `INTAKE_GIT_AUTHOR_EMAIL` (.env). The worker's own
   settings are in `inbound/wrangler.toml`.
 - *Detail:* part 12; `inbound/README.md`; `docs/setup-reference.md`, "Inbound mail".
+  Illinois track: `docs/illinois/email-quickstart.md` (a unit mailbox that
+  redirects to the bot's domain).
 
 **6. Outbound mail provider and the from-address**
 - *Plain words:* a mail service that delivers the bot's replies, and the address
@@ -474,13 +546,16 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *First pilot:* (b), run as a dedicated non-root user. The recipe has not been
   run end to end.
 - *Cost to the person:* a virtual machine from a cloud provider or their
-  institution (check the provider's current pricing), and a DNS name for it.
+  institution (check the provider's current pricing; `docs/costs.md`), and a
+  DNS name for it. What to ask for, and why an app-hosting service does not
+  work: `docs/cloud-vm.md`.
 - *Settings:* `WEBHOOK_HOST=127.0.0.1`, `WEBHOOK_PORT`, `CREDENTIAL_PROXY_PORT`
   (process); `TZ` (.env). `WEBHOOK_HOST` matters for choice 17 too: left unset,
   the listener is on all interfaces and the agent container can reach it. Only when the host process runs as root, which the
   recipe does not do: `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID`,
   `CHECKOUT_OWNER_HOME` (process).
-- *Detail:* `docs/deployment.md`; `docs/illinois/hosting.md` (a stub).
+- *Detail:* `docs/deployment.md`; `docs/cloud-vm.md` (Azure specifics);
+  `docs/illinois/hosting.md` (open questions).
 
 **9. Identity: names and domains**
 - *Plain words:* what the bot is called, which mail domain is "yours", and which
@@ -1024,8 +1099,9 @@ has a public HTTPS name. The steps and checks are in
 
 ## 13. Order of work
 
-1. Send your first reply (part 3). Help the person choose one of the three ways
-   to start (part 4). Create `setup-decisions.md` and record the choice.
+1. Create `setup-decisions.md` (part 3, rule 7). Send your first reply
+   (part 3) and ask the track question. Then help the person choose one of the
+   three ways to start (part 4). Record both answers.
 2. Ask the policy questions (part 4) and then each choice in part 5 that the
    chosen path needs, one at a time. Write each answer down for the user.
 3. Create the program repo skeleton and the allowlist.

@@ -22,7 +22,7 @@ This page is for a team at the University of Illinois that runs ProgramOS. It ad
 
 The office names above are roles, not confirmed office titles. Find the current office for each role and write its name in the table when you have it.
 
-A Claude endpoint on Microsoft Foundry is in progress (issue 10; see the open pull requests). If the university's agreement covers that endpoint, items 2 and 3 change; they still need an answer in writing.
+The code can send the agent's and the sensor's calls to Claude on Microsoft Foundry in the unit's own Azure subscription (`MODEL_PROVIDERS`, [`../model-providers.md`](../model-providers.md)); its questions are in [`model-foundry.md`](./model-foundry.md). If the university's agreement covers that endpoint, items 2 and 3 change; they still need an answer in writing.
 
 ## Until the items are answered
 

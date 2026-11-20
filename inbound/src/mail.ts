@@ -122,20 +122,109 @@ function display(box: { name: string; address: string }): string {
     : box.address;
 }
 
+const ADDRESS_TOKEN = /[^\s<>(),;:]+@[^\s<>(),;:]+/g;
+
+/** The different address-like words in the text, lower case, no quotes. */
+function addressTokens(fromHeader: string): { raw: string[]; found: string[] } {
+  const raw = fromHeader.match(ADDRESS_TOKEN) ?? [];
+  const found = new Set(
+    raw.map((a) => a.replace(/^["']+|["']+$/g, '').toLowerCase()),
+  );
+  return { raw, found: [...found] };
+}
+
+/**
+ * True when the From header text is in a form that a second reader could
+ * take as more than one mailbox, or as another mailbox than the one word
+ * `addressTokens` found. Every test here errs towards "yes".
+ */
+function ambiguousFrom(fromHeader: string, raw: string[]): boolean {
+  // A control character: one reader stops at it, another drops it.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0008\u000a-\u001f\u007f]/.test(fromHeader)) return true;
+  // Every "@" must sit inside exactly one address word. An "@" with a
+  // comment or a space beside it ("a(x)@b", "a @b") is in no word, and an
+  // address with two ("a@b@c") has one too many: both are addresses to some
+  // readers that the count would miss.
+  const ats = (fromHeader.match(/@/g) ?? []).length;
+  if (
+    ats !== raw.length ||
+    raw.some((a) => a.indexOf('@') !== a.lastIndexOf('@'))
+  )
+    return true;
+  // More than one address in angle brackets, or brackets that do not pair.
+  const open = (fromHeader.match(/</g) ?? []).length;
+  const close = (fromHeader.match(/>/g) ?? []).length;
+  if (open > 1 || open !== close) return true;
+  const lt = fromHeader.indexOf('<');
+  const gt = fromHeader.indexOf('>');
+  if (gt < lt) return true;
+  // Outside a quoted display name: a comma separates mailboxes, a colon or
+  // a semicolon writes a group or a route, a backslash escapes for one
+  // reader and not for another. A quote or a comment left open hides text
+  // from one reader only. A comment is taken as part of the display name
+  // only beside an address in angle brackets; inside the brackets, or with
+  // no brackets at all, readers join or split the address around it
+  // differently ("<dl(x)ee@example.edu>").
+  let quoted = false;
+  let depth = 0;
+  for (let i = 0; i < fromHeader.length; i++) {
+    const ch = fromHeader[i];
+    if (quoted) {
+      if (ch === '\\') i++;
+      else if (ch === '"') quoted = false;
+    } else if (ch === '"') quoted = true;
+    else if (ch === '(') {
+      if (lt < 0 || (i > lt && i < gt)) return true;
+      depth++;
+    } else if (ch === ')') {
+      if (depth === 0) return true;
+      depth--;
+    } else if (ch === ',' || ch === ':' || ch === ';' || ch === '\\')
+      return true;
+  }
+  return quoted || depth !== 0;
+}
+
 /**
  * How many different addresses the From header text holds, display name
  * included, so a group or a second address the parser drops still counts.
  * The same address as display name and as mailbox counts once. A character
  * outside ASCII counts as one more: two readers may fold it differently.
+ *
+ * The result is 1 only for a header that every reader takes as the same
+ * single mailbox. A header with one address word that could still be read
+ * as more than one mailbox (`ambiguousFrom`) counts 2.
  */
 export function fromAddressCount(fromHeader: string): number {
-  const tokens = fromHeader.match(/[^\s<>(),;:]+@[^\s<>(),;:]+/g) ?? [];
-  const found = new Set(
-    tokens.map((a) => a.replace(/^["']+|["']+$/g, '').toLowerCase()),
-  );
+  const { raw, found } = addressTokens(fromHeader);
   // Checked before lower-casing: the Kelvin sign lower-cases to "k".
   // eslint-disable-next-line no-control-regex
-  return found.size + (tokens.some((a) => /[^\x00-\x7f]/.test(a)) ? 1 : 0);
+  const count =
+    found.length + (raw.some((a) => /[^\x00-\x7f]/.test(a)) ? 1 : 0);
+  return count === 1 && ambiguousFrom(fromHeader, raw) ? 2 : count;
+}
+
+/**
+ * The `from_mailboxes` value for the payload. `address` is the address the
+ * payload carries as `from` when it was read from the From header, null
+ * when it was not (the envelope sender was used instead).
+ *
+ * The host matches the allowlist on `from`, and a DMARC result is about the
+ * From header. The two are the same sender only when the one address in the
+ * From header text IS `from`. When the mail parser read another address
+ * than the one counted, or none at all, a DMARC pass for the header says
+ * nothing about `from`; the count is then 2, which the host never calls
+ * authenticated.
+ */
+export function fromMailboxCount(
+  fromHeader: string,
+  address: string | null,
+): number {
+  const count = fromAddressCount(fromHeader);
+  if (count !== 1) return count;
+  const only = addressTokens(fromHeader).found[0];
+  return address !== null && only === address.toLowerCase() ? 1 : 2;
 }
 
 /** Lowercase ASCII words joined by hyphens, for the file name. */
@@ -240,7 +329,8 @@ export async function buildIntake(
 
   // The allowlist names people by the address in the From header. The
   // envelope sender is often a bounce address, and forwarding rewrites it.
-  const fromBox = mailboxes(email.from ? [email.from] : [])[0] ?? {
+  const headerBox = mailboxes(email.from ? [email.from] : [])[0];
+  const fromBox = headerBox ?? {
     name: '',
     address: oneLine(envelope.from).toLowerCase(),
   };
@@ -248,7 +338,7 @@ export async function buildIntake(
   const auth = readAuth(
     email.headers,
     envelope.from,
-    fromAddressCount(fromHeader),
+    fromMailboxCount(fromHeader, headerBox ? headerBox.address : null),
     trust,
     envelope.authenticationResults,
   );

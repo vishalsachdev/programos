@@ -83,8 +83,12 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
 | [`docs/dependency-audit.md`](./docs/dependency-audit.md) | Each `npm audit` finding: fixed, not reachable (and why), or accepted (risk and owner); counts before and after | Yes; run 2026-11-20 |
+| [`docs/service-ownership.md`](./docs/service-ownership.md) | Every credential and account a deployment holds: its owner role, where it is stored, how to rotate it, what breaks meanwhile, the handover checklist, the minimum for a pilot | Yes; traced from the code 2026-11-20. Provider screens and live rotation not verified |
+| [`docs/illinois/service-ownership.md`](./docs/illinois/service-ownership.md) | One university's open questions about unit service accounts and who approves | Open items only; not verified |
 | [`docs/model-providers.md`](./docs/model-providers.md) | Claude on Microsoft Foundry (Azure) as a backup or primary model provider: deployments, hosting option, settings, failover and its limits | Yes for the code; not yet checked against a live Foundry endpoint |
 | [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) | One university's open questions about that provider | Pointer and open items; not verified |
+| [`docs/design/microsoft-path.md`](./docs/design/microsoft-path.md) | Which parts can move onto Microsoft services (Copilot Studio, Foundry, Graph mail, Teams, SharePoint), what each keeps or loses, and one recommended Microsoft-first path | Design note; not implemented. Microsoft facts from public pages fetched 2026-11-20 |
+| [`docs/illinois/microsoft-path.md`](./docs/illinois/microsoft-path.md) | One university's open questions about that path | Open items only; not verified |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
 | [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |
 | [`site/`](./site/) | The public page and its deploy script | Yes |

@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,156 passing tests (1,761 from the source, 395 added here). One timing test
+   is 2,158 passing tests (1,761 from the source, 397 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -433,7 +433,11 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   do not guess them.
 - *Settings:* all (.env). The placeholders that are still text in code and
   prompts are in part 7.
-- *Detail:* part 7; First start, step 7.
+- *Accounts and secrets:* every account and key the bot uses belongs to a role
+  held through a unit or service account, not to one person's own login. ASK who
+  holds each, and fill in the table in `docs/service-ownership.md` with the person.
+  A model subscription on one person's own account is the weakest item there.
+- *Detail:* part 7; First start, step 7; `docs/service-ownership.md`.
 
 **10. Allowlists: who may write to the bot**
 - *Plain words:* an allowlist is the list of people the bot will answer. Anyone
@@ -660,6 +664,11 @@ and say so.
   reports: for Telegram `tg:<numeric user id>`, not the `@handle`. The Telegram
   handle list in the program repo is a separate, earlier check. Start from
   `config-examples/sender-allowlist.json` ("First start", step 3).
+- **Accounts, keys and handover:** `docs/service-ownership.md` lists every credential,
+  its owner role, where it is stored and how to rotate it, with a handover checklist
+  for when the builder or operator leaves. Run `chmod 600 .env` when you create the
+  file (`docs/deployment.md`, step 3); no step in this guide does it for you. Do not
+  paste a secret into the chat or into `setup-decisions.md`.
 - **Listener address:** set `WEBHOOK_HOST=127.0.0.1` and use a reverse proxy. The code
   default listens on all interfaces.
 - **The host runs no git in the agent's checkout.** The agent can write the whole

@@ -33,13 +33,14 @@ class OwnedTest(unittest.TestCase):
                   '.github/ISSUE_TEMPLATE/config.yml', '.github/PULL_REQUEST_TEMPLATE.md',
                   'docs/data-handling.md', 'docs/illinois/data-handling.md', 'docs/illinois/hosting.md',
                   'docs/illinois/model-foundry.md', 'docs/model-providers.md', 'docs/dependency-audit.md',
+                  'docs/service-ownership.md', 'docs/illinois/service-ownership.md',
                   'inbound/src/index.ts', 'inbound/package.json'):
             self.assertTrue(export.owned(p), p)
 
     def test_exported_paths(self):
         for p in ('src/index.ts', 'docs/reminder-registry.md', 'scripts/deploy.sh', 'README.md.bak',
                   'docs/data-handling.md.bak', 'docs/illinois-notes.md', 'inbound.md',
-                  'docs/dependency-audit.md.bak'):
+                  'docs/dependency-audit.md.bak', 'docs/service-ownership.md.bak'):
             self.assertFalse(export.owned(p), p)
 
 

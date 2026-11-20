@@ -55,7 +55,7 @@ import {
   storeChatMetadata,
   storeMessage,
 } from './db.js';
-import { readEnvFile } from './env.js';
+import { checkEnvFilePermissions, readEnvFile } from './env.js';
 import { setProviderChangeNotifier } from './model-provider.js';
 import { GroupQueue } from './group-queue.js';
 import {
@@ -121,6 +121,7 @@ import { resolveEmailGateContext } from './email-gate-context.js';
 import { buildRecentWorkSection } from './recent-work.js';
 import {
   clearDeliveryState,
+  initDeliveryStateKeys,
   loadDeliveryState,
   saveDeliveryState,
 } from './delivery-state.js';
@@ -895,6 +896,9 @@ function ensureContainerSystemRunning(): void {
 async function main(): Promise<void> {
   // Before anything starts: a real program repo needs real identity settings.
   assertIdentitySettingsConfigured();
+  // .env holds every secret: one clear error when other users of this
+  // machine can read it; a refusal only with REQUIRE_PRIVATE_ENV_FILE=true.
+  checkEnvFilePermissions();
   // A retention setting that is not a whole number of days stops the host.
   const retentionConfig = readRetentionConfig();
 
@@ -917,6 +921,18 @@ async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
+  // Read the delivery-state signing key once, with the other secrets.
+  const deliveryKeys = initDeliveryStateKeys();
+  if (
+    deliveryKeys.source &&
+    deliveryKeys.source !== 'DELIVERY_STATE_SIGNING_KEY'
+  )
+    logger.warn(
+      { reused: deliveryKeys.source },
+      `Delivery state is signed with ${deliveryKeys.source}, a secret that exists for another purpose. ` +
+        'Set DELIVERY_STATE_SIGNING_KEY to its own long random value (openssl rand -hex 32) in .env and restart. ' +
+        'State saved before the change still loads.',
+    );
   loadState();
   restoreRemoteControl();
 

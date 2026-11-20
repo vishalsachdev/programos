@@ -81,6 +81,7 @@ All of these go in `.env` (part 1 of `config/instance.env.example`). The key is 
 | `MODEL_FAILOVER_THRESHOLD` | Failures in a row before a provider is set aside. Default 3 |
 | `MODEL_FAILOVER_COOLDOWN_MS` | How long it is set aside. Default 1800000 (30 minutes) |
 | `SENSOR_PROVIDER` | `anthropic` or `foundry`, for the reply sensor only. Unset: the first provider in `MODEL_PROVIDERS`, else `anthropic` |
+| `SENSOR_EMAIL_REPLIES` | `1` makes the reply sensor check email replies too. Unset (default): chat replies only. It does not change where the sensor sends |
 
 Set at least `FOUNDRY_OPUS_MODEL`, or set both `FOUNDRY_AGENT_MODEL` and `FOUNDRY_GATE_MODEL` to full deployment names. Otherwise the gate reviewer's `opus` alias is not pinned.
 
@@ -88,7 +89,7 @@ A provider in `MODEL_PROVIDERS` without its settings stops the host at startup w
 
 ### The reply sensor
 
-The sensor is a second call path. It calls the provider directly from the host, not through the proxy, and it does not fail over. It goes where the agent's first choice goes:
+The sensor is a second call path. It calls the provider directly from the host, not through the proxy, and it does not fail over. By default it checks chat replies (Telegram and web chat) only; with `SENSOR_EMAIL_REPLIES=1` it also checks each delivered email reply, and the rules below apply to those calls unchanged. It goes where the agent's first choice goes:
 
 - Provider: `SENSOR_PROVIDER` when set; otherwise the first provider in `MODEL_PROVIDERS`; otherwise `anthropic`. With `MODEL_PROVIDERS=foundry,anthropic` the sensor uses Foundry, even though the agent may fail over to Anthropic. An unknown first name is an error, not a fallback.
 - `anthropic`: `ANTHROPIC_BASE_URL` when set (its host, with a path prefix joined before `/v1/messages`, as the proxy does), else `api.anthropic.com`. The key is `ANTHROPIC_API_KEY`: a subscription token cannot call this API, so with only a token the sensor reports `no-api-key` and sends nothing.
@@ -132,4 +133,5 @@ Tests here use fake servers. Each line below needs a real key. Record the date a
 - [ ] A session started on one provider and resumed on the other, in both directions.
 - [ ] A forced failover: put a wrong primary key in `.env`, send turns until the threshold, and confirm the next run uses the backup and the operator alert arrives.
 - [ ] The reply sensor with `SENSOR_PROVIDER=foundry`, and with `MODEL_PROVIDERS=foundry,...` alone: one verdict comes back and the log names Foundry. Also with `ANTHROPIC_BASE_URL` set. Tested with fake servers only.
+- [ ] The reply sensor on one email reply with `SENSOR_EMAIL_REPLIES=1`: the mail arrives first, then the `[sensor: ...]` line appears in its `[OUTBOUND EMAIL]` audit entry. Tested with the provider stubbed only.
 - [ ] The hosting option and region scope of each deployment, as shown in Azure on that day.

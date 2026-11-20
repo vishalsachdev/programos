@@ -45,7 +45,8 @@ A "real program repo" means `PROGRAM_ORIGIN_PATTERN` or `PROGRAM_ORIGIN_URL` is 
 | `NANOCLAW_AGENT_MODEL` | process | `claude-opus-5-5` | The agent's model: an alias or a full model ID | 1 |
 | `NANOCLAW_GATE_MODEL` | process | `opus` | The model of the reviewer that checks knowledge-base writes | 1 |
 | `NANOCLAW_AGENT_EFFORT` | process | `high` | Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max` | 1 |
-| `BEHAVIOUR_SENSOR_DISABLED` | process | The sensor runs | `1` turns the reply sensor off | 2 |
+| `BEHAVIOUR_SENSOR_DISABLED` | process | The sensor runs | `1` turns the reply sensor off, for chat and email replies | 2 |
+| `SENSOR_EMAIL_REPLIES` | .env or process | Off: the sensor checks chat replies only | `1` (or `true`, `on`) makes the reply sensor also check each delivered email reply, once, after it is sent. It sends the reply, the start of the mail it answers and knowledge-base excerpts to the sensor's provider. Tested with the provider stubbed only | 2 |
 | `SENSOR_PROVIDER` | .env or process | First entry of `MODEL_PROVIDERS`, else `anthropic` | The reply sensor's provider: `anthropic` or `foundry`. Unset, it follows the first entry of `MODEL_PROVIDERS`. Setting it overrides that. It does not fail over | 2 |
 | `SENSOR_MODEL` | process | `claude-haiku-5-5` | The reply sensor's model. With Foundry, a deployment name | 2 |
 

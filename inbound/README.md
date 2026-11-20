@@ -23,7 +23,7 @@ Cloudflare's dashboard labels change. Where a step names a screen, check Cloudfl
 
 Pick the address people will write to, for example `program@bot.example.org`. Use a domain or subdomain that receives no other mail: Email Routing takes over the MX records of the zone it is enabled on.
 
-If your team should write to an address at your institution instead, ask your mail administrators for a forwarding rule or alias from that address to the one above. The worker reads the sender from the `From` header, so forwarded mail keeps its author.
+If your team should write to an address at your institution instead, ask your mail administrators for a rule or alias that passes mail from that address to the one above. The worker reads the sender from the `From` header, so the rule must keep the original sender there: in Microsoft 365, a redirect does ("A redirected message keeps the original sender on the From line") and a forward does not ([Microsoft Support, rules in Outlook](https://support.microsoft.com/en-us/office/use-inbox-rules-in-outlook-c24f5dea-9465-4df4-ad17-a50704d66c59), read 2026-11-20). Check one message's `From:` line in the committed copy before colleagues use the address.
 
 ### 2. Turn on Email Routing (MX)
 

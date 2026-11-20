@@ -14,6 +14,7 @@ import {
   DATA_DIR,
 } from './config.js';
 import { assertIdentitySettingsConfigured } from './identity-settings-check.js';
+import { assertOutboundMailConfigured } from './outbound-email-smtp.js';
 import {
   ensureHostRepo,
   hostRepoPlacementProblem,
@@ -892,6 +893,9 @@ function ensureContainerSystemRunning(): void {
 async function main(): Promise<void> {
   // Before anything starts: a real program repo needs real identity settings.
   assertIdentitySettingsConfigured();
+
+  // OUTBOUND_MAIL_PROVIDER=smtp: only an encrypted, authenticated submission.
+  assertOutboundMailConfigured();
 
   // The host-owned repository must not sit inside the agent's checkout.
   const hostRepoProblem = hostRepoPlacementProblem();

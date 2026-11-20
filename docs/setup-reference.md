@@ -68,8 +68,15 @@ The Foundry path and the failover were tested against fake servers only. [`model
 | `ADMIN_ALERT_TEST` | process | No test | `1` sends one test alert on each enabled route at startup. First start only; remove it after | 4 |
 | `DEAD_LETTER_ALERT_JID` | .env or process | The operator's Telegram chat (`tg-avery@program`, a placeholder) | The chat id that receives dead-letter and delivery-shortfall alerts on the Telegram route | 4 |
 | `OUTREACH_SUMMARY_JID` | .env or process | The same operator chat | The chat id that receives weekly outreach summaries. It does not follow `ADMIN_ALERT_ROUTE` | 4, 12 |
-| `RESEND_API_KEY` | .env | No mail is sent; each send is reported as a shortfall | The outbound mail provider's key | 6 |
-| `RESEND_WEBHOOK_SECRET` | .env only | `/resend/webhook` answers 503; bounces are not reported | Signing secret of the provider's events webhook | 6, 13 |
+| `OUTBOUND_MAIL_PROVIDER` | .env or process | `resend` | Which service delivers the bot's mail: `resend` (HTTP API) or `smtp` (authenticated SMTP submission). Any other value stops the host at startup | 6 |
+| `RESEND_API_KEY` | .env | With the `resend` provider: no mail is sent; each send is reported as a shortfall. Not used with `smtp` | The outbound mail provider's key | 6 |
+| `RESEND_WEBHOOK_SECRET` | .env only | `/resend/webhook` answers 503; bounces are not reported. Not used with `smtp` | Signing secret of the provider's events webhook | 6, 13 |
+| `SMTP_HOST` | .env or process | With `smtp`: the host does not start | The submission server's host name, with no scheme and no port | 6 |
+| `SMTP_SECURITY` | .env or process | `starttls` | `starttls` (the session must be upgraded before the login) or `tls` (TLS from the first byte). No unencrypted mode exists; any other value stops the host at startup | 6 |
+| `SMTP_PORT` | .env or process | `587` with `starttls`, `465` with `tls` | The submission port | 6 |
+| `SMTP_USERNAME` | .env or process | With `smtp`: the host does not start | The login of the mailbox the bot sends as | 6 |
+| `SMTP_PASSWORD` | .env only | With `smtp`: the host does not start | That mailbox's password or app password | 6 |
+| `SMTP_ENVELOPE_FROM` | .env or process | The address in `SEND_FROM_EMAIL` | The SMTP envelope sender, where the receiving servers send bounces | 6 |
 | `OUTBOUND_EMAIL_STAGGER_MS` | .env or process | `30000` | The wait between outgoing mails, in milliseconds (30000 to 60000) | 6 |
 | `EMAIL_SENDER_DAILY_CAP` | process | `10` | Messages in 24 hours from an automated agent or a sender the allowlist cannot vouch for | 10 |
 | `EMAIL_PERSON_SENDER_DAILY_CAP` | process | `30` | Messages in 24 hours from a person on the allowlist | 10 |
@@ -132,7 +139,41 @@ To write your own service, read the handler in `src/channels/webhook.ts` (search
 
 Two more routes share the listener with the inbound mail webhook (`src/channels/webhook.ts`). Both are optional, and both exist only when `WEBHOOK_SECRET` is set, because the listener does not start without it. Each checks its own signature and does not use `WEBHOOK_SECRET`. A route with no secret set answers 503. Set them up after "First start" (`AGENTS.md`, part 14), when the host has a public HTTPS name. ASK before you create either one: each tells an outside service to send data to this host.
 
+### Outbound mail over SMTP (`OUTBOUND_MAIL_PROVIDER=smtp`)
+
+The default provider needs DNS records on a domain you control, so it cannot send as an address on a domain someone else runs (an institution's mail domain, for example). The SMTP provider (`src/outbound-email-smtp.ts`) submits each mail to a server you name, logged in as a mailbox there. Whether that server lets a program log in this way is the mail administrators' decision; this repo does not know it.
+
+Everything before the provider call is the same for both providers: the outbox, the retries and the dead letter, the wait between mails, the delivery gate, the recipient rules, the audit entry, operator alert mail, and the `Message-ID`, `In-Reply-To` and `References` headers.
+
+Encryption is required. `SMTP_SECURITY` is `starttls` or `tls`; the login and the mail are never sent on an unencrypted connection, and certificate checks are never turned off. The host refuses to start when `OUTBOUND_MAIL_PROVIDER=smtp` and: `SMTP_SECURITY` is any other value; `SMTP_HOST`, `SMTP_USERNAME` or `SMTP_PASSWORD` is missing; the host, port or envelope sender is malformed; or `NODE_TLS_REJECT_UNAUTHORIZED=0` is in the process environment.
+
+How the server's answers are treated:
+
+| What happened | Result |
+|---|---|
+| The server accepted the mail for every recipient | Sent |
+| The server accepted the mail for some recipients and refused others | Sent to those it accepted. The refused ones are reported to the operator as a delivery shortfall, written to the audit log as a delivery problem (`smtp.recipient_refused`), and noted for the agent. Not retried, even when the refusal was temporary: a second submission would give the others the mail twice |
+| The server refused every recipient | Nothing sent. Retried when at least one refusal was temporary (a `4yz` code); otherwise a permanent failure |
+| A `4yz` answer at any step (greeting, login, sender, the mail itself) | Retried: up to five attempts with a growing wait, then a dead letter and an alert, as for the default provider |
+| A `5yz` answer at any step (a wrong password is `535`) | Permanent failure, reported |
+| STARTTLS refused or not offered, a failed TLS handshake, a certificate that does not verify | Nothing sent, no login attempted. Retried unless the server answered with a `5yz` code |
+| No answer before any mail content was written (name lookup failed, connection refused or dropped, timeout) | Retried |
+| No answer after the mail content was written (timeout, connection cut) | **Outcome unknown.** Treated as a permanent failure and reported as a shortfall for every recipient; the mail may or may not have been delivered. Not retried, because SMTP has no idempotency key and a retry could deliver it twice. The operator decides whether to send again |
+
+What you lose compared with the default provider:
+
+- **No bounce or complaint reports.** There is no events webhook. A bounce comes back later as a mail to the sending mailbox (or to `SMTP_ENVELOPE_FROM`). The bot does not read it: if the intake service forwards it, the loop check drops it (`src/email-loop-detection.ts`), so it starts no work and gets no reply. Nobody is alerted. A person must read the sending mailbox for bounces. Issue 68 tracks processing them.
+- **No "unconfirmed after 12 hours" report.** The delivery check (`src/email-delivery-check.ts`) depends on the events webhook, so SMTP sends are not registered with it.
+- **No idempotency key.** See "outcome unknown" above. Each delivery keeps one `Message-ID` across retries, which lets many mail systems drop a duplicate; do not rely on it.
+- The audit entry's `Resend ID` field holds `smtp-` and 32 hex characters (a hash of the delivery id), not an id the server gave.
+
+Not tested: any real mail server. The tests run a local SMTP server inside the test process (`src/outbound-email-smtp.test.ts`). Whether a given server keeps the `Message-ID` the bot sets, which login methods it offers, and its sending limits are unknown until you try it. OAuth login (XOAUTH2) is not implemented: the server must accept a username and a password or app password. Sending through Microsoft Graph is not implemented either (issue 67).
+
+To set up: get the server name, port, security mode and a mailbox login from the mail administrators; put the five settings in `.env`; set `SEND_FROM_EMAIL` to the mailbox's address and `BOT_MAIL_DOMAIN` to its domain; start the host; send one test mail to yourself and check the headers of what arrives; then read the sending mailbox for a bounce.
+
 ### Mail delivery events: `/resend/webhook`
+
+With `OUTBOUND_MAIL_PROVIDER=smtp` this webhook is not used; skip this section.
 
 What it does (`src/channels/resend-events.ts`): records each recipient's delivery outcome, and on a bounce, a complaint or a failure it writes a delivery-problem record and alerts the operator on the route set by `ADMIN_ALERT_ROUTE`. Without it, the bot does not learn that a sent mail bounced. The handler is written for the reference deployment's provider, Resend, which signs with Svix headers. Another provider needs a different handler.
 

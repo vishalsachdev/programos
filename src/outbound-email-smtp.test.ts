@@ -623,6 +623,19 @@ describe('outbound email over SMTP', () => {
       );
     });
 
+    it('a line break in a threading id or a subject cannot add a header or a recipient', async () => {
+      await sendOutboundEmailResult(
+        { ...EMAIL, subject: 'Hello\r\nBcc: hidden@example.org' },
+        options({
+          inReplyTo: '<parent@example.edu>\r\nBcc: hidden@example.org',
+        }),
+      );
+      const mail = tls.received[0];
+      expect(mail.rcptTo).toEqual([PERSON]);
+      expect(rawHeader(mail.raw, 'Bcc')).toBeUndefined();
+      expect(mail.raw.split(/\r?\n\r?\n/)[0]).not.toMatch(/^Bcc:/im);
+    });
+
     it('passes extra headers through, and none of them can replace a header the host sets', async () => {
       await sendOutboundEmailResult(
         EMAIL,

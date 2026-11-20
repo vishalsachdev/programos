@@ -35,6 +35,7 @@ import { recordEmailSent } from './email-delivery-check.js';
 import { logger } from './logger.js';
 import { getRepoReader } from './repo-reader.js';
 import {
+  bareAddress,
   getOutboundMailProvider,
   loadSmtpConfig,
   logSmtpRefusedRecipients,
@@ -782,7 +783,7 @@ async function executeSendOutboundEmailResult(
       outcome.refused.map((r) => r.address.toLowerCase()),
     );
     const delivered = [...toList, ...ccList].filter(
-      (addr) => !refusedKeys.has(addr.toLowerCase()),
+      (addr) => !refusedKeys.has(bareAddress(addr).toLowerCase()),
     );
     const refusedReason = outcome.refused.length
       ? `smtp-recipient-refused: ${outcome.refused

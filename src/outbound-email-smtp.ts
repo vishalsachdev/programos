@@ -351,7 +351,8 @@ const RESERVED_HEADERS = new Set([
   'content-transfer-encoding',
 ]);
 
-function bareAddress(value: string): string {
+/** The address inside `Name <address>`, or the value itself. */
+export function bareAddress(value: string): string {
   const angle = value.match(/<([^<>]+)>\s*$/);
   return (angle ? angle[1] : value).trim();
 }

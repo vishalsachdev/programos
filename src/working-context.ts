@@ -39,6 +39,7 @@ import { DATA_DIR, TIMEZONE } from './config.js';
 import { handoffExample, parseHandoff } from './handoff.js';
 import {
   ensureDirInTree,
+  listFilesInTree,
   readFileInTree,
   readFileInTreeAsync,
   writeFileInTree,
@@ -333,6 +334,54 @@ export function pruneStaleEntries(
   } catch (err) {
     logger.warn({ userKey, err }, 'working-context: prune failed');
   }
+}
+
+/**
+ * Retention (src/retention.ts): drop archive entries written before
+ * `cutoffMs` from every `<userKey>.archive.json`. The archive is kept for
+ * inspection and never read back, so no pending work depends on it. The live
+ * store file is not touched. An element without a readable `ts`, and a file
+ * that is not a JSON array, are left as they are. With `dryRun` nothing is
+ * written and the counts are the ones a real run removes.
+ */
+export function pruneWorkingContextArchives(
+  cutoffMs: number,
+  dryRun: boolean,
+  baseDir: string = DATA_DIR,
+): { deleted: number; kept: number } {
+  const dir = getWorkingContextDir(baseDir);
+  let deleted = 0;
+  let kept = 0;
+  for (const file of listFilesInTree(dir) ?? []) {
+    if (!file.name.endsWith('.archive.json')) continue;
+    if (!isValidUserKey(file.name.slice(0, -'.archive.json'.length))) continue;
+    let parsed: unknown;
+    try {
+      const raw = readFileInTree(dir, file.name);
+      parsed = raw === null ? null : JSON.parse(raw);
+    } catch {
+      continue; // unreadable, linked or corrupt: leave it
+    }
+    if (!Array.isArray(parsed)) continue;
+    const isOld = (e: unknown): boolean => {
+      const ts = (e as { ts?: unknown } | null)?.ts;
+      if (typeof ts !== 'string') return false;
+      const at = Date.parse(ts);
+      return Number.isFinite(at) && at < cutoffMs;
+    };
+    const fresh = parsed.filter((e) => !isOld(e));
+    const removed = parsed.length - fresh.length;
+    deleted += removed;
+    kept += fresh.length;
+    if (removed === 0 || dryRun) continue;
+    writeFileInTree(
+      dir,
+      file.name,
+      JSON.stringify(fresh, null, 2) + '\n',
+      CONTAINER_OWNER,
+    );
+  }
+  return { deleted, kept };
 }
 
 /** Ensure the store dir (and the user's file) exist so the container mount

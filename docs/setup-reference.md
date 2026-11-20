@@ -108,6 +108,23 @@ The caps count in memory and reset when the process restarts. They apply to emai
 
 **On the restricted network the container still reaches host services that listen on all interfaces**, on the network's gateway address. The webhook listener's code default is all interfaces: set `WEBHOOK_HOST=127.0.0.1`. The host logs a warning at each start while the network is restricted and `WEBHOOK_HOST` is not a loopback address. Not tested: an agent turn against a real provider on the restricted network (real containers completed a turn against a local stand-in on 2026-11-20); `restricted` on Docker Desktop; the proxy's refusals against a live provider. `npx tsx scripts/check-container-egress.ts` checks the network on the machine in use.
 
+### Retention
+
+Each value is a whole number of days. `0`, or no line, keeps everything; that is the default for all eight, and with all eight at `0` the host starts no prune and deletes nothing here. Above `0` the host deletes what is older, once about a minute after it starts and then once a day (`src/retention.ts`). A negative number, a fraction, or text stops the host at startup with an error that names the key; the shortest window is one day. None of these keys touches the program repo or the audit log.
+
+| Key | Read from | When nothing is set | What is deleted when set | What is kept whatever its age | Choice |
+|---|---|---|---|---|---|
+| `RETENTION_MESSAGES_DAYS` | process, then .env | `0`: keep forever | Rows of the SQLite `messages` table (full text of chat messages, mail prompts and replies) | A message not answered yet; in a chat that needs a trigger word, messages waiting for the next trigger; every message of a chat with no saved cursor and no bot reply; the newest bot reply of each chat | 14 |
+| `RETENTION_ROUTED_APPROVALS_DAYS` | process, then .env | `0` | The content of routed approvals closed or removed that long ago: title, sender, approver, subject, quoted words. Cleared, not deleted | The row with its key, status and dates, so a reopened entry is not mailed to the approver again. An approval still open, or with an operator notice or a relay not yet recorded, is not touched | 14 |
+| `RETENTION_TASKS_DAYS` | process, then .env | `0` | One-time scheduled tasks that have run, and the record of each task run | Active and paused tasks; the approved email-outreach task; the newest run record and its task. Never less than 7 days of run records, which the exceptions digest reads | 14 |
+| `RETENTION_TRANSCRIPT_ARCHIVE_DAYS` | process, then .env | `0` | Files in `groups/<group>/conversations/` named `YYYY-MM-DD-<name>.md` (the transcript copies; the agent can no longer search the deleted ones) | Any other file there | 14 |
+| `RETENTION_UPLOADS_DAYS` | process, then .env | `0` | Files in `data/telegram-uploads/<group>/`, and photos named `img-<number>-<code>.jpg` in `groups/<group>/attachments/` | A file named in a message not answered yet; any other file in `attachments/` | 14 |
+| `RETENTION_WORKING_CONTEXT_ARCHIVE_DAYS` | process, then .env | `0` | Entries in `data/working-context/<key>.archive.json`, by the time written on the entry. Entries are archived after 14 days, so use a value above 14 | The live file `<key>.json` | 14 |
+| `RETENTION_EVALS_DAYS` | process, then .env | `0` | Rows of `response_evals` in `store/evals.db` | Never less than 7 days, which the weekly quality report reads. The dashboard then shows a shorter history | 14 |
+| `RETENTION_IPC_ERRORS_DAYS` | process, then .env | `0` | Files in `data/ipc/errors/` | Nothing | 14 |
+
+`npx tsx scripts/retention-prune.ts` prints, for each key, how many rows or files the current values would delete, and deletes nothing. `--apply` deletes at once. Tested with files and a database made by the tests only; not run on a deployment with real data.
+
 Two files are not in `.env`: `~/.config/nanoclaw/mount-allowlist.json` (which folders a container may mount) and `~/.config/nanoclaw/sender-allowlist.json` (which chat senders may trigger the agent; missing or invalid means nobody). `AGENTS.md`, "First start", steps 2 and 3, sets them up.
 
 `LOG_LEVEL` (process) is not in the settings example. Leave it unset: at `debug` or `trace` the run logs hold full prompts ([`data-handling.md`](./data-handling.md)).

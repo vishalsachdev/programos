@@ -49,7 +49,7 @@ A "real program repo" means `PROGRAM_ORIGIN_PATTERN` is set, or the origin of th
 | `SENSOR_PROVIDER` | .env or process | `anthropic` | The reply sensor's destination: `anthropic` or `foundry`. It does not fail over | 2 |
 | `SENSOR_MODEL` | process | `claude-haiku-5-5` | The reply sensor's model. With Foundry, a deployment name | 2 |
 
-The Foundry path and the failover were tested against fake servers only. [`illinois/model-foundry.md`](./illinois/model-foundry.md) has the live checks.
+The Foundry path and the failover were tested against fake servers only. [`model-providers.md`](./model-providers.md) has the live checks.
 
 ### Channels, alerts and mail
 

@@ -4,7 +4,7 @@ This page says where a team's messages go when the bot runs, where they are stor
 
 It is not legal advice and it does not say what your institution allows. It tells you what to take to the people who decide that.
 
-Two later changes are on `main` and have no row of their own in the table below yet: a second model provider (Claude on Microsoft Foundry; `MODEL_PROVIDERS`, [`illinois/model-foundry.md`](./illinois/model-foundry.md)) and an email route for operator alerts (`ADMIN_ALERT_ROUTE`; `AGENTS.md`, safety items). Every provider in `MODEL_PROVIDERS` receives what the agent path row lists. Operator alerts by email go through the outbound mail provider row.
+Two later changes are on `main` and have no row of their own in the table below yet: a second model provider (Claude on Microsoft Foundry; `MODEL_PROVIDERS`, [`model-providers.md`](./model-providers.md)) and an email route for operator alerts (`ADMIN_ALERT_ROUTE`; `AGENTS.md`, safety items). Every provider in `MODEL_PROVIDERS` receives what the agent path row lists. Operator alerts by email go through the outbound mail provider row.
 
 ## What goes where
 

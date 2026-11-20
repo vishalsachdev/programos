@@ -30,9 +30,9 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 1,949 passing tests (1,761 from the source, 188 added here; counted on
-   2026-11-20). One timing test in `src/channels/webhook-ingest-context.test.ts`
-   can fail under load; rerun it alone before you treat it as real.
+   is 1,954 passing tests (1,761 from the source, 193 added here). One timing test
+   in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
+   alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
 5. Never put real secrets, real people's data, or mail content in this repo.
 
@@ -205,8 +205,7 @@ the person. The pilot is not done until every line is ticked or has a written re
   policy and no approval. It supports an API key for Foundry only (no Entra ID or
   managed identity). One instance serves one program.
 - **Steps that apply:** the pilot's steps, with the approved values. Do the live
-  checks in `docs/illinois/model-foundry.md` (they apply to any Foundry
-  deployment) before the person relies on Foundry.
+  checks in `docs/model-providers.md`, section 6, before the person relies on Foundry.
 - **Not verified:** no request from this repo has reached a real Foundry
   endpoint; the failover was tested against fake servers only. One university's
   open questions are under `docs/illinois/`; none of them is answered there.
@@ -231,7 +230,7 @@ matching choice in part 5.
    - the Anthropic API or a Claude subscription (the default);
    - an endpoint that serves the Anthropic API, set with `ANTHROPIC_BASE_URL`;
    - Claude on Microsoft Foundry in the user's own Azure subscription
-     (`MODEL_PROVIDERS`, [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md)).
+     (`MODEL_PROVIDERS`, [`docs/model-providers.md`](./docs/model-providers.md)).
      Tested here against fake servers only; that page has the live checks.
 
    `MODEL_PROVIDERS` is an ordered list. A second entry is a backup, and it
@@ -296,7 +295,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   `MODEL_FAILOVER_COOLDOWN_MS` (all .env). Which model and how much reasoning:
   `NANOCLAW_AGENT_MODEL`, `NANOCLAW_GATE_MODEL`, `NANOCLAW_AGENT_EFFORT` (process).
 - *Detail:* policy question 1; "Safety items" (model endpoint, backup provider);
-  `docs/illinois/model-foundry.md`.
+  `docs/model-providers.md`.
 
 **2. Reply sensor: on or off, and which provider it uses**
 - *Plain words:* a second check that compares a reply with the facts that must
@@ -635,7 +634,7 @@ and say so.
   alert. The turn that hit the failure still fails and is retried. The state is
   in memory, the audit log has no per-turn provider field, and resuming a
   session on the other provider is untested. Do the live checks in
-  `docs/illinois/model-foundry.md` before the user relies on the backup.
+  `docs/model-providers.md` before the user relies on the backup.
 - **Sender caps exist only on email.** Telegram and web chat have no per-sender
   limit (`src/channels/sender-quota.ts` is called only from the email handler).
   Keep the chat allowlists short, and do not put an automated agent on a chat channel.

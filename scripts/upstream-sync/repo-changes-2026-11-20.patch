@@ -2869,6 +2869,319 @@ index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a44
 +    expect(counts).toEqual([2]);
    });
  });
+diff --git a/src/audit-log-email-sensor.test.ts b/src/audit-log-email-sensor.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b388397d76c0b201d067412acef9da29c5e1341
+--- /dev/null
++++ b/src/audit-log-email-sensor.test.ts
+@@ -0,0 +1,307 @@
++/**
++ * The reply sensor on email replies (SENSOR_EMAIL_REPLIES, off by default).
++ *
++ * The real sensor runs here with `fetch` mocked: no model endpoint is called.
++ * The audit log and the triage files are written in a temporary host-owned
++ * repository.
++ */
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++const CURRICULUM = `# Program Curriculum
++
++## Courses
++- CRS 554 (Core)
++- Applied Topics Studio (Draft, not yet approved as Core)
++`;
++const FILES: Record<string, string> = { 'program/curriculum.md': CURRICULUM };
++
++vi.mock('./repo-reader.js', async (importOriginal) => ({
++  ...(await importOriginal<typeof import('./repo-reader.js')>()),
++  getRepoReader: () => ({
++    refresh: () => ({ advanced: false, sha: 'stub-sha' }),
++    readFile: (relPath: string) => FILES[relPath] ?? null,
++    exists: (relPath: string) => relPath in FILES,
++  }),
++}));
++
++import {
++  flushAuditLog,
++  logOutboundEmail,
++  logOutboundEmailOnce,
++  logOutboundOnce,
++} from './audit-log.js';
++import { sensorEmailRepliesEnabled } from './behaviour-sensor.js';
++
++const mockFetch = vi.fn();
++vi.stubGlobal('fetch', mockFetch);
++
++function modelReply(text: string) {
++  return {
++    ok: true,
++    json: async () => ({ content: [{ type: 'text', text }] }),
++  };
++}
++
++const REPLY = 'Applied Topics Studio is a Core course in the program.';
++const REQUEST = 'Is Applied Topics Studio a Core course?';
++
++describe('reply sensor on email replies', () => {
++  let repo: string;
++
++  beforeEach(() => {
++    mockFetch.mockReset();
++    repo = fs.mkdtempSync(path.join(os.tmpdir(), 'email-sensor-'));
++    fs.mkdirSync(path.join(repo, '.git')); // checkout-fs refuses a non-checkout
++    vi.stubEnv('PROGRAM_HOST_REPO', repo);
++    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
++    vi.stubEnv('SENSOR_EMAIL_REPLIES', '');
++    vi.stubEnv('SENSOR_PROVIDER', '');
++    vi.stubEnv('MODEL_PROVIDERS', '');
++    vi.stubEnv('BEHAVIOUR_SENSOR_DISABLED', '');
++  });
++
++  afterEach(() => {
++    flushAuditLog();
++    vi.unstubAllEnvs();
++    fs.rmSync(repo, { recursive: true, force: true });
++  });
++
++  function audit(): string {
++    const dir = path.join(repo, 'discussions', 'audit-log');
++    return fs
++      .readdirSync(dir)
++      .map((file) => fs.readFileSync(path.join(dir, file), 'utf8'))
++      .join('\n');
++  }
++
++  function triage(): string {
++    const dir = path.join(repo, 'discussions', 'kb-triage');
++    if (!fs.existsSync(dir)) return '';
++    return fs
++      .readdirSync(dir)
++      .filter((name) => name.endsWith('.md'))
++      .map((file) => fs.readFileSync(path.join(dir, file), 'utf8'))
++      .join('\n');
++  }
++
++  /** The sensor runs after the entry is written; wait for its line. */
++  async function settled(): Promise<string> {
++    await vi.waitFor(() => {
++      expect(audit()).not.toContain('[sensor: pending:');
++    });
++    return audit();
++  }
++
++  function delivery(deliveryId = 'delivery-1') {
++    return {
++      deliveryId,
++      to: 'person@example.edu',
++      cc: 'colleague@example.edu, second@example.edu',
++      subject: 'Course question',
++      sourceGroup: 'program-email',
++      resendId: 'provider-1',
++      body: REPLY,
++    };
++  }
++  const reply = { replyText: REPLY, requestContext: REQUEST };
++
++  it('reads the setting as off unless it is 1, true or on', () => {
++    expect(sensorEmailRepliesEnabled()).toBe(false);
++    for (const value of ['0', 'false', 'off', 'yes']) {
++      vi.stubEnv('SENSOR_EMAIL_REPLIES', value);
++      expect(sensorEmailRepliesEnabled()).toBe(false);
++    }
++    for (const value of ['1', 'true', 'on', ' ON ']) {
++      vi.stubEnv('SENSOR_EMAIL_REPLIES', value);
++      expect(sensorEmailRepliesEnabled()).toBe(true);
++    }
++  });
++
++  it('off by default: an email reply makes no request and its entry has no sensor line', async () => {
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('written');
++    await new Promise((resolve) => setTimeout(resolve, 20));
++
++    expect(mockFetch).not.toHaveBeenCalled();
++    const out = audit();
++    expect(out).toContain('**[OUTBOUND EMAIL]** To: person@example.edu');
++    expect(out).toContain('**Delivery-ID:** delivery-1');
++    expect(out).not.toContain('[sensor:');
++    // The entry is the one written without the reply argument.
++    const withReply = out;
++    fs.rmSync(path.join(repo, 'discussions'), { recursive: true });
++    expect(logOutboundEmailOnce(delivery())).toBe('written');
++    const strip = (s: string) => s.replace(/^### \S+/gm, '###');
++    expect(strip(audit())).toBe(strip(withReply));
++  });
++
++  it('off by default: a chat reply is still checked', async () => {
++    mockFetch.mockResolvedValue(modelReply('PASS'));
++    expect(logOutboundOnce('tg-program@program', REPLY, 'outcome-chat')).toBe(
++      'written',
++    );
++    expect(await settled()).toContain('[sensor: pass]');
++    expect(mockFetch).toHaveBeenCalledTimes(1);
++  });
++
++  it('on: one evaluation per delivered reply, whatever the number of recipients, and the entry carries the verdict', async () => {
++    vi.stubEnv('SENSOR_EMAIL_REPLIES', '1');
++    mockFetch.mockResolvedValue(modelReply('PASS'));
++
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('written');
++    const out = await settled();
++
++    expect(mockFetch).toHaveBeenCalledTimes(1);
++    const [url, init] = mockFetch.mock.calls[0] as [string, { body: string }];
++    expect(url).toBe('https://api.anthropic.com/v1/messages');
++    const prompt = JSON.parse(init.body).messages[0].content as string;
++    expect(prompt).toContain(REPLY);
++    expect(prompt).toContain(REQUEST);
++    // The verdict line sits inside the email entry, before its Delivery-ID.
++    expect(out).toMatch(
++      /\*\*\[OUTBOUND EMAIL\]\*\*[\s\S]*\n\[sensor: pass\]\n\*\*Delivery-ID:\*\* delivery-1\n---/,
++    );
++    expect(triage()).toBe('');
++  });
++
++  it('on: a FAIL verdict files a triage report, as for chat', async () => {
++    vi.stubEnv('SENSOR_EMAIL_REPLIES', 'true');
++    mockFetch.mockResolvedValue(
++      modelReply('FAIL: Applied Topics is Draft, not Core | type: factual'),
++    );
++
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('written');
++    const out = await settled();
++
++    expect(out).toContain('[sensor: fail');
++    await vi.waitFor(() => expect(triage()).toContain(REPLY));
++    expect(triage()).toContain('Applied Topics is Draft, not Core');
++    expect(mockFetch).toHaveBeenCalledTimes(1);
++  });
++
++  it('on: a retry of the same delivery does not evaluate twice', async () => {
++    vi.stubEnv('SENSOR_EMAIL_REPLIES', '1');
++    mockFetch.mockResolvedValue(modelReply('PASS'));
++
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('written');
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('already-recorded');
++    await settled();
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('already-recorded');
++    await new Promise((resolve) => setTimeout(resolve, 20));
++
++    expect(mockFetch).toHaveBeenCalledTimes(1);
++    expect(audit().match(/\*\*\[OUTBOUND EMAIL\]\*\*/g)).toHaveLength(1);
++    expect(audit().match(/\[sensor: /g)).toHaveLength(1);
++  });
++
++  it('on: mail that is not a reply (send_email tool, operator alert, scheduled mail) is not evaluated', async () => {
++    vi.stubEnv('SENSOR_EMAIL_REPLIES', '1');
++
++    // These all reach the audit log through logOutboundEmail, with or
++    // without a delivery ID, and never with reply text.
++    logOutboundEmail({
++      ...delivery('alert-1'),
++      subject: '[ALERT] dead letter',
++      sourceGroup: 'operator-alert',
++    });
++    logOutboundEmail({
++      to: 'person@example.edu',
++      subject: 'Weekly reminder',
++      sourceGroup: 'scheduled-task',
++      resendId: 'provider-2',
++      body: REPLY,
++    });
++    await new Promise((resolve) => setTimeout(resolve, 20));
++
++    expect(mockFetch).not.toHaveBeenCalled();
++    expect(audit().match(/\*\*\[OUTBOUND EMAIL\]\*\*/g)).toHaveLength(2);
++    expect(audit()).not.toContain('[sensor:');
++  });
++
++  it('only the reply delivery path hands reply text to the email audit', () => {
++    const src = (name: string) =>
++      fs.readFileSync(path.join(process.cwd(), 'src', name), 'utf8');
++    // outbound-email.ts sends tool mail, alerts and scheduled mail.
++    expect(src('outbound-email.ts')).not.toContain('logOutboundEmailOnce');
++    expect(src('outbound-email.ts')).toMatch(/logOutboundEmail\(\{/);
++    // index.ts audits a delivered reply, and passes the gated reply text.
++    expect(src('index.ts')).toMatch(
++      /logOutboundEmailOnce\(\s*\{[\s\S]*?\},\s*(\/\/[^\n]*\n\s*)?\{ replyText: args\.replyText, requestContext: args\.inboundText \},\s*\)/,
++    );
++  });
++
++  it.each([
++    [
++      'a provider error',
++      () => mockFetch.mockRejectedValue(new Error('ECONNRESET')),
++    ],
++    [
++      'an HTTP 500',
++      () =>
++        mockFetch.mockResolvedValue({
++          ok: false,
++          status: 500,
++          text: async () => 'overloaded',
++        }),
++    ],
++    [
++      'a timeout',
++      () =>
++        mockFetch.mockRejectedValue(
++          Object.assign(new Error('aborted'), { name: 'AbortError' }),
++        ),
++    ],
++  ])(
++    'on: %s leaves the email audited and is recorded as a sensor error',
++    async (_name, arrange) => {
++      vi.stubEnv('SENSOR_EMAIL_REPLIES', '1');
++      arrange();
++
++      // The result the delivery path acts on does not depend on the sensor.
++      expect(logOutboundEmailOnce(delivery(), reply)).toBe('written');
++      const out = await settled();
++
++      expect(out).toContain('**[OUTBOUND EMAIL]** To: person@example.edu');
++      expect(out).toContain('[sensor: error: exception]');
++      expect(out).toContain('**Delivery-ID:** delivery-1');
++      expect(triage()).toBe('');
++    },
++  );
++
++  it('on: a missing credential is recorded and no request is made', async () => {
++    vi.stubEnv('SENSOR_EMAIL_REPLIES', '1');
++    vi.stubEnv('ANTHROPIC_API_KEY', '');
++
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('written');
++    const out = await settled();
++
++    expect(out).toContain('[sensor: error: no-api-key]');
++    expect(mockFetch).not.toHaveBeenCalled();
++  });
++
++  it('on: the sensor follows SENSOR_PROVIDER and makes no request elsewhere when its settings are missing', async () => {
++    vi.stubEnv('SENSOR_EMAIL_REPLIES', '1');
++    vi.stubEnv('SENSOR_PROVIDER', 'foundry');
++
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('written');
++    const out = await settled();
++
++    expect(out).toContain('[sensor: error: no-foundry-settings]');
++    expect(mockFetch).not.toHaveBeenCalled();
++  });
++
++  it('BEHAVIOUR_SENSOR_DISABLED=1 wins over SENSOR_EMAIL_REPLIES', async () => {
++    vi.stubEnv('SENSOR_EMAIL_REPLIES', '1');
++    vi.stubEnv('BEHAVIOUR_SENSOR_DISABLED', '1');
++
++    expect(logOutboundEmailOnce(delivery(), reply)).toBe('written');
++    const out = await settled();
++
++    expect(out).toContain('[sensor: disabled]');
++    expect(mockFetch).not.toHaveBeenCalled();
++    expect(triage()).toBe('');
++  });
++});
 diff --git a/src/audit-log.test.ts b/src/audit-log.test.ts
 index a17e57f62621e4dd387983b5f793e790640a80f1..4425df2e980134028d9987211d31e76cb551eb4b 100644
 --- a/src/audit-log.test.ts
@@ -2893,10 +3206,10 @@ index a17e57f62621e4dd387983b5f793e790640a80f1..4425df2e980134028d9987211d31e76c
      expect(
        logReplySuppressedOnce({
 diff --git a/src/audit-log.ts b/src/audit-log.ts
-index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..dfa6152cdc74a6ab52c78dae6ff54febce2b6f34 100644
+index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..3f71cef3b5118b780d5677856091faf9f804a22d 100644
 --- a/src/audit-log.ts
 +++ b/src/audit-log.ts
-@@ -4,10 +4,14 @@
+@@ -4,21 +4,32 @@
   * Appends every inbound message + agent response to daily log files
   * in the program-repo repo: discussions/audit-log/YYYY-MM-DD.md
   *
@@ -2912,7 +3225,10 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..dfa6152cdc74a6ab52c78dae6ff54feb
  
  import {
    makeSensorId,
-@@ -17,8 +21,14 @@ import {
+   placeholderFor,
+   runBehaviourSensor,
++  sensorEmailRepliesEnabled,
+ } from './behaviour-sensor.js';
  import { channelFromJid, webChatSessionIdFromJid } from './channel-utils.js';
  import { logger } from './logger.js';
  import { TIMEZONE } from './config.js';
@@ -2928,7 +3244,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..dfa6152cdc74a6ab52c78dae6ff54feb
  import { appendToCheckout, checkoutHasLine } from './checkout-fs.js';
  
  const COMMIT_INTERVAL = 5 * 60 * 1000; // Commit every 5 minutes
-@@ -27,12 +37,16 @@ let pendingWrites = 0;
+@@ -27,12 +38,16 @@ let pendingWrites = 0;
  let commitTimer: ReturnType<typeof setTimeout> | null = null;
  
  /**
@@ -2949,7 +3265,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..dfa6152cdc74a6ab52c78dae6ff54feb
  }
  
  /** Truncation cap for chat-entry bodies (inbound + outbound). */
-@@ -56,12 +70,9 @@ function appendAuditEntry(
+@@ -56,12 +71,9 @@ function appendAuditEntry(
    try {
      const dir = auditDir();
      const target = file ?? path.join(dir, `${localDateYmd(TIMEZONE)}.md`);
@@ -2965,7 +3281,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..dfa6152cdc74a6ab52c78dae6ff54feb
      pendingWrites++;
      scheduleCommit();
      return target;
-@@ -87,7 +98,7 @@ function inspectMarker(
+@@ -87,7 +99,7 @@ function inspectMarker(
      // avoids a full directory sweep on the event loop per call.
      // Read as the checkout owner: a planted FIFO or link in the
      // container-writable audit dir must not block or redirect a root read.
@@ -2974,7 +3290,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..dfa6152cdc74a6ab52c78dae6ff54feb
        ? 'recorded'
        : 'not-recorded';
    } catch (err) {
-@@ -137,11 +148,10 @@ async function appendAuditEntryOnceAsync(
+@@ -137,11 +149,10 @@ async function appendAuditEntryOnceAsync(
    return serializeAuditWrite(async () => {
      try {
        const dir = auditDir();
@@ -2988,7 +3304,66 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..dfa6152cdc74a6ab52c78dae6ff54feb
          target,
          [...lines, marker, '---', ''].join('\n'),
        );
-@@ -686,97 +696,68 @@ export function logTerminalCommit(args: {
+@@ -345,15 +356,55 @@ function outboundEmailLines(args: OutboundEmailAuditArgs): string[] {
+   ];
+ }
+ 
++/**
++ * What the reply sensor needs to check an email reply: the reply text the
++ * delivery gate accepted and the message it answers. Only the reply delivery
++ * path passes it; mail from the send_email tool, operator alerts and
++ * scheduled mail are not replies and are never checked (the chat path does
++ * not check its counterparts either).
++ */
++export interface EmailReplySensorInput {
++  replyText: string;
++  requestContext?: string;
++}
++
++/**
++ * `reply` is given for a delivered reply. With SENSOR_EMAIL_REPLIES on, the
++ * entry then carries a sensor line and the sensor runs once, after the entry
++ * is written: a retry of the same delivery finds the Delivery-ID and starts
++ * nothing. With the setting off (the default) the entry is unchanged and no
++ * request is made. The sensor never changes the result returned here.
++ */
+ export function logOutboundEmailOnce(
+   args: OutboundEmailAuditArgs & { deliveryId: string },
++  reply?: EmailReplySensorInput,
+ ): AuditWriteResult {
+   const marker = `**Delivery-ID:** ${singleLine(args.deliveryId, 200)}`;
+-  return appendAuditEntryOnce(
+-    marker,
+-    outboundEmailLines(args),
++  if (!reply || !sensorEmailRepliesEnabled()) {
++    return appendAuditEntryOnce(
++      marker,
++      outboundEmailLines(args),
++      'outbound-email',
++    );
++  }
++  const inspection = inspectMarker(marker);
++  if (inspection === 'recorded') return 'already-recorded';
++  if (inspection === 'inspection-failed') return 'write-failed';
++  const sensorId = makeSensorId(localTimeHms(TIMEZONE));
++  const file = appendAuditEntry(
++    [...outboundEmailLines(args), placeholderFor(sensorId), marker],
+     'outbound-email',
+   );
++  if (!file) return 'write-failed';
++  // Fire-and-forget, as for chat: the mail is already sent and audited.
++  runBehaviourSensor(
++    reply.replyText,
++    file,
++    sensorId,
++    undefined,
++    reply.requestContext,
++  ).catch((err) => logger.warn({ err }, 'Behaviour sensor: unhandled error'));
++  return 'written';
+ }
+ 
+ export function logOutboundEmail(args: OutboundEmailAuditArgs): void {
+@@ -686,97 +737,68 @@ export function logTerminalCommit(args: {
    );
  }
  
@@ -3454,7 +3829,7 @@ index 8c94adaa4057574c1d7c01353f62f3c5246eb03a..b6326177d8b4b82e76abdf80e8ef4ad1
    });
  
 diff --git a/src/behaviour-sensor.ts b/src/behaviour-sensor.ts
-index 9a18a264f903ae6593d5238a0a612223b4c7cce7..fd7edaceead07600c46362c5561a0e42c1d52fcb 100644
+index 9a18a264f903ae6593d5238a0a612223b4c7cce7..6cff6e46581c40d08bd6da2ec1ffcad3d00740ac 100644
 --- a/src/behaviour-sensor.ts
 +++ b/src/behaviour-sensor.ts
 @@ -29,9 +29,14 @@ import path from 'path';
@@ -3490,7 +3865,33 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..fd7edaceead07600c46362c5561a0e42
  }
  
  const PROMPT_TEMPLATE = `You are a skeptical fact-checker reviewing the outbound response an AI agent (Coordinator) just sent. Your only job is to detect failure modes. Do not rewrite, soften, or judge tone.
-@@ -206,7 +213,7 @@ function replacePlaceholder(
+@@ -184,6 +191,25 @@ export function shouldSkipSensor(replyText: string): boolean {
+   return false;
+ }
+ 
++/**
++ * Whether the sensor also checks email replies (SENSOR_EMAIL_REPLIES), off
++ * by default. Chat replies are always checked while the sensor is on. Turning
++ * this on sends the text of each delivered email reply, the start of the
++ * message it answers and ground-truth excerpts to the sensor's provider, so
++ * it is a choice and not a default. BEHAVIOUR_SENSOR_DISABLED=1 still turns
++ * every check off. Process environment first, then `.env`. Read on each call.
++ */
++export function sensorEmailRepliesEnabled(): boolean {
++  const value = (
++    process.env.SENSOR_EMAIL_REPLIES ||
++    readEnvFile(['SENSOR_EMAIL_REPLIES']).SENSOR_EMAIL_REPLIES ||
++    ''
++  )
++    .trim()
++    .toLowerCase();
++  return value === '1' || value === 'true' || value === 'on';
++}
++
+ export function makeSensorId(time: string): string {
+   const suffix = Math.random().toString(36).slice(2, 8);
+   return `${time}-${suffix}`;
+@@ -206,7 +232,7 @@ function replacePlaceholder(
    // The audit file lives in the container-writable checkout: read and write
    // it as the checkout owner, never root (a planted link to a root-only file
    // would otherwise be read, rewritten, and pushed to GitHub).
@@ -3499,7 +3900,7 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..fd7edaceead07600c46362c5561a0e42
    const content = readFromCheckout(root, file);
    if (content === null) return;
    const idx = content.lastIndexOf(placeholder);
-@@ -1044,6 +1051,8 @@ export function gRuleTag(res: { phantom: string[] }): string | null {
+@@ -1044,6 +1070,8 @@ export function gRuleTag(res: { phantom: string[] }): string | null {
   * CRS 572). extractCourseCodes matches any letters+digits pair, so only
   * codes whose PREFIX the canon itself uses are judged — "CRS 999" flags,
   * prose like "top 100" never does. Skips silently when canon unreadable.
@@ -3508,7 +3909,7 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..fd7edaceead07600c46362c5561a0e42
   */
  export function checkCourseCodeRefs(
    replyText: string,
-@@ -1078,18 +1087,101 @@ export function courseCodeTag(res: { unknown: string[] }): string | null {
+@@ -1078,18 +1106,101 @@ export function courseCodeTag(res: { unknown: string[] }): string | null {
      : null;
  }
  
@@ -3613,7 +4014,7 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..fd7edaceead07600c46362c5561a0e42
          'anthropic-version': '2023-06-01',
        },
        body: JSON.stringify({
-@@ -1101,7 +1193,9 @@ async function callSensorModel(
+@@ -1101,7 +1212,9 @@ async function callSensorModel(
      });
      if (!resp.ok) {
        const errText = await resp.text();
@@ -3624,7 +4025,7 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..fd7edaceead07600c46362c5561a0e42
      }
      const data = (await resp.json()) as AnthropicResponse;
      const text = data.content
-@@ -1333,17 +1427,17 @@ export async function evaluateBehaviourReply(
+@@ -1333,17 +1446,17 @@ export async function evaluateBehaviourReply(
      );
    }
  
@@ -3649,7 +4050,7 @@ index 9a18a264f903ae6593d5238a0a612223b4c7cce7..fd7edaceead07600c46362c5561a0e42
      );
    }
  
-@@ -1388,11 +1482,15 @@ export async function evaluateBehaviourReply(
+@@ -1388,11 +1501,15 @@ export async function evaluateBehaviourReply(
        cappedRequestContext(options.requestContext),
      );
      try {
@@ -10469,7 +10870,7 @@ index 0000000000000000000000000000000000000000..8d5ed4ff95e4e60490caee25e48a6e1e
 +  );
 +}
 diff --git a/src/index.ts b/src/index.ts
-index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011dab2598b49 100644
+index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7b25a284108f67fd38ee8704dde84b1c33d68da8 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -13,6 +13,12 @@ import {
@@ -10541,7 +10942,42 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    logger.error({ text }, 'Alert channel is not initialized');
    // Never resolve silently: an unsent alert must not look delivered to the
    // shortfall-replay layer, which deletes an alert only on confirmation.
-@@ -647,6 +661,9 @@ async function runAgent(
+@@ -583,18 +597,22 @@ function auditPreparedSent(args: SentAuditArgs): AuditWriteResult {
+             );
+             return 'write-failed' as const;
+           }
+-          return logOutboundEmailOnce({
+-            deliveryId: args.prepared.deliveryId,
+-            to: payload.email.to,
+-            cc: payload.email.cc,
+-            ...(payload.options.ccDroppedNote
+-              ? { ccDropped: payload.options.ccDroppedNote }
+-              : {}),
+-            subject: payload.email.subject,
+-            sourceGroup: payload.options.sourceGroup,
+-            resendId: args.providerId,
+-            body: stripMarkdown(payload.email.body),
+-          });
++          return logOutboundEmailOnce(
++            {
++              deliveryId: args.prepared.deliveryId,
++              to: payload.email.to,
++              cc: payload.email.cc,
++              ...(payload.options.ccDroppedNote
++                ? { ccDropped: payload.options.ccDroppedNote }
++                : {}),
++              subject: payload.email.subject,
++              sourceGroup: payload.options.sourceGroup,
++              resendId: args.providerId,
++              body: stripMarkdown(payload.email.body),
++            },
++            // Checked by the reply sensor only when SENSOR_EMAIL_REPLIES is on.
++            { replyText: args.replyText, requestContext: args.inboundText },
++          );
+         })();
+ 
+   if (auditResult === 'written') {
+@@ -647,6 +665,9 @@ async function runAgent(
      if (output.result !== null && output.result !== undefined) {
        sawUsableResult = true;
      }
@@ -10551,7 +10987,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
      if (onOutput) await onOutput(output);
    };
  
-@@ -689,6 +706,9 @@ async function runAgent(
+@@ -689,6 +710,9 @@ async function runAgent(
      .join('\n\n');
  
    try {
@@ -10561,7 +10997,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
      const imageAttachments =
        agentMode === 'normal' ? parseImageReferences(prompt) : [];
  
-@@ -866,6 +886,22 @@ function ensureContainerSystemRunning(): void {
+@@ -866,6 +890,22 @@ function ensureContainerSystemRunning(): void {
  }
  
  async function main(): Promise<void> {
@@ -10584,7 +11020,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    ensureContainerSystemRunning();
    initDatabase();
    logger.info('Database initialized');
-@@ -875,7 +911,7 @@ async function main(): Promise<void> {
+@@ -875,7 +915,7 @@ async function main(): Promise<void> {
    // Start credential proxy (containers route API calls through this)
    const proxyServer = await startCredentialProxy(
      CREDENTIAL_PROXY_PORT,
@@ -10593,7 +11029,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    );
  
    // Graceful shutdown handlers
-@@ -1028,7 +1064,10 @@ async function main(): Promise<void> {
+@@ -1028,7 +1068,10 @@ async function main(): Promise<void> {
    // fire-and-forget catch it themselves; the shortfall-alert replay layer needs
    // the rejection, because a swallowed failure there reads as a confirmed
    // delivery and drops the alert permanently (round-3 review P1).
@@ -10605,7 +11041,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
      const alertJid = resolveDeadLetterJid();
      const alertChannel = findChannel(channels, alertJid);
      if (!alertChannel) {
-@@ -1044,18 +1083,36 @@ async function main(): Promise<void> {
+@@ -1044,18 +1087,36 @@ async function main(): Promise<void> {
        throw new Error(`Alert delivery failed: ${outcome.reason}`);
      }
    };
@@ -10645,7 +11081,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011da
    /**
     * G46-gated send for non-streaming paths (scheduler forwards, IPC
     * messages): validates against the owning channel's declared profile.
-@@ -1149,6 +1206,13 @@ async function main(): Promise<void> {
+@@ -1149,6 +1210,13 @@ async function main(): Promise<void> {
      notify: (text) => sendDeadLetterAlert(text),
      logProblem: logDeliveryProblem,
    });
@@ -11800,10 +12236,10 @@ index 1bc7682f260e68f54a133d475b47d8a4a39a0b29..530293a3fccb64948f8adc22851f1d94
    it('a corrupt database file fails closed and is left byte-identical', async () => {
 diff --git a/src/outbound-email-retry-wake.test.ts b/src/outbound-email-retry-wake.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..47b114c0dabb54fad900d988356c66884d5a76df
+index 0000000000000000000000000000000000000000..21b225f87f6833a07e6e62207fe7ea09acad6f0a
 --- /dev/null
 +++ b/src/outbound-email-retry-wake.test.ts
-@@ -0,0 +1,465 @@
+@@ -0,0 +1,567 @@
 +/**
 + * The lane's wake timer for retryable rows (scheduleLaneRetry).
 + *
@@ -12075,7 +12511,7 @@ index 0000000000000000000000000000000000000000..47b114c0dabb54fad900d988356c6688
 +  });
 +
 +  it('a retryable row with no hold-off time (the exception path) is not left without a timer', async () => {
-+    // A send that throws is finalized as retryable with no next attempt time.
++    // A send that throws is finalized as retryable, with the backoff.
 +    mockFetch.mockReset();
 +    const realGet = store.get.bind(store);
 +    let throwOnce = true;
@@ -12100,7 +12536,11 @@ index 0000000000000000000000000000000000000000..47b114c0dabb54fad900d988356c6688
 +    });
 +    await vi.advanceTimersByTimeAsync(0);
 +    expect(realGet('thrown:0')).toMatchObject({ status: 'failed' });
-+    expect(realGet('thrown:0')!.nextAttemptAt).toBeUndefined();
++    // A throw is an attempt like any other: it gets the first backoff.
++    expect(realGet('thrown:0')).toMatchObject({ attempts: 1 });
++    expect(Date.parse(realGet('thrown:0')!.nextAttemptAt!)).toBe(
++      START + retryBackoffMs(1),
++    );
 +    expect(vi.getTimerCount()).toBe(1);
 +
 +    succeed();
@@ -12172,6 +12612,104 @@ index 0000000000000000000000000000000000000000..47b114c0dabb54fad900d988356c6688
 +// The same hole at the level of the two store queries, for both stores: after
 +// an empty claim, the "what is the lane waiting for" query must still return
 +// the row, whatever the clock did in between.
++describe('a send that throws counts against the attempt budget', () => {
++  /**
++   * A throw that escapes the send wrapper and reaches the queue's own catch.
++   * The wrapper turns a provider error into a retryable failure result, then
++   * reports the shortfall from its catch block; a throw from that report is
++   * what the queue sees as "the send threw". The dead-letter report, which has
++   * another reason, is left alone.
++   */
++  async function sendThrows(times = Infinity): Promise<void> {
++    const gate = await import('./delivery-gate.js');
++    let left = times;
++    vi.mocked(gate.reportDeliveryShortfall).mockImplementation((a) => {
++      if (a.reason.startsWith('send-exception') && left-- > 0) {
++        throw new Error('local error');
++      }
++    });
++    mockFetch.mockImplementation(() => {
++      throw new Error('bad payload');
++    });
++  }
++
++  it('a send that throws every time is attempted the budgeted number of times, with backoff between, then dead-letters', async () => {
++    await sendThrows();
++    const { reportDeliveryShortfall } = await import('./delivery-gate.js');
++    const first = await sendOutboundEmailResult(EMAIL, {
++      ...OPTIONS,
++      deliveryId: 'throw:dead',
++    });
++    expect(first).toMatchObject({ status: 'failed', retryable: true });
++    await vi.advanceTimersByTimeAsync(0);
++
++    const starts: number[] = [START];
++    for (let n = 1; n < MAX_OUTBOX_ATTEMPTS; n++) {
++      const row = store.get('throw:dead')!;
++      expect(row).toMatchObject({ status: 'failed', attempts: n });
++      // Held off for the backoff, not retried at the next stagger.
++      expect(Date.parse(row.nextAttemptAt!)).toBe(
++        Date.now() + retryBackoffMs(n),
++      );
++      await vi.advanceTimersByTimeAsync(retryBackoffMs(n) - 1);
++      expect(store.get('throw:dead')!.attempts).toBe(n);
++      await vi.advanceTimersByTimeAsync(1);
++      starts.push(Date.now());
++    }
++
++    expect(store.get('throw:dead')).toMatchObject({
++      status: 'dead-letter',
++      attempts: MAX_OUTBOX_ATTEMPTS,
++    });
++    expect(store.get('throw:dead')!.result).toMatchObject({
++      status: 'failed',
++      retryable: false,
++      reason: expect.stringContaining('outbox-max-attempts-exceeded'),
++    });
++    // The delays between attempts are the backoff schedule.
++    expect(starts.slice(1).map((t, i) => t - starts[i])).toEqual(
++      Array.from({ length: MAX_OUTBOX_ATTEMPTS - 1 }, (_, i) =>
++        retryBackoffMs(i + 1),
++      ),
++    );
++    // Same operator alert as the non-throwing path.
++    expect(reportDeliveryShortfall).toHaveBeenCalledWith(
++      expect.objectContaining({
++        reason: expect.stringContaining('outbox-max-attempts-exceeded'),
++      }),
++    );
++    expect(vi.getTimerCount()).toBe(0);
++    // No further attempts after the dead letter.
++    const calls = mockFetch.mock.calls.length;
++    expect(calls).toBe(MAX_OUTBOX_ATTEMPTS);
++    await vi.advanceTimersByTimeAsync(10 * 60_000);
++    expect(mockFetch.mock.calls.length).toBe(calls);
++  });
++
++  it('a send that throws once and then succeeds is delivered on the second attempt after the first backoff', async () => {
++    await sendThrows(1);
++    const first = await sendOutboundEmailResult(EMAIL, {
++      ...OPTIONS,
++      deliveryId: 'throw:once',
++    });
++    expect(first).toMatchObject({ status: 'failed', retryable: true });
++    await vi.advanceTimersByTimeAsync(0);
++    expect(store.get('throw:once')).toMatchObject({
++      status: 'failed',
++      attempts: 1,
++    });
++    succeed();
++
++    await vi.advanceTimersByTimeAsync(retryBackoffMs(1) - 1);
++    expect(store.get('throw:once')!.status).toBe('failed');
++    await vi.advanceTimersByTimeAsync(1);
++    expect(store.get('throw:once')).toMatchObject({
++      status: 'sent',
++      attempts: 2,
++    });
++  });
++});
++
 +describe.each<[string, () => OutboxStore]>([
 +  ['memory', () => new MemoryOutboxStore()],
 +  [
@@ -12270,7 +12808,7 @@ index 0000000000000000000000000000000000000000..47b114c0dabb54fad900d988356c6688
 +  });
 +});
 diff --git a/src/outbound-email.ts b/src/outbound-email.ts
-index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..0d5c13ab35559be1e9838991a908a70d4b580222 100644
+index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..94063f60a96ec90d51739ba16cd25ddac35b4c31 100644
 --- a/src/outbound-email.ts
 +++ b/src/outbound-email.ts
 @@ -28,6 +28,7 @@ import {
@@ -12290,7 +12828,41 @@ index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..0d5c13ab35559be1e9838991a908a70d
    const plainText = stripMarkdown(gatedBody);
  
    const providerDeadlineMs = getProviderTimeoutMs();
-@@ -1247,6 +1248,8 @@ function enqueue(outbox: OutboxStore, row: OutboxRow): void {
+@@ -1160,7 +1161,32 @@ async function processRow(
+       reason: `send-queue-exception: ${err instanceof Error ? err.message : String(err)}`,
+       retryable: true,
+     };
+-    outbox.finalize(row.deliveryId, result, nowMs());
++    // A throw is an attempt like a retryable failure result: it counts against
++    // the same budget and gets the same backoff, and the last one dead-letters
++    // the row. Only a row this process still holds claimed is counted; one that
++    // is already terminal or released (finalize would no-op) is left alone.
++    // The queue has no abort signal, and shutdown resets claims instead of
++    // throwing, so no throw is exempt.
++    let stored: OutboxRow | undefined;
++    try {
++      stored = outbox.get(row.deliveryId);
++    } catch {
++      stored = undefined;
++    }
++    const attempts = ((stored ?? row).attempts ?? 0) + 1;
++    if (stored?.status === 'claimed' && attempts >= MAX_OUTBOX_ATTEMPTS) {
++      return await deadLetterRow(
++        outbox,
++        stored,
++        `outbox-max-attempts-exceeded: ${result.reason}`,
++      );
++    }
++    outbox.finalize(
++      row.deliveryId,
++      result,
++      nowMs(),
++      nowMs() + retryBackoffMs(attempts),
++    );
+     resolveWaiters(row.deliveryId, result);
+     return result;
+   } finally {
+@@ -1247,6 +1273,8 @@ function enqueue(outbox: OutboxStore, row: OutboxRow): void {
      .catch((err) => {
        logger.error({ err, lane }, 'Outbound email lane tail error');
        laneQueue.inFlight.delete(row.deliveryId);
@@ -12299,7 +12871,7 @@ index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..0d5c13ab35559be1e9838991a908a70d
      });
  }
  
-@@ -1276,33 +1279,65 @@ function enqueueNextPending(lane: OutboxLane, outbox: OutboxStore): void {
+@@ -1276,33 +1304,65 @@ function enqueueNextPending(lane: OutboxLane, outbox: OutboxStore): void {
  const laneRetryTimers = new Map<OutboxLane, ReturnType<typeof setTimeout>>();
  
  /**
@@ -12381,7 +12953,7 @@ index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..0d5c13ab35559be1e9838991a908a70d
  }
  
  function ensureQueueStarted(): void {
-@@ -1325,7 +1360,7 @@ function ensureQueueStarted(): void {
+@@ -1325,7 +1385,7 @@ function ensureQueueStarted(): void {
    outbox.compact(getOutboxRetentionMs(), now);
    lastCompactionAt = now;
  

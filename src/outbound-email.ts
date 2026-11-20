@@ -1308,7 +1308,32 @@ async function processRow(
       reason: `send-queue-exception: ${err instanceof Error ? err.message : String(err)}`,
       retryable: true,
     };
-    outbox.finalize(row.deliveryId, result, nowMs());
+    // A throw is an attempt like a retryable failure result: it counts against
+    // the same budget and gets the same backoff, and the last one dead-letters
+    // the row. Only a row this process still holds claimed is counted; one that
+    // is already terminal or released (finalize would no-op) is left alone.
+    // The queue has no abort signal, and shutdown resets claims instead of
+    // throwing, so no throw is exempt.
+    let stored: OutboxRow | undefined;
+    try {
+      stored = outbox.get(row.deliveryId);
+    } catch {
+      stored = undefined;
+    }
+    const attempts = ((stored ?? row).attempts ?? 0) + 1;
+    if (stored?.status === 'claimed' && attempts >= MAX_OUTBOX_ATTEMPTS) {
+      return await deadLetterRow(
+        outbox,
+        stored,
+        `outbox-max-attempts-exceeded: ${result.reason}`,
+      );
+    }
+    outbox.finalize(
+      row.deliveryId,
+      result,
+      nowMs(),
+      nowMs() + retryBackoffMs(attempts),
+    );
     resolveWaiters(row.deliveryId, result);
     return result;
   } finally {

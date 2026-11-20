@@ -128,9 +128,17 @@ export interface OutboxStore {
   ): OutboxRow | undefined;
 
   /**
-   * Epoch ms of the earliest not-yet-claimable retry in a lane, if any. Lets
-   * the lane schedule its own wake-up instead of stalling until a restart or
-   * the next unrelated send.
+   * Epoch ms at which the earliest pending or retryable row in a lane is
+   * claimable, if the lane holds one. Lets the lane schedule its own wake-up
+   * instead of stalling until a restart or the next unrelated send.
+   *
+   * There is no lower bound on purpose. The caller asks only after a claim
+   * came back empty, and a row can be claimable by now all the same: the
+   * clock moved between the two calls, or the claim excluded the row. So a
+   * time at or before `now` is a valid answer, and a row with no hold-off
+   * time counts as claimable at `now`. With a lower bound of `now` this and
+   * the claim (`next_attempt_at <= now`) could both miss the same row, and
+   * the lane was then left with a retryable row and no wake-up.
    */
   nextRetryAt(lane: OutboxLane, now: number): number | undefined;
 
@@ -380,9 +388,9 @@ export class MemoryOutboxStore implements OutboxStore {
   }
 
   nextRetryAt(lane: OutboxLane, now: number): number | undefined {
-    const times = this.listPending(lane)
-      .filter((r) => r.nextAttemptAt && Date.parse(r.nextAttemptAt) > now)
-      .map((r) => Date.parse(r.nextAttemptAt!));
+    const times = this.listPending(lane).map((r) =>
+      r.nextAttemptAt ? Date.parse(r.nextAttemptAt) : now,
+    );
     return times.length ? Math.min(...times) : undefined;
   }
 
@@ -637,11 +645,10 @@ export class SqliteOutboxStore implements OutboxStore {
     const row = this.db
       .prepare(
         `
-        SELECT MIN(next_attempt_at) AS next FROM outbound_email_outbox
+        SELECT MIN(COALESCE(next_attempt_at, @now_iso)) AS next
+        FROM outbound_email_outbox
         WHERE lane = @lane
           AND (status = 'pending' OR (status = 'failed' AND retryable = 1))
-          AND next_attempt_at IS NOT NULL
-          AND next_attempt_at > @now_iso
       `,
       )
       .get({ lane, now_iso: toIsoString(now) }) as

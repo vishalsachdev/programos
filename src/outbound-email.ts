@@ -1248,6 +1248,8 @@ function enqueue(outbox: OutboxStore, row: OutboxRow): void {
     .catch((err) => {
       logger.error({ err, lane }, 'Outbound email lane tail error');
       laneQueue.inFlight.delete(row.deliveryId);
+      // The claim above threw, so nothing was enqueued and no wake was set.
+      scheduleLaneRetry(lane, outbox);
     });
 }
 
@@ -1277,33 +1279,65 @@ function enqueueNextPending(lane: OutboxLane, outbox: OutboxStore): void {
 const laneRetryTimers = new Map<OutboxLane, ReturnType<typeof setTimeout>>();
 
 /**
- * Wake the lane when the earliest backed-off retry becomes claimable. Without
- * this a retryable row waits for an unrelated send or a restart, which is the
- * same stall the exclusion above fixes, one step later.
+ * Shortest wait before a wake. A row that is claimable already is retried
+ * after this, so a wake whose claim finds nothing cannot spin.
+ */
+const LANE_RETRY_MIN_DELAY_MS = 10;
+/** Wait before the lane looks again after the outbox could not be read. */
+const LANE_RETRY_ERROR_DELAY_MS = 5_000;
+
+function armLaneRetryTimer(
+  lane: OutboxLane,
+  outbox: OutboxStore,
+  delayMs: number,
+): void {
+  const existing = laneRetryTimers.get(lane);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    laneRetryTimers.delete(lane);
+    if (shuttingDown) return;
+    try {
+      enqueueNextPending(lane, outbox);
+    } catch (err) {
+      // A throw here would escape the timer and leave the lane with no wake.
+      logger.error({ err, lane }, 'Outbound email lane wake failed');
+      armLaneRetryTimer(lane, outbox, LANE_RETRY_ERROR_DELAY_MS);
+    }
+  }, delayMs);
+  timer.unref?.();
+  laneRetryTimers.set(lane, timer);
+}
+
+/**
+ * Wake the lane when its earliest pending or retryable row is claimable.
+ * Without this a retryable row waits for an unrelated send or a restart,
+ * which is the same stall the exclusion above fixes, one step later.
+ *
+ * Called whenever a claim came back empty. The rule it keeps: a lane that
+ * holds a pending or retryable row and has nothing in flight has a timer.
+ * So the row need not be due in the future. A timer can fire a millisecond
+ * before the row is due, and the row the lane has just finished with is
+ * excluded from the claim although its backoff may have ended during the
+ * stagger; in both cases the claim is empty and the row is claimable at or
+ * before now. The wake is then set to the shortest delay.
  */
 function scheduleLaneRetry(lane: OutboxLane, outbox: OutboxStore): void {
   if (shuttingDown) return;
+  const now = nowMs();
   let due: number | undefined;
   try {
-    due = outbox.nextRetryAt(lane, nowMs());
+    due = outbox.nextRetryAt(lane, now);
   } catch (err) {
     logger.error({ err, lane }, 'Could not read the next outbox retry time');
+    // Whether a row is waiting is unknown: look again, unless a wake is set.
+    if (!laneRetryTimers.has(lane)) {
+      armLaneRetryTimer(lane, outbox, LANE_RETRY_ERROR_DELAY_MS);
+    }
     return;
   }
   if (due === undefined) return;
 
-  const existing = laneRetryTimers.get(lane);
-  if (existing) clearTimeout(existing);
-  const timer = setTimeout(
-    () => {
-      laneRetryTimers.delete(lane);
-      if (shuttingDown) return;
-      enqueueNextPending(lane, outbox);
-    },
-    Math.max(1, due - nowMs()),
-  );
-  timer.unref?.();
-  laneRetryTimers.set(lane, timer);
+  armLaneRetryTimer(lane, outbox, Math.max(LANE_RETRY_MIN_DELAY_MS, due - now));
 }
 
 function ensureQueueStarted(): void {

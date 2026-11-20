@@ -40,6 +40,12 @@ import path from 'path';
 
 import { protectedGovernanceRule } from './governance-protection.js';
 import { BOT_GIT_AUTHOR_EMAIL } from './instance-identity.js';
+import {
+  hasOriginCredential,
+  originCredentialEnv,
+  redactOriginCredential,
+  splitOriginCredential,
+} from './origin-credential.js';
 import { logger } from './logger.js';
 import { CHECKOUT_OWNER, getProgramRepoPath } from './program-repo.js';
 import {
@@ -123,14 +129,15 @@ export function isPlainGitUrl(url: string): boolean {
   );
 }
 
+/** The last origin read from the settings, as set. For redaction only. */
+let lastOriginAsSet = '';
+
 /**
- * The origin the host fetches from and pushes to. It comes from the host's
- * own settings only: PROGRAM_ORIGIN_URL, or else the origin of the read
- * mirror (a host-owned repository). Never from the checkout, whose config the
- * agent can write. When PROGRAM_ORIGIN_PATTERN is set the URL must match it.
- * Null when the host has no origin (a development run, the tests).
+ * The origin as the host's settings give it, credential included. Private to
+ * this module: the value may hold a token, so it goes to git's environment
+ * (hostGitEnv) and nowhere else.
  */
-export function expectedOriginUrl(): { url: string | null; problem?: string } {
+function originAsSet(): { url: string | null; problem?: string } {
   let url = process.env.PROGRAM_ORIGIN_URL || '';
   let source = 'PROGRAM_ORIGIN_URL';
   if (!url) {
@@ -149,7 +156,26 @@ export function expectedOriginUrl(): { url: string | null; problem?: string } {
       url: null,
       problem: `the origin from ${source} does not match PROGRAM_ORIGIN_PATTERN`,
     };
+  lastOriginAsSet = url;
   return { url };
+}
+
+/**
+ * The origin the host fetches from and pushes to. It comes from the host's
+ * own settings only: PROGRAM_ORIGIN_URL, or else the origin of the read
+ * mirror (a host-owned repository). Never from the checkout, whose config the
+ * agent can write. When PROGRAM_ORIGIN_PATTERN is set the URL as set must
+ * match it. Null when the host has no origin (a development run, the tests).
+ *
+ * The URL returned holds no credential: a user name, password or token
+ * written in the setting is taken out (origin-credential.ts), so the value
+ * may be stored in the host repo's config, put on a command line or logged.
+ * Credentialed git gets the credential through its environment.
+ */
+export function expectedOriginUrl(): { url: string | null; problem?: string } {
+  const origin = originAsSet();
+  if (!origin.url) return origin;
+  return { url: splitOriginCredential(origin.url).bare };
 }
 
 // ── running git ─────────────────────────────────────────────────────────
@@ -226,6 +252,10 @@ export function hostGitEnv(mode: HostGitMode): NodeJS.ProcessEnv {
     env.HOME = CHECKOUT_OWNER.home;
     for (const key of CREDENTIAL_ENV)
       if (process.env[key]) env[key] = process.env[key];
+    // A credential written in the origin setting: the host repo's config and
+    // every command line name the origin without it, and git puts it back
+    // from here. Only a process of the same user (or root) can read this.
+    Object.assign(env, originCredentialEnv(originAsSet().url));
   } else {
     env.HOME = '/nonexistent';
     env.XDG_CONFIG_HOME = '/nonexistent';
@@ -273,9 +303,18 @@ export interface GitError extends Error {
   code?: number | string | null;
 }
 
+/**
+ * What git or Node said, for a log line, an alert or a result. Git hides a
+ * password in most messages but not in all ("could not read Password for
+ * 'https://<user>@host'"), and Node's "Command failed: ..." quotes the whole
+ * command line, so every form of the origin's credential is taken out here.
+ */
 function errorText(err: unknown): string {
   const e = err as GitError;
-  return String(e?.stderr || e?.message || err)
+  return redactOriginCredential(String(e?.stderr || e?.message || err), [
+    process.env.PROGRAM_ORIGIN_URL,
+    lastOriginAsSet,
+  ])
     .trim()
     .slice(0, 500);
 }
@@ -360,6 +399,81 @@ function mkdirOwned(dir: string): void {
   if (isRoot()) fs.chownSync(dir, CHECKOUT_OWNER.uid, CHECKOUT_OWNER.gid);
 }
 
+/** Set the mode of a path the host owns; a failure is logged, not thrown. */
+function makePrivate(target: string, mode: number): void {
+  try {
+    fs.chmodSync(target, mode);
+  } catch (err) {
+    logger.error(
+      { err: errorText(err), path: target },
+      'Host repo: could not make this path private to its owner',
+    );
+  }
+}
+
+/** Host repos already made private and checked by this process. */
+const securedHostRepos = new Set<string>();
+
+/**
+ * Make the host repo private to its owner and take any credential out of its
+ * stored origin. Runs once per process for a repo that exists, so the first
+ * start after an upgrade repairs a repo made by an earlier version:
+ *
+ *  - the folder becomes mode 0700 and `.git/config` 0600 (an earlier version
+ *    created them 0755 and 0644 under the usual umask, and the config could
+ *    hold the origin's token);
+ *  - a `remote.origin.url` with a user name, password or token is rewritten
+ *    without it. The credential now reaches git through its environment.
+ *
+ * The container is not affected: it mounts `.git/objects` and the export,
+ * never this folder or its config. A failure here is logged and is not
+ * fatal; the sync's own check (ensureOriginRemote) repeats the rewrite.
+ */
+function secureHostRepo(): void {
+  const host = getHostRepoPath();
+  if (securedHostRepos.has(host)) return;
+  const targets: Array<[string, number]> = [
+    [host, 0o700],
+    [path.join(host, '.git', 'config'), 0o600],
+  ];
+  try {
+    for (const [target, mode] of targets) {
+      const st = fs.lstatSync(target);
+      if (st.isSymbolicLink() || (st.mode & 0o077) === 0) continue;
+      fs.chmodSync(target, mode);
+      logger.warn(
+        { path: target, was: (st.mode & 0o777).toString(8) },
+        'Host repo: was readable by other users of this machine; now private to its owner',
+      );
+    }
+    let stored = '';
+    try {
+      stored = gitSync(['config', '--get', 'remote.origin.url']).trim();
+    } catch {
+      /* no origin stored yet */
+    }
+    if (hasOriginCredential(stored)) {
+      gitSync([
+        'config',
+        'remote.origin.url',
+        splitOriginCredential(stored).bare,
+      ]);
+      logger.warn(
+        { host },
+        'Host repo: the stored origin URL held a credential; it was rewritten without it. ' +
+          'The credential is now read from the origin setting at each fetch and push. ' +
+          'Treat the old token as exposed if other people have accounts on this machine, and replace it.',
+      );
+    }
+    securedHostRepos.add(host);
+  } catch (err) {
+    logger.error(
+      { err: errorText(err), host },
+      'Host repo: could not make the repository private or check its stored origin',
+    );
+  }
+}
+
 function writeOwned(file: string, content: string): void {
   const tmp = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, content);
@@ -393,12 +507,19 @@ export function ensureHostRepo(): void {
   // "the host repo" could be the agent's checkout itself.
   const problem = hostRepoPlacementProblem();
   if (problem) throw new Error(`host repo refused: ${problem}`);
-  if (hostRepoExists()) return;
+  if (hostRepoExists()) {
+    secureHostRepo();
+    return;
+  }
   const host = getHostRepoPath();
   // A test fixture may provide a bare ".git" folder with nothing in it.
   if (fs.existsSync(path.join(host, '.git'))) return;
   mkdirOwned(host);
+  // Private from the first moment, whatever the umask: git creates the
+  // config inside a folder no other user can enter.
+  makePrivate(host, 0o700);
   gitSync(['init', '-q', '--template=', host], LOCAL, host);
+  makePrivate(path.join(host, '.git', 'config'), 0o600);
   gitSync(['symbolic-ref', 'HEAD', BRANCH_REF]);
   for (const [key, value] of [
     ['core.symlinks', 'false'],
@@ -623,6 +744,8 @@ let probeCache: ProbeResult | null = null;
 /** Test hook: forget the cached probe result. */
 export function _resetHostRepoStateForTests(): void {
   probeCache = null;
+  securedHostRepos.clear();
+  lastOriginAsSet = '';
   alerted.clear();
   alerter = null;
   queue = Promise.resolve();
@@ -910,6 +1033,9 @@ async function ensureOriginRemote(url: string, budget: Budget): Promise<void> {
   } catch {
     /* not set yet */
   }
+  // `url` holds no credential (expectedOriginUrl), so neither does this
+  // command line nor the config it writes. A stored URL that still has one
+  // differs from `url` and is replaced here.
   if (current === url) return;
   await gitAsync(['config', 'remote.origin.url', url], LOCAL, t());
   await gitAsync(

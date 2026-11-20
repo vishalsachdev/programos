@@ -26,7 +26,10 @@ import {
 import { parseActionItemSections } from './behaviour-sensor.js';
 import { syncKnowledgeBase } from './audit-log.js';
 import { buildOutreachRecipientRoster } from './outreach-recipient-roster.js';
-import { buildExceptionsReport } from './exceptions-report.js';
+import {
+  buildExceptionsReport,
+  EXCEPTIONS_REPORT_LOOKBACK_MS,
+} from './exceptions-report.js';
 import { getRepoReader } from './repo-reader.js';
 import {
   maskRoutedActionItems,
@@ -334,7 +337,7 @@ async function runTask(
   if (needsEvalReport) {
     try {
       const since = new Date(
-        Date.now() - 7 * 24 * 60 * 60 * 1000,
+        Date.now() - EXCEPTIONS_REPORT_LOOKBACK_MS,
       ).toISOString();
       const report = exportEvalReport(since);
       writeIpcFile(task.group_folder, 'eval_report.md', report);
@@ -357,7 +360,7 @@ async function runTask(
   if (needsExceptionsReport) {
     try {
       const since = new Date(
-        Date.now() - 7 * 24 * 60 * 60 * 1000,
+        Date.now() - EXCEPTIONS_REPORT_LOOKBACK_MS,
       ).toISOString();
       const workingContextEntries = await loadWorkingContextAsync(
         resolveAdminUserKey(),

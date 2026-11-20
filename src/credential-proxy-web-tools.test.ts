@@ -256,6 +256,29 @@ describe('credential proxy, web tools off', () => {
     expect(anthropicSeen).toHaveLength(2);
   });
 
+  it('refuses a path that is not on the list, and logs it once without the token', async () => {
+    await start();
+    for (let i = 0; i < 2; i++) {
+      const byHeader = await send(port, '/v1/code/sessions', '{}', {
+        'x-nanoclaw-proxy-token': anthropicToken,
+        authorization: 'Bearer placeholder',
+      });
+      expect(byHeader.status).toBe(403);
+      const byPath = await send(
+        port,
+        `/_t/${foundryToken}/anthropic/v1/files`,
+        '--b\r\n',
+      );
+      expect(byPath.status).toBe(403);
+    }
+    expect(anthropicSeen).toEqual([]);
+    expect(foundrySeen).toEqual([]);
+    const logged = vi
+      .mocked(logger.warn)
+      .mock.calls.map((c) => (c[0] as { pathClass?: string }).pathClass);
+    expect(logged).toEqual(['/v1/code/sessions', '/anthropic/v1/files']);
+  });
+
   it('keeps the OAuth key exchange and requests with no body working', async () => {
     await start({
       ANTHROPIC_API_KEY: '',

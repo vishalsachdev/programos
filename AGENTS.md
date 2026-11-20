@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,066 passing tests (1,761 from the source, 305 added here). One timing test
+   is 2,068 passing tests (1,761 from the source, 307 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -554,8 +554,11 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   (process; the Docker network's name, default `nanoclaw-agents`; change it only
   if the name is taken); `CREDENTIAL_PROXY_HOST` (process; used on the open
   network only).
-- *Not tested:* no real agent turn has run on the restricted network, and the
-  proxy's refusals have run against fake servers only. `restricted` is not
+- *Not tested:* no agent turn has run against a real model provider on the
+  restricted network. On 2026-11-20 real agent containers on that network
+  completed a turn against a local stand-in for the provider (API-key mode and
+  OAuth mode); the proxy's refusals have run against stand-ins only. Foundry was
+  not run in a container. `restricted` is not
   verified on Docker Desktop or on Docker older than 29. First start, step 9,
   checks the network on the machine in use.
 - *Detail:* "Safety items"; First start, step 9; `SPEC.md` sections 2 and 11;
@@ -734,11 +737,14 @@ and say so.
   web search or web fetch tool, a remote MCP server (`mcp_servers`, `mcp_toolset`), an
   image or document given as a URL, and the managed agents API (`/v1/agents`,
   `/v1/sessions`, `/v1/environments`). On a model path it also refuses a body it
-  cannot read as JSON, or one with a content encoding. Limits: the list was drawn
-  from the type definitions of the pinned SDK, not from a live provider; a tool type
-  the proxy does not know is forwarded with one warning in the host log; and other
-  paths on the provider's host are forwarded (each logged once), so the proxy is not
-  an allowlist of what the agent may ask the provider. ASK before you turn web tools on.
+  cannot read as JSON, or one with a content encoding. It forwards only the model
+  paths (`/v1/messages` and below, `/v1/complete`), the model list and the OAuth key
+  exchange; any other path on the provider's host is refused and named once in the
+  host log. Limits: the refused features were read from the type definitions of the
+  pinned SDK, not seen at a live provider; and a tool type the proxy does not know is
+  forwarded with one warning in the host log, so tool types are not an allowlist. If
+  an agent turn fails with "Refused by this deployment", read the host log for the
+  reason before you change a setting. ASK before you turn web tools on.
 - **Mounts:** `config-examples/mount-allowlist.json` must list only the program repo. The email group is not the main group and it must write to the program repo in status-update mode, so `nonMainReadOnly` is `false` in the example. Keep the web chat group's own mount read-only in its group registration.
 - **Protected files are guarded for the agent's file-editing tools only.** `container/agent-runner/src/protected-write-guard.ts` blocks Write, Edit and NotebookEdit on protected paths. It does not inspect shell commands. The git-author check in `src/governance-protection.ts` is the second line. Do not describe this to the user as a hard block.
 - **Known gaps inherited from the source** (reported there): the conflict-check skill tells the agent to notify the admin with a Telegram tool that is not registered; two prompts and that skill disagree on how to record an uncorroborated spreadsheet fact (the skill is stricter: it goes to open questions); `groups/main/CLAUDE.md` is mostly upstream framework text.

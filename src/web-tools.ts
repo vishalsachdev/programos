@@ -56,10 +56,18 @@ export function webToolsEnabled(): boolean {
  *   `/v1/environments`): the provider runs an agent in its own container
  *   with its own network and web tools, and its `agent_toolset` tool.
  *
- * A tool type that is not known here is allowed and reported once, so an
- * operator can see it. A strict allowlist of tool types and of paths would
+ * Paths are an allowlist. The provider's host serves far more than model
+ * requests (the CLI in the agent image names well over a hundred paths), and
+ * the proxy adds the host's credential to whatever it forwards. Real agent
+ * containers run against a local fake provider on 2026-11-20, in API-key
+ * mode and in OAuth mode, sent only `POST /v1/messages`. Forwarded: the model
+ * paths, the model list, and the OAuth key exchange. Everything else is
+ * refused and logged once per path.
+ *
+ * Tool types are not an allowlist. A tool type that is not known here is
+ * allowed and reported once, so an operator can see it. An allowlist would
  * be stronger; it is not used because a wrong entry would refuse every agent
- * turn, and no live turn has been run to draw the list from.
+ * turn, and no turn against a live provider has been run to draw it from.
  */
 export interface ProxyRequestInput {
   /** Path and query as the proxy will send them (no token prefix). */
@@ -76,10 +84,13 @@ export type ProxyRequestVerdict =
       body: Buffer;
       /** Tool types that are not known to this check. */
       unknownToolTypes: string[];
-      /** True for a path that is neither a model path nor refused. */
-      otherPath: boolean;
     }
-  | { allow: false; reason: string };
+  | {
+      allow: false;
+      reason: string;
+      /** Set when the path is not on the list: its first segments. */
+      pathClass?: string;
+    };
 
 const WEB_TOOL_TYPE = /^web_(search|fetch)/;
 /** Tools the caller runs itself, or that stay inside the provider. */
@@ -90,7 +101,12 @@ const MODEL_PATHS = new Set(['messages', 'complete']);
 const PLAIN_SEGMENT = /^[A-Za-z0-9._~:@-]+$/;
 const MAX_DEPTH = 256;
 
-type PathKind = 'model' | 'managed-agents' | 'other' | 'malformed';
+type PathKind =
+  | 'model'
+  | 'listed'
+  | 'managed-agents'
+  | 'unlisted'
+  | 'malformed';
 
 /** Classify the path part of a request URL. The query is ignored. */
 export function classifyProxyPath(url: string): PathKind {
@@ -102,18 +118,32 @@ export function classifyProxyPath(url: string): PathKind {
   // a percent escape, is not: the provider may route it differently.
   if (segments.length > 1 && segments[segments.length - 1] === '')
     segments.pop();
-  if (segments.length === 1 && segments[0] === '') return 'other';
+  if (segments.length === 1 && segments[0] === '') return 'unlisted';
   for (const s of segments) {
     if (!PLAIN_SEGMENT.test(s) || s === '.' || s === '..') return 'malformed';
   }
   const lower = segments.map((s) => s.toLowerCase());
-  let kind: PathKind = 'other';
+  // The OAuth key exchange (see the header of src/credential-proxy.ts) and
+  // the connectivity check, at the root of the Anthropic host only.
+  const head = lower.slice(0, 3).join('/');
+  let kind: PathKind =
+    head === 'api/oauth/claude_cli' || lower.join('/') === 'api/hello'
+      ? 'listed'
+      : 'unlisted';
+  // A base path may come first (ANTHROPIC_BASE_URL, Foundry), so `v1` is
+  // looked for at any position.
   for (let i = 0; i + 1 < lower.length; i++) {
     if (lower[i] !== 'v1') continue;
     if (MANAGED_AGENT_PATHS.has(lower[i + 1])) return 'managed-agents';
     if (MODEL_PATHS.has(lower[i + 1])) kind = 'model';
+    else if (lower[i + 1] === 'models' && kind !== 'model') kind = 'listed';
   }
   return kind;
+}
+
+/** The first segments of a plain path, for the log. */
+function pathClassOf(url: string): string {
+  return url.split('?')[0].split('/').slice(0, 4).join('/').slice(0, 120);
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -185,6 +215,12 @@ export function checkProxyRequest(
       allow: false,
       reason: 'the managed agents API runs tools with their own network',
     };
+  if (kind === 'unlisted')
+    return {
+      allow: false,
+      reason: 'the path is not one an agent turn uses',
+      pathClass: pathClassOf(input.path),
+    };
   const encoding = ([] as string[])
     .concat(input.contentEncoding ?? [])
     .join(',')
@@ -195,15 +231,14 @@ export function checkProxyRequest(
       allow: false,
       reason: 'the body has a content encoding the proxy does not read',
     };
-  const otherPath = kind === 'other';
   if (input.body.length === 0)
-    return { allow: true, body: input.body, unknownToolTypes: [], otherPath };
+    return { allow: true, body: input.body, unknownToolTypes: [] };
   const parsed = parseJson(input.body);
   if (!parsed.ok) {
     if (kind === 'model')
       return { allow: false, reason: 'the body is not UTF-8 JSON' };
-    // Not a model path: for example a file upload. Sent on as it came.
-    return { allow: true, body: input.body, unknownToolTypes: [], otherPath };
+    // A listed path that is not a model path. Sent on as it came.
+    return { allow: true, body: input.body, unknownToolTypes: [] };
   }
   if (kind === 'model' && !isObject(parsed.value))
     return { allow: false, reason: 'the body is not a JSON object' };
@@ -214,6 +249,5 @@ export function checkProxyRequest(
     allow: true,
     body: Buffer.from(JSON.stringify(parsed.value), 'utf8'),
     unknownToolTypes: [...unknown],
-    otherPath,
   };
 }

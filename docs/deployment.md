@@ -116,7 +116,7 @@ The host refuses a checkout whose origin it does not expect, and then it does no
 
 **This key is the only git credential, and it stays on the host.** The agent in the container commits in the mounted checkout and never talks to the git host: the container gets no home folder, no SSH agent, no SSH client and no key, and on the restricted network it has no route to the git host. The host pulls before each turn and pushes the agent's commits after each result, with this key (`src/checkout-sync.ts`). A push that fails is sent to the operator as an alert. Do not put a key or a token into the container.
 
-Checked: the clone, pull and push against a git host were not run. The host-side pull and push are tested against a local remote (`src/checkout-sync.test.ts`), and on 2026-11-20 a commit made inside a real container on the restricted network arrived on a local remote through the host (`scripts/check-container-egress.ts`). The agent image itself was not built for that run; a stock image with git stood in for it.
+Checked: the clone, pull and push against a git host were not run. The host-side pull and push are tested against a local remote (`src/checkout-sync.test.ts`), and on 2026-11-20 a commit made inside a real container on the restricted network arrived on a local remote through the host (`scripts/check-container-egress.ts`). That run used the agent image built from `container/Dockerfile` (in a cloud session, with that session's certificate authority added so the build could download packages).
 
 ### 5. Container image and channel groups (as `programos`)
 

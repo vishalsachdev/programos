@@ -45,15 +45,21 @@ const activeCallers = new Map<string, ModelProvider>();
  */
 const PATH_TOKEN_RE = /^\/_t\/([0-9a-f]{64})(\/.*)?$/;
 
-/** One log line per key for the life of the process, with a cap on keys. */
-const warned = new Set<string>();
+/**
+ * One log line per key for the life of the process. Each kind of key has
+ * its own cap, so a caller that makes up paths cannot use up the room for
+ * tool type warnings.
+ */
+const warned = { path: new Set<string>(), tool: new Set<string>() };
 function warnOnce(
+  kind: keyof typeof warned,
   key: string,
   fields: Record<string, unknown>,
   message: string,
 ): void {
-  if (warned.has(key) || warned.size >= 200) return;
-  warned.add(key);
+  const seen = warned[kind];
+  if (seen.has(key) || seen.size >= 100) return;
+  seen.add(key);
   logger.warn(fields, message);
 }
 
@@ -190,12 +196,20 @@ export function startCredentialProxy(
             body,
           });
           if (!verdict.allow) {
-            // The reason is fixed text. The path is not logged: it may be
-            // caller-chosen text, and may hold the token prefix.
-            logger.warn(
-              { provider, reason: verdict.reason },
-              'Credential proxy refused a request (AGENT_WEB_TOOLS is off)',
-            );
+            // The reason is fixed text. The path is logged only as the
+            // first segments of a plain path, with the token prefix gone.
+            if (verdict.pathClass)
+              warnOnce(
+                'path',
+                verdict.pathClass,
+                { provider, pathClass: verdict.pathClass },
+                'Credential proxy refused a path that is not on its list (AGENT_WEB_TOOLS is off; logged once per path)',
+              );
+            else
+              logger.warn(
+                { provider, reason: verdict.reason },
+                'Credential proxy refused a request (AGENT_WEB_TOOLS is off)',
+              );
             res.writeHead(403, { 'content-type': 'application/json' });
             res.end(
               JSON.stringify({
@@ -211,22 +225,11 @@ export function startCredentialProxy(
           body = verdict.body;
           for (const type of verdict.unknownToolTypes)
             warnOnce(
-              `tool:${type}`,
+              'tool',
+              type,
               { provider, toolType: type },
               'Credential proxy forwarded a tool type it does not know while AGENT_WEB_TOOLS is off; check that it does not reach outside hosts',
             );
-          if (verdict.otherPath) {
-            const pathClass = requestPath
-              .split('?')[0]
-              .split('/')
-              .slice(0, 4)
-              .join('/');
-            warnOnce(
-              `path:${pathClass}`,
-              { provider, pathClass },
-              'Credential proxy forwarded a request that is not a model request (logged once per path)',
-            );
-          }
         }
         const headers: Record<string, string | number | string[] | undefined> =
           {

@@ -142,7 +142,7 @@ describe('checkProxyRequest (the proxy check while web tools are off)', () => {
 
   it('refuses a body with a content encoding, on any path', () => {
     const gz = gzipSync(json({ tools: [web] }));
-    for (const path of ['/v1/messages', '/api/hello', '/v1/files']) {
+    for (const path of ['/v1/messages', '/api/hello', '/v1/models']) {
       expect(refused(check(gz, path, 'gzip'))).toMatch(/content encoding/);
       expect(refused(check(json({}), path, 'br'))).toMatch(/content encoding/);
     }
@@ -299,7 +299,6 @@ describe('checkProxyRequest (the proxy check while web tools are off)', () => {
     if (!verdict.allow) return;
     expect(JSON.parse(verdict.body.toString())).toEqual(request);
     expect(verdict.unknownToolTypes).toEqual([]);
-    expect(verdict.otherPath).toBe(false);
   });
 
   it('keeps web search results in the history of a session that had web tools on', () => {
@@ -350,21 +349,46 @@ describe('checkProxyRequest (the proxy check while web tools are off)', () => {
     ]);
   });
 
-  it('lets other paths through: empty bodies, the key exchange, an upload', () => {
-    const empty = check(Buffer.alloc(0), '/v1/models');
-    expect(empty.allow && empty.otherPath).toBe(true);
+  it('forwards the listed paths that are not model paths', () => {
+    expect(refused(check(Buffer.alloc(0), '/v1/models'))).toBe('allowed');
+    expect(refused(check(Buffer.alloc(0), '/v1/models/claude-x'))).toBe(
+      'allowed',
+    );
+    expect(refused(check(Buffer.alloc(0), '/api/hello'))).toBe('allowed');
     expect(
       refused(
         check(json({ raw: 'x' }), '/api/oauth/claude_cli/create_api_key'),
       ),
     ).toBe('allowed');
-    const upload = Buffer.from('--b\r\ncontent-disposition: form-data\r\n');
-    const sent = check(upload, '/v1/files');
-    expect(sent.allow && sent.body.equals(upload)).toBe(true);
-    // A JSON body on another path is still checked.
-    expect(refused(check(json({ tools: [web] }), '/v1/unknown'))).toMatch(
-      /web search/,
-    );
+    // A JSON body on a listed path is still checked.
+    expect(
+      refused(
+        check(json({ tools: [web] }), '/api/oauth/claude_cli/create_api_key'),
+      ),
+    ).toMatch(/web search/);
+  });
+
+  it('refuses every path that is not on the list, and names it for the log', () => {
+    for (const path of [
+      '/',
+      '/v1/files',
+      '/v1/skills',
+      '/v1/code/sessions',
+      '/v1/unknown?x=1',
+      '/api/oauth/profile',
+      '/api/hello/more',
+      '/anthropic/api/hello',
+      '/v2/messages',
+      '/messages',
+    ]) {
+      for (const body of [Buffer.alloc(0), json({}), Buffer.from('--b\r\n')]) {
+        const verdict = check(body, path);
+        expect(refused(verdict)).toMatch(/not one an agent turn uses/);
+        expect(!verdict.allow && verdict.pathClass).toBe(
+          path.split('?')[0].split('/').slice(0, 4).join('/'),
+        );
+      }
+    }
   });
 
   it('refuses a body nested too deeply to check', () => {
@@ -383,8 +407,12 @@ describe('classifyProxyPath', () => {
       'model',
     );
     expect(classifyProxyPath('/v1/complete')).toBe('model');
-    expect(classifyProxyPath('/api/hello')).toBe('other');
-    expect(classifyProxyPath('/')).toBe('other');
-    expect(classifyProxyPath('/v1/models/claude-x:latest')).toBe('other');
+    expect(classifyProxyPath('/api/hello')).toBe('listed');
+    expect(classifyProxyPath('/v1/models/claude-x:latest')).toBe('listed');
+    expect(classifyProxyPath('/api/oauth/claude_cli/create_api_key')).toBe(
+      'listed',
+    );
+    expect(classifyProxyPath('/')).toBe('unlisted');
+    expect(classifyProxyPath('/v1/files')).toBe('unlisted');
   });
 });

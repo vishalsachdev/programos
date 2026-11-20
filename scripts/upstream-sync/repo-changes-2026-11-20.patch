@@ -5901,10 +5901,10 @@ index 0000000000000000000000000000000000000000..1372728a436c9c1a4ee241e48a72ff22
 +});
 diff --git a/src/credential-proxy-web-tools.test.ts b/src/credential-proxy-web-tools.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1c40d984f3c54dd29237b636f613f93d0004ec65
+index 0000000000000000000000000000000000000000..05b964ca0c43047e9ffc36df5f8ef4595a23935b
 --- /dev/null
 +++ b/src/credential-proxy-web-tools.test.ts
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,305 @@
 +/**
 + * Credential proxy with web tools off: the check in src/web-tools.ts applied
 + * to real requests, on the Anthropic route and on the Foundry route. Uses
@@ -6163,6 +6163,29 @@ index 0000000000000000000000000000000000000000..1c40d984f3c54dd29237b636f613f93d
 +    expect(anthropicSeen).toHaveLength(2);
 +  });
 +
++  it('refuses a path that is not on the list, and logs it once without the token', async () => {
++    await start();
++    for (let i = 0; i < 2; i++) {
++      const byHeader = await send(port, '/v1/code/sessions', '{}', {
++        'x-nanoclaw-proxy-token': anthropicToken,
++        authorization: 'Bearer placeholder',
++      });
++      expect(byHeader.status).toBe(403);
++      const byPath = await send(
++        port,
++        `/_t/${foundryToken}/anthropic/v1/files`,
++        '--b\r\n',
++      );
++      expect(byPath.status).toBe(403);
++    }
++    expect(anthropicSeen).toEqual([]);
++    expect(foundrySeen).toEqual([]);
++    const logged = vi
++      .mocked(logger.warn)
++      .mock.calls.map((c) => (c[0] as { pathClass?: string }).pathClass);
++    expect(logged).toEqual(['/v1/code/sessions', '/anthropic/v1/files']);
++  });
++
 +  it('keeps the OAuth key exchange and requests with no body working', async () => {
 +    await start({
 +      ANTHROPIC_API_KEY: '',
@@ -6231,7 +6254,7 @@ index b46bbd8cfe1ca28bbe60456580a0a66fd4a00caa..b3214a228e03ba8f5129aec1a34d7811
      proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
  
 diff --git a/src/credential-proxy.ts b/src/credential-proxy.ts
-index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df167e555e04 100644
+index 5990016ef0c61fde23168aaba7b004d41574a259..057da9e7dd5ffdb4bd268fb2332befdef1375238 100644
 --- a/src/credential-proxy.ts
 +++ b/src/credential-proxy.ts
 @@ -9,6 +9,10 @@
@@ -6259,7 +6282,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df16
  
  export type AuthMode = 'api-key' | 'oauth';
  
-@@ -26,26 +37,66 @@ export interface ProxyConfig {
+@@ -26,26 +37,72 @@ export interface ProxyConfig {
  
  const PROXY_TOKEN_HEADER = 'x-nanoclaw-proxy-token';
  const MAX_PROXY_BODY_BYTES = 20 * 1024 * 1024;
@@ -6272,15 +6295,21 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df16
 + */
 +const PATH_TOKEN_RE = /^\/_t\/([0-9a-f]{64})(\/.*)?$/;
 +
-+/** One log line per key for the life of the process, with a cap on keys. */
-+const warned = new Set<string>();
++/**
++ * One log line per key for the life of the process. Each kind of key has
++ * its own cap, so a caller that makes up paths cannot use up the room for
++ * tool type warnings.
++ */
++const warned = { path: new Set<string>(), tool: new Set<string>() };
 +function warnOnce(
++  kind: keyof typeof warned,
 +  key: string,
 +  fields: Record<string, unknown>,
 +  message: string,
 +): void {
-+  if (warned.has(key) || warned.size >= 200) return;
-+  warned.add(key);
++  const seen = warned[kind];
++  if (seen.has(key) || seen.size >= 100) return;
++  seen.add(key);
 +  logger.warn(fields, message);
 +}
  
@@ -6334,7 +6363,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df16
  }
  
  export function startCredentialProxy(
-@@ -69,17 +120,39 @@ export function startCredentialProxy(
+@@ -69,17 +126,39 @@ export function startCredentialProxy(
    const upstreamUrl = new URL(
      secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
    );
@@ -6377,7 +6406,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df16
  
        const rejectOversize = () => {
          res.writeHead(413);
-@@ -106,11 +179,59 @@ export function startCredentialProxy(
+@@ -106,11 +185,56 @@ export function startCredentialProxy(
        });
        req.on('end', () => {
          if (tooLarge) return;
@@ -6393,12 +6422,20 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df16
 +            body,
 +          });
 +          if (!verdict.allow) {
-+            // The reason is fixed text. The path is not logged: it may be
-+            // caller-chosen text, and may hold the token prefix.
-+            logger.warn(
-+              { provider, reason: verdict.reason },
-+              'Credential proxy refused a request (AGENT_WEB_TOOLS is off)',
-+            );
++            // The reason is fixed text. The path is logged only as the
++            // first segments of a plain path, with the token prefix gone.
++            if (verdict.pathClass)
++              warnOnce(
++                'path',
++                verdict.pathClass,
++                { provider, pathClass: verdict.pathClass },
++                'Credential proxy refused a path that is not on its list (AGENT_WEB_TOOLS is off; logged once per path)',
++              );
++            else
++              logger.warn(
++                { provider, reason: verdict.reason },
++                'Credential proxy refused a request (AGENT_WEB_TOOLS is off)',
++              );
 +            res.writeHead(403, { 'content-type': 'application/json' });
 +            res.end(
 +              JSON.stringify({
@@ -6414,22 +6451,11 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df16
 +          body = verdict.body;
 +          for (const type of verdict.unknownToolTypes)
 +            warnOnce(
-+              `tool:${type}`,
++              'tool',
++              type,
 +              { provider, toolType: type },
 +              'Credential proxy forwarded a tool type it does not know while AGENT_WEB_TOOLS is off; check that it does not reach outside hosts',
 +            );
-+          if (verdict.otherPath) {
-+            const pathClass = requestPath
-+              .split('?')[0]
-+              .split('/')
-+              .slice(0, 4)
-+              .join('/');
-+            warnOnce(
-+              `path:${pathClass}`,
-+              { provider, pathClass },
-+              'Credential proxy forwarded a request that is not a model request (logged once per path)',
-+            );
-+          }
 +        }
          const headers: Record<string, string | number | string[] | undefined> =
            {
@@ -6439,7 +6465,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df16
              'content-length': body.length,
            };
  
-@@ -120,7 +241,14 @@ export function startCredentialProxy(
+@@ -120,7 +244,14 @@ export function startCredentialProxy(
          delete headers['transfer-encoding'];
          delete headers[PROXY_TOKEN_HEADER];
  
@@ -6455,7 +6481,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..6bcacd113ac6dbfa08ffc1e6a2b3df16
            // API key mode: inject x-api-key on every request
            delete headers['x-api-key'];
            headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
-@@ -139,21 +267,28 @@ export function startCredentialProxy(
+@@ -139,21 +270,28 @@ export function startCredentialProxy(
  
          const upstream = makeRequest(
            {
@@ -9363,10 +9389,10 @@ index 48915fac34f7932485ce8d03bcdd10201ae237ff..d921c38a7f314aab30780cc1ac98904a
            // Forward result to user (sendMessage handles formatting). The
 diff --git a/src/web-tools.test.ts b/src/web-tools.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..4b81df86b0cd43a0764f14cc7ded1e5a2b17ed53
+index 0000000000000000000000000000000000000000..1ae65686fd41359284c5837953039e9145334d16
 --- /dev/null
 +++ b/src/web-tools.test.ts
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,418 @@
 +import { gzipSync } from 'zlib';
 +
 +import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9511,7 +9537,7 @@ index 0000000000000000000000000000000000000000..4b81df86b0cd43a0764f14cc7ded1e5a
 +
 +  it('refuses a body with a content encoding, on any path', () => {
 +    const gz = gzipSync(json({ tools: [web] }));
-+    for (const path of ['/v1/messages', '/api/hello', '/v1/files']) {
++    for (const path of ['/v1/messages', '/api/hello', '/v1/models']) {
 +      expect(refused(check(gz, path, 'gzip'))).toMatch(/content encoding/);
 +      expect(refused(check(json({}), path, 'br'))).toMatch(/content encoding/);
 +    }
@@ -9668,7 +9694,6 @@ index 0000000000000000000000000000000000000000..4b81df86b0cd43a0764f14cc7ded1e5a
 +    if (!verdict.allow) return;
 +    expect(JSON.parse(verdict.body.toString())).toEqual(request);
 +    expect(verdict.unknownToolTypes).toEqual([]);
-+    expect(verdict.otherPath).toBe(false);
 +  });
 +
 +  it('keeps web search results in the history of a session that had web tools on', () => {
@@ -9719,21 +9744,46 @@ index 0000000000000000000000000000000000000000..4b81df86b0cd43a0764f14cc7ded1e5a
 +    ]);
 +  });
 +
-+  it('lets other paths through: empty bodies, the key exchange, an upload', () => {
-+    const empty = check(Buffer.alloc(0), '/v1/models');
-+    expect(empty.allow && empty.otherPath).toBe(true);
++  it('forwards the listed paths that are not model paths', () => {
++    expect(refused(check(Buffer.alloc(0), '/v1/models'))).toBe('allowed');
++    expect(refused(check(Buffer.alloc(0), '/v1/models/claude-x'))).toBe(
++      'allowed',
++    );
++    expect(refused(check(Buffer.alloc(0), '/api/hello'))).toBe('allowed');
 +    expect(
 +      refused(
 +        check(json({ raw: 'x' }), '/api/oauth/claude_cli/create_api_key'),
 +      ),
 +    ).toBe('allowed');
-+    const upload = Buffer.from('--b\r\ncontent-disposition: form-data\r\n');
-+    const sent = check(upload, '/v1/files');
-+    expect(sent.allow && sent.body.equals(upload)).toBe(true);
-+    // A JSON body on another path is still checked.
-+    expect(refused(check(json({ tools: [web] }), '/v1/unknown'))).toMatch(
-+      /web search/,
-+    );
++    // A JSON body on a listed path is still checked.
++    expect(
++      refused(
++        check(json({ tools: [web] }), '/api/oauth/claude_cli/create_api_key'),
++      ),
++    ).toMatch(/web search/);
++  });
++
++  it('refuses every path that is not on the list, and names it for the log', () => {
++    for (const path of [
++      '/',
++      '/v1/files',
++      '/v1/skills',
++      '/v1/code/sessions',
++      '/v1/unknown?x=1',
++      '/api/oauth/profile',
++      '/api/hello/more',
++      '/anthropic/api/hello',
++      '/v2/messages',
++      '/messages',
++    ]) {
++      for (const body of [Buffer.alloc(0), json({}), Buffer.from('--b\r\n')]) {
++        const verdict = check(body, path);
++        expect(refused(verdict)).toMatch(/not one an agent turn uses/);
++        expect(!verdict.allow && verdict.pathClass).toBe(
++          path.split('?')[0].split('/').slice(0, 4).join('/'),
++        );
++      }
++    }
 +  });
 +
 +  it('refuses a body nested too deeply to check', () => {
@@ -9752,17 +9802,21 @@ index 0000000000000000000000000000000000000000..4b81df86b0cd43a0764f14cc7ded1e5a
 +      'model',
 +    );
 +    expect(classifyProxyPath('/v1/complete')).toBe('model');
-+    expect(classifyProxyPath('/api/hello')).toBe('other');
-+    expect(classifyProxyPath('/')).toBe('other');
-+    expect(classifyProxyPath('/v1/models/claude-x:latest')).toBe('other');
++    expect(classifyProxyPath('/api/hello')).toBe('listed');
++    expect(classifyProxyPath('/v1/models/claude-x:latest')).toBe('listed');
++    expect(classifyProxyPath('/api/oauth/claude_cli/create_api_key')).toBe(
++      'listed',
++    );
++    expect(classifyProxyPath('/')).toBe('unlisted');
++    expect(classifyProxyPath('/v1/files')).toBe('unlisted');
 +  });
 +});
 diff --git a/src/web-tools.ts b/src/web-tools.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886117e370a
+index 0000000000000000000000000000000000000000..f90683f5079ccb503bf566cd7007663c6b2dbd06
 --- /dev/null
 +++ b/src/web-tools.ts
-@@ -0,0 +1,219 @@
+@@ -0,0 +1,253 @@
 +/**
 + * The web tools setting (AGENT_WEB_TOOLS), off by default.
 + *
@@ -9821,10 +9875,18 @@ index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886
 + *   `/v1/environments`): the provider runs an agent in its own container
 + *   with its own network and web tools, and its `agent_toolset` tool.
 + *
-+ * A tool type that is not known here is allowed and reported once, so an
-+ * operator can see it. A strict allowlist of tool types and of paths would
++ * Paths are an allowlist. The provider's host serves far more than model
++ * requests (the CLI in the agent image names well over a hundred paths), and
++ * the proxy adds the host's credential to whatever it forwards. Real agent
++ * containers run against a local fake provider on 2026-11-20, in API-key
++ * mode and in OAuth mode, sent only `POST /v1/messages`. Forwarded: the model
++ * paths, the model list, and the OAuth key exchange. Everything else is
++ * refused and logged once per path.
++ *
++ * Tool types are not an allowlist. A tool type that is not known here is
++ * allowed and reported once, so an operator can see it. An allowlist would
 + * be stronger; it is not used because a wrong entry would refuse every agent
-+ * turn, and no live turn has been run to draw the list from.
++ * turn, and no turn against a live provider has been run to draw it from.
 + */
 +export interface ProxyRequestInput {
 +  /** Path and query as the proxy will send them (no token prefix). */
@@ -9841,10 +9903,13 @@ index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886
 +      body: Buffer;
 +      /** Tool types that are not known to this check. */
 +      unknownToolTypes: string[];
-+      /** True for a path that is neither a model path nor refused. */
-+      otherPath: boolean;
 +    }
-+  | { allow: false; reason: string };
++  | {
++      allow: false;
++      reason: string;
++      /** Set when the path is not on the list: its first segments. */
++      pathClass?: string;
++    };
 +
 +const WEB_TOOL_TYPE = /^web_(search|fetch)/;
 +/** Tools the caller runs itself, or that stay inside the provider. */
@@ -9855,7 +9920,12 @@ index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886
 +const PLAIN_SEGMENT = /^[A-Za-z0-9._~:@-]+$/;
 +const MAX_DEPTH = 256;
 +
-+type PathKind = 'model' | 'managed-agents' | 'other' | 'malformed';
++type PathKind =
++  | 'model'
++  | 'listed'
++  | 'managed-agents'
++  | 'unlisted'
++  | 'malformed';
 +
 +/** Classify the path part of a request URL. The query is ignored. */
 +export function classifyProxyPath(url: string): PathKind {
@@ -9867,18 +9937,32 @@ index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886
 +  // a percent escape, is not: the provider may route it differently.
 +  if (segments.length > 1 && segments[segments.length - 1] === '')
 +    segments.pop();
-+  if (segments.length === 1 && segments[0] === '') return 'other';
++  if (segments.length === 1 && segments[0] === '') return 'unlisted';
 +  for (const s of segments) {
 +    if (!PLAIN_SEGMENT.test(s) || s === '.' || s === '..') return 'malformed';
 +  }
 +  const lower = segments.map((s) => s.toLowerCase());
-+  let kind: PathKind = 'other';
++  // The OAuth key exchange (see the header of src/credential-proxy.ts) and
++  // the connectivity check, at the root of the Anthropic host only.
++  const head = lower.slice(0, 3).join('/');
++  let kind: PathKind =
++    head === 'api/oauth/claude_cli' || lower.join('/') === 'api/hello'
++      ? 'listed'
++      : 'unlisted';
++  // A base path may come first (ANTHROPIC_BASE_URL, Foundry), so `v1` is
++  // looked for at any position.
 +  for (let i = 0; i + 1 < lower.length; i++) {
 +    if (lower[i] !== 'v1') continue;
 +    if (MANAGED_AGENT_PATHS.has(lower[i + 1])) return 'managed-agents';
 +    if (MODEL_PATHS.has(lower[i + 1])) kind = 'model';
++    else if (lower[i + 1] === 'models' && kind !== 'model') kind = 'listed';
 +  }
 +  return kind;
++}
++
++/** The first segments of a plain path, for the log. */
++function pathClassOf(url: string): string {
++  return url.split('?')[0].split('/').slice(0, 4).join('/').slice(0, 120);
 +}
 +
 +function isObject(v: unknown): v is Record<string, unknown> {
@@ -9950,6 +10034,12 @@ index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886
 +      allow: false,
 +      reason: 'the managed agents API runs tools with their own network',
 +    };
++  if (kind === 'unlisted')
++    return {
++      allow: false,
++      reason: 'the path is not one an agent turn uses',
++      pathClass: pathClassOf(input.path),
++    };
 +  const encoding = ([] as string[])
 +    .concat(input.contentEncoding ?? [])
 +    .join(',')
@@ -9960,15 +10050,14 @@ index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886
 +      allow: false,
 +      reason: 'the body has a content encoding the proxy does not read',
 +    };
-+  const otherPath = kind === 'other';
 +  if (input.body.length === 0)
-+    return { allow: true, body: input.body, unknownToolTypes: [], otherPath };
++    return { allow: true, body: input.body, unknownToolTypes: [] };
 +  const parsed = parseJson(input.body);
 +  if (!parsed.ok) {
 +    if (kind === 'model')
 +      return { allow: false, reason: 'the body is not UTF-8 JSON' };
-+    // Not a model path: for example a file upload. Sent on as it came.
-+    return { allow: true, body: input.body, unknownToolTypes: [], otherPath };
++    // A listed path that is not a model path. Sent on as it came.
++    return { allow: true, body: input.body, unknownToolTypes: [] };
 +  }
 +  if (kind === 'model' && !isObject(parsed.value))
 +    return { allow: false, reason: 'the body is not a JSON object' };
@@ -9979,7 +10068,6 @@ index 0000000000000000000000000000000000000000..713e1a6c89d7252b7f27f245972b7886
 +    allow: true,
 +    body: Buffer.from(JSON.stringify(parsed.value), 'utf8'),
 +    unknownToolTypes: [...unknown],
-+    otherPath,
 +  };
 +}
 diff --git a/start.sh b/start.sh

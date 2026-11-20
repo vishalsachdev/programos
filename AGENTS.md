@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,482 passing tests (1,761 from the source, 721 added here). One timing test
+   is 2,526 passing tests (1,761 from the source, 765 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -192,8 +192,8 @@ move up without starting again. "First start" means part 14.
     choice 6, option (b);
   - an inbound mail intake service (choice 5). The one in `inbound/` needs a
     Cloudflare account and a domain or subdomain that receives no other mail;
-  - a route for operator alerts (choice 4): a Telegram account, or the operator's
-    mailbox, or both;
+  - a route for operator alerts (choice 4): a Telegram account, the operator's
+    mailbox, a Microsoft Teams channel where a workflow may be created, or more than one;
   - the names and addresses of the first colleagues, and who approves for each
     (choice 10);
   - where the institution requires it, an answer from the IT or data office on
@@ -343,7 +343,8 @@ matching choice in part 5.
 5. **What consent wording do senders see**, if any, and who is on the allowlist.
 6. **Which channels?** Email only is the simplest. Telegram and web chat are optional.
    Ask also where operator alerts should go: Telegram (the default), email to the
-   operator's address, or both (`ADMIN_ALERT_ROUTE`; see "Safety items").
+   operator's address, a Microsoft Teams channel, or more than one
+   (`ADMIN_ALERT_ROUTE`; see "Safety items").
 
 For "Try it", questions 1, 2 and 4 apply. Questions 3 and 5 apply as soon as
 email is used.
@@ -441,18 +442,25 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 **4. Where operator alerts go**
 - *Plain words:* when a reply is refused, a mail bounces or a check fails, the
   bot tells one person, the operator. You choose how.
-- *Options:* Telegram; email to the operator's own mailbox; both.
+- *Options:* Telegram; email to the operator's own mailbox; a Microsoft Teams
+  channel, through a Workflows webhook; any mix of these, joined by commas.
 - *Code default:* Telegram. With no bot token, alerts are not delivered.
 - *First pilot:* Telegram if the operator will use it (it is the route tested in
   production), with email added as a second route. Email alone works without a
   Telegram account, but it has limits ("Safety items") and has not been sent
-  through a live mail provider.
-- *Cost to the person:* a Telegram account and a bot token, or nothing new for email.
-- *Settings:* `ADMIN_ALERT_ROUTE` (`telegram`, `email`, `telegram,email`),
-  `OPERATOR_CC_EMAIL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`,
-  `DEAD_LETTER_ALERT_JID`, `OUTREACH_SUMMARY_JID` (.env); `ADMIN_ALERT_TEST=1`
-  (process, first start only).
-- *Detail:* "Safety items" (operator alerts); First start, step 8.
+  through a live mail provider. Teams only if the user's Microsoft 365 tenant
+  allows a Workflows webhook that anyone holding the URL can call: ASK the user to
+  check with their Microsoft 365 administrators first. It is **not verified against
+  a live Teams tenant**; plan the curl test in `docs/teams-alerts.md`.
+- *Cost to the person:* a Telegram account and a bot token; nothing new for email;
+  for Teams, a team and channel and permission to create a workflow there.
+- *Settings:* `ADMIN_ALERT_ROUTE` (`telegram`, `email`, `teams`, or several joined
+  by commas, such as `telegram,email`), `OPERATOR_CC_EMAIL`, `TELEGRAM_BOT_TOKEN`,
+  `TELEGRAM_ADMIN_CHAT_ID`, `ADMIN_ALERT_TEAMS_WORKFLOW_URL` (a secret: the URL is
+  the credential), `DEAD_LETTER_ALERT_JID`, `OUTREACH_SUMMARY_JID` (.env);
+  `ADMIN_ALERT_TEST=1` (process, first start only).
+- *Detail:* "Safety items" (operator alerts); First start, step 8;
+  `docs/teams-alerts.md` for Teams.
 
 **5. Inbound mail intake**
 - *Plain words:* the bot does not receive mail itself. A small separate service
@@ -916,6 +924,7 @@ and say so.
 | Routed approvals | In production in K-ai | Approver recorded per sender in the allowlist; the institution domain set correctly |
 | Telegram admin channel | In production in K-ai. The default route for operator alerts (see "Safety items") | Bot token, admin chat ID, **the chat sender allowlist file** |
 | Operator alerts by email (`ADMIN_ALERT_ROUTE=email`) | New in this repo, not in K-ai. Tested here with the mail provider stubbed; **not yet run against a live provider** | `OPERATOR_CC_EMAIL` set to one person's address, the outbound provider key |
+| Operator alerts in Teams (`ADMIN_ALERT_ROUTE=teams`) | New in this repo (2026-11-20), not in K-ai. Tested with the request mocked; **not verified against a live Teams tenant** | A Workflows webhook URL (`ADMIN_ALERT_TEAMS_WORKFLOW_URL`) from a workflow anyone may trigger; the tenant administrators' agreement; `docs/teams-alerts.md` |
 | Outbound mail over SMTP (`OUTBOUND_MAIL_PROVIDER=smtp`) | New in this repo (2026-11-20), not in K-ai. Tested with a local SMTP server inside the tests; **never run against a real mail server**. No bounce reports | A mailbox on a mail server that accepts an encrypted login with a username and password; the mail administrators' agreement |
 | Behaviour sensor and evaluation scripts | In production in K-ai | Ground-truth files in the program repo; see "Academic examples" |
 | Restricted container network (`CONTAINER_NETWORK`) | New in this repo (2026-11-20); not in K-ai. Checked with real containers on Docker Engine on Linux only | Docker Engine on Linux for the default; see "Safety items" |
@@ -960,7 +969,7 @@ and say so.
   `SPEC.md` section 11 lists what this does not cover.
 - **Operator alerts need a route that works.** Every operator alert goes through
   `src/admin-alert.ts`, which follows `ADMIN_ALERT_ROUTE`: `telegram` (the default),
-  `email`, or `telegram,email`. On the Telegram route, delivery-failure alerts go to the
+  `email`, `teams`, or several joined by commas (`telegram,email`, `email,teams`, ...). On the Telegram route, delivery-failure alerts go to the
   Telegram owner chat (`src/index.ts`) and the webhook's alerts call the Telegram API
   (`pingAdminViaTelegram` in `src/channels/webhook.ts`); without a bot token they are
   not delivered. On the email route, each alert is one mail to `OPERATOR_CC_EMAIL`
@@ -972,12 +981,24 @@ and say so.
   - With `OUTBOUND_MAIL_PROVIDER=smtp`, alert mail goes through the same SMTP
     server, and a bounced mail raises no alert at all (there are no bounce reports).
   - An alert about an alert mail (it bounced, or could not be sent) is never mailed
-    again. It goes to Telegram if that route is on; otherwise it is logged and dropped.
+    again. It goes to Telegram or Teams if one of those routes is on; otherwise it is
+    logged and dropped.
   - Alert mail waits in its own queue (about 30 seconds between mails), and at most
     a few can wait at once; more are refused and logged.
   - The operator's reply to an alert mail goes to the bot's address and is handled
     as ordinary mail from the operator.
   - Weekly outreach summaries (`OUTREACH_SUMMARY_JID`) do not follow this setting.
+  The Teams route (`docs/teams-alerts.md`) is **not verified against a live Teams
+  tenant**. Tell the user:
+  - The workflow URL in `ADMIN_ALERT_TEAMS_WORKFLOW_URL` is the credential: anyone
+    who has it can post into the channel. Keep it in `.env` only. The code never logs it.
+  - The workflow belongs to the person who created it. Record the owner and a
+    co-owner (`docs/service-ownership.md`).
+  - Alert text goes to Microsoft and stays in the channel, readable by its members
+    (`docs/data-handling.md`).
+  - Delivered means the workflow accepted the request (HTTP 2xx), not that the card
+    appeared. A long alert is cut with a marker; one request per alert, 10-second
+    timeout, no retry inside the route.
   The bot logs an error at startup for each setting an enabled route lacks. Send a
   test alert on each enabled route before go-live ("First start", step 8).
 - **Model endpoint with a path prefix.** The credential proxy
@@ -1173,7 +1194,8 @@ Do these once, in this order, before the first test message:
    each route enabled by `ADMIN_ALERT_ROUTE` and logs `Admin alert test delivered` or
    `Admin alert test NOT delivered` for each. Check that the user received each one,
    then remove the variable. For the email route, "delivered" means the mail provider
-   accepted the mail; confirm it reached the inbox.
+   accepted the mail; confirm it reached the inbox. For the Teams route it means the
+   workflow accepted the request; confirm the card is in the channel.
 9. Run `npx tsx scripts/check-container-egress.ts` as the service user, with the
    service's environment. It starts containers the way the host does and must print
    PASS for each line: the container reaches the host's proxy address; on the

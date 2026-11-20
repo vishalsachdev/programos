@@ -15,7 +15,7 @@ Your institution may still have rules about where your team's mail may go. This 
 | 5 | [`../deployment.md`](../deployment.md) | The supported recipe on that machine, and "Before real users" | Choice 8 |
 | 6 | [`../../inbound/README.md`](../../inbound/README.md) | The intake worker on your own domain at Cloudflare | Choice 5 |
 | 7 | [`../setup-reference.md`](../setup-reference.md), "Outbound mail over SMTP" and "Webhooks from other services" | The default mail provider, or SMTP; bounce reports and push events | Choices 6 and 13 |
-| 8 | `AGENTS.md`, "Safety items", operator alerts | Telegram, email, or both | Choice 4 |
+| 8 | `AGENTS.md`, "Safety items", operator alerts; [`../teams-alerts.md`](../teams-alerts.md) for Teams | Telegram, email, a Teams channel, or several | Choice 4 |
 | 9 | [`../service-ownership.md`](../service-ownership.md) | Who holds each account and key, and the handover checklist | Choice 9 |
 | 10 | [`../costs.md`](../costs.md) | Each monthly cost line, with the vendor's pricing page | |
 

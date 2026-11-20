@@ -40,7 +40,7 @@ OWNED = [
     'docs/12-governance.md', 'docs/general', 'docs/cloud-vm.md', 'docs/costs.md',
     'docs/deployment.md', 'docs/data-handling.md', 'docs/model-providers.md',
     'docs/dependency-audit.md', '.gitleaksignore',
-    'docs/service-ownership.md',
+    'docs/service-ownership.md', 'docs/teams-alerts.md',
     'docs/illinois', 'docs/start-here.md', 'docs/setup-reference.md',
     'docs/design', 'config', 'templates', 'plans',
     'site', 'scripts/upstream-sync', '.github/workflows/ci.yml', 'inbound',

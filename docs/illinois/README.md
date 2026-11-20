@@ -15,7 +15,8 @@ For a unit at the University of Illinois that sets up ProgramOS. It uses the sam
 | 5 | [`data-handling.md`](./data-handling.md): the data questions for the privacy, security and records offices | Choice 14; policy questions 1, 4 and 5 |
 | 6 | [`service-ownership.md`](./service-ownership.md): unit accounts, secrets and handover | Choice 9, "Accounts and secrets" |
 | 7 | [`github-enterprise.md`](./github-enterprise.md): the knowledge-base repo on the university's GitHub Enterprise host | Choice 7 |
-| 8 | [`microsoft-path.md`](./microsoft-path.md): the open questions for a Microsoft-first setup (Foundry, Graph mail, Teams) | A later step, after a pilot |
+| 8 | [`teams-alerts.md`](./teams-alerts.md): whether the university's tenant allows a Workflows webhook for operator alerts (route not verified against a live tenant) | Choice 4 |
+| 9 | [`microsoft-path.md`](./microsoft-path.md): the open questions for a Microsoft-first setup (Foundry, Graph mail, Teams) | A later step, after a pilot |
 
 For "Try it" (one person, a laptop, test data only) only page 1 matters, and only if the person must use a university-approved model even for a trial.
 
@@ -29,7 +30,7 @@ For "Try it" (one person, a laptop, test data only) only page 1 matters, and onl
 - [`../deployment.md`](../deployment.md) and [`../cloud-vm.md`](../cloud-vm.md): the host and the machine.
 - [`../setup-reference.md`](../setup-reference.md): every setting.
 - [`../../inbound/README.md`](../../inbound/README.md): the intake worker.
-- [`../model-providers.md`](../model-providers.md), [`../data-handling.md`](../data-handling.md), [`../service-ownership.md`](../service-ownership.md), [`../costs.md`](../costs.md).
+- [`../model-providers.md`](../model-providers.md), [`../teams-alerts.md`](../teams-alerts.md), [`../data-handling.md`](../data-handling.md), [`../service-ownership.md`](../service-ownership.md), [`../costs.md`](../costs.md).
 - [`../design/microsoft-path.md`](../design/microsoft-path.md): the Microsoft-first design note.
 
 The general track is [`../general/README.md`](../general/README.md).

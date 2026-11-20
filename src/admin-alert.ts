@@ -9,7 +9,13 @@
  *   - `email`: one mail to the operator address (OPERATOR_CC_EMAIL) through
  *     the durable outbox and the delivery gate. The outbound path writes the
  *     `[OUTBOUND EMAIL]` audit entry (Source: admin-alert).
- *   - both: `telegram,email`. The alert counts as delivered when at least one
+ *   - `teams`: one POST of an Adaptive Card to a Microsoft Teams Workflows
+ *     webhook (ADMIN_ALERT_TEAMS_WORKFLOW_URL, `.env` only). The URL is the
+ *     credential: it is never logged. A delivered post writes an
+ *     `[ADMIN ALERT TEAMS]` audit entry. Not verified against a live tenant;
+ *     see docs/teams-alerts.md.
+ *   - several: `telegram,email`, `email,teams`, ... (`both` means
+ *     `telegram,email`). The alert counts as delivered when at least one
  *     route delivered it; a route that failed is logged.
  *
  * Rules the email route keeps:
@@ -21,9 +27,19 @@
  *     lands in the bot's own inbox.
  *   - No recursion. A failed alert mail raises a delivery shortfall, and a
  *     bounced one raises a bounce alert. An alert ABOUT an alert mail is
- *     never sent by mail again; it goes to Telegram if that route is on,
- *     otherwise it is logged and dropped.
+ *     never sent by mail again; it goes to Telegram or Teams if one of
+ *     those routes is on, otherwise it is logged and dropped.
+ *
+ * Rules the Teams route keeps:
+ *   - No recursion. A failed Teams post is logged and returned as a result;
+ *     it raises no alert of its own, and an alert raised from inside a Teams
+ *     post's own call chain is not posted to Teams again. Unrelated alerts
+ *     that merely overlap in time are posted as usual.
+ *   - One request, with a timeout; any status outside 2xx is a failure.
+ *   - Size. The request body is kept under TEAMS_ALERT_MAX_BODY_BYTES; a
+ *     longer alert is cut with a visible marker, never split into parts.
  */
+import { AsyncLocalStorage } from 'async_hooks';
 import { randomUUID } from 'crypto';
 
 import { AGENT_INBOX_ADDRESSES, ASSISTANT_NAME, BOT_EMAIL } from './config.js';
@@ -35,6 +51,7 @@ import {
 import { emailAddressesInText } from './email-addresses.js';
 import { stripMarkdown } from './email-format.js';
 import { readEnvFile } from './env.js';
+import { logAdminAlertTeams } from './audit-log.js';
 import { logger } from './logger.js';
 import {
   MAX_OUTBOX_ATTEMPTS,
@@ -43,7 +60,9 @@ import {
   type OutboundEmailResult,
 } from './outbound-email.js';
 
-export type AdminAlertRoute = 'telegram' | 'email';
+export type AdminAlertRoute = 'telegram' | 'email' | 'teams';
+
+const ROUTE_NAMES: readonly AdminAlertRoute[] = ['telegram', 'email', 'teams'];
 
 /** Same four states the webhook's Telegram ping has always returned. */
 export type AdminAlertResult =
@@ -88,10 +107,9 @@ export function parseAdminAlertRoute(raw: string | undefined): {
     .filter(Boolean);
   const routes: AdminAlertRoute[] = [];
   for (const part of parts) {
-    if (part !== 'telegram' && part !== 'email') {
-      return { routes: ['telegram'], invalid: raw };
-    }
-    if (!routes.includes(part)) routes.push(part);
+    const route = ROUTE_NAMES.find((name) => name === part);
+    if (!route) return { routes: ['telegram'], invalid: raw };
+    if (!routes.includes(route)) routes.push(route);
   }
   return routes.length ? { routes } : { routes: ['telegram'], invalid: raw };
 }
@@ -261,6 +279,224 @@ export async function sendAdminAlertEmail(
   return result.retryable ? 'failed-transient' : 'failed-permanent';
 }
 
+// ---------------------------------------------------------------------------
+// Teams route (Workflows webhook). NOT verified against a live Teams tenant.
+// ---------------------------------------------------------------------------
+
+/** The `.env` key holding the workflow's HTTP POST URL (a credential). */
+export const TEAMS_WORKFLOW_URL_KEY = 'ADMIN_ALERT_TEAMS_WORKFLOW_URL';
+
+/**
+ * Teams refuses a message above about 28 KB ("If the message size exceeds
+ * 28 KB, the action fails with the error 'Request Entity too large'",
+ * https://learn.microsoft.com/en-us/connectors/teams/, known issues, read
+ * 2026-11-20). That limit counts the rendered message, not this JSON, so the
+ * request body is held well below it.
+ */
+export const TEAMS_ALERT_MAX_BODY_BYTES = 24_000;
+
+/** One request; no answer within this is a (retryable) failure. */
+export const TEAMS_ALERT_TIMEOUT_MS = 10_000;
+
+/** The marker that ends a cut alert; `omitted` counts the characters left out. */
+export function teamsTruncationMarker(omitted: number): string {
+  return `[Cut to fit the Teams message size limit: ${omitted} characters left out.]`;
+}
+
+let teamsTimeoutMs = TEAMS_ALERT_TIMEOUT_MS;
+
+/** @internal - for tests only. */
+export function _setTeamsAlertTimeoutMsForTests(ms: number | undefined): void {
+  teamsTimeoutMs = ms ?? TEAMS_ALERT_TIMEOUT_MS;
+}
+
+/**
+ * The request body the Teams route posts. This is the ONE place to change if
+ * your tenant's workflow template expects another body.
+ *
+ * Shape: the "Adaptive cards" request body example of the Teams connector's
+ * "When a Teams webhook request is received" trigger,
+ * https://learn.microsoft.com/en-us/connectors/teams/ (read 2026-11-20):
+ * `type` "should always be 'message'", `contentUrl` "should always be null",
+ * card version 1.2. The one addition is `wrap: true` on the text block (a
+ * standard Adaptive Card TextBlock property), so a long line is not cut off
+ * on screen. Plain text only: the page says not to use HTML in cards.
+ */
+export function buildTeamsAlertPayload(text: string): Record<string, unknown> {
+  return {
+    type: 'message',
+    attachments: [
+      {
+        contentType: 'application/vnd.microsoft.card.adaptive',
+        contentUrl: null,
+        content: {
+          $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+          type: 'AdaptiveCard',
+          version: '1.2',
+          body: [{ type: 'TextBlock', text, wrap: true }],
+        },
+      },
+    ],
+  };
+}
+
+function teamsBodyBytes(text: string): number {
+  return Buffer.byteLength(JSON.stringify(buildTeamsAlertPayload(text)));
+}
+
+/**
+ * Fit the alert into one Teams message. A text that fits is returned as is.
+ * A longer one is cut (on a character boundary) and ends with the marker, so
+ * a reader can see that something is missing. It is never split into parts.
+ */
+export function fitTeamsAlertText(
+  text: string,
+  maxBodyBytes = TEAMS_ALERT_MAX_BODY_BYTES,
+): { text: string; truncated: boolean } {
+  if (teamsBodyBytes(text) <= maxBodyBytes) return { text, truncated: false };
+  const chars = Array.from(text);
+  const withMarker = (n: number) =>
+    `${chars.slice(0, n).join('').trimEnd()}\n\n${teamsTruncationMarker(chars.length - n)}`;
+  let lo = 0;
+  let hi = chars.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (teamsBodyBytes(withMarker(mid)) <= maxBodyBytes) lo = mid;
+    else hi = mid - 1;
+  }
+  return { text: withMarker(lo), truncated: true };
+}
+
+/** The workflow URL from `.env`, or the reason it cannot be used. */
+export function resolveTeamsWorkflowUrl(): { url?: string; problem?: string } {
+  const raw = (
+    readEnvFile([TEAMS_WORKFLOW_URL_KEY])[TEAMS_WORKFLOW_URL_KEY] ?? ''
+  ).trim();
+  if (!raw) return { problem: `${TEAMS_WORKFLOW_URL_KEY} is not set` };
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { problem: `${TEAMS_WORKFLOW_URL_KEY} is not a valid URL` };
+  }
+  if (parsed.protocol !== 'https:') {
+    return { problem: `${TEAMS_WORKFLOW_URL_KEY} must be an https:// URL` };
+  }
+  return { url: raw };
+}
+
+/**
+ * Remove the workflow URL, and anything that looks like its signature, from
+ * text bound for a log line or an error.
+ */
+export function redactTeamsUrl(value: string, url: string | undefined): string {
+  let out = value;
+  if (url) {
+    out = out.split(url).join('[teams-workflow-url]');
+    try {
+      const parsed = new URL(url);
+      for (const v of parsed.searchParams.values()) {
+        if (v.length >= 8) out = out.split(v).join('[redacted]');
+      }
+      if (parsed.pathname.length > 1) {
+        out = out.split(parsed.pathname).join('/[redacted]');
+      }
+    } catch {
+      // resolveTeamsWorkflowUrl only hands out parseable URLs.
+    }
+  }
+  return out.replace(/([?&]sig=)[^&\s"']+/gi, '$1[redacted]');
+}
+
+function describeError(err: unknown, url: string | undefined): string {
+  if (err instanceof Error) {
+    const cause =
+      err.cause instanceof Error ? `; cause: ${err.cause.message}` : '';
+    return redactTeamsUrl(`${err.name}: ${err.message}${cause}`, url);
+  }
+  return redactTeamsUrl(String(err), url);
+}
+
+/**
+ * Set only inside the call chain of one Teams request (async context, not a
+ * process-wide flag). An alert raised from inside that chain is the post
+ * reporting on itself and is not posted to Teams; an unrelated alert that
+ * happens to overlap in time is not in this context and is posted.
+ */
+const teamsPostContext = new AsyncLocalStorage<true>();
+
+/** True when called from inside a Teams request's own call chain. */
+export function isInsideTeamsPost(): boolean {
+  return teamsPostContext.getStore() === true;
+}
+
+/**
+ * Post one alert to the Teams workflow. Never throws; returns one of the
+ * four results the other routes use. 2xx is success (the request trigger
+ * answers 202 Accepted when the flow has no Response action,
+ * https://learn.microsoft.com/en-us/azure/connectors/connectors-native-reqres,
+ * read 2026-11-20). Success means the flow accepted the request; whether the
+ * card then appeared in the channel is in the flow's run history.
+ */
+export async function sendAdminAlertTeams(
+  text: string,
+): Promise<AdminAlertResult> {
+  const target = resolveTeamsWorkflowUrl();
+  if (!target.url) {
+    logger.error(
+      { problem: target.problem },
+      'Cannot post admin alert to Teams: workflow URL unusable',
+    );
+    return 'unconfigured';
+  }
+  const url = target.url;
+  const fitted = fitTeamsAlertText(text);
+  if (fitted.truncated) {
+    logger.warn(
+      { originalLength: text.length, postedLength: fitted.text.length },
+      'Admin alert cut to fit the Teams message size limit',
+    );
+  }
+  let response: Response;
+  try {
+    // Only the request runs in the context; the audit write below does not,
+    // so a later alert from the audit commit is not mistaken for recursion.
+    response = await teamsPostContext.run(true, () =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildTeamsAlertPayload(fitted.text)),
+        // A redirect would send the alert somewhere the operator did not set.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(teamsTimeoutMs),
+      }),
+    );
+  } catch (err) {
+    logger.error(
+      { error: describeError(err, url) },
+      'Admin alert to Teams failed (no answer or timeout)',
+    );
+    return 'failed-transient';
+  }
+  // The body is not read: an error page could echo the request URL.
+  void response.body?.cancel().catch(() => {});
+  if (response.status < 200 || response.status > 299) {
+    logger.error(
+      { status: response.status },
+      'Admin alert to Teams not accepted',
+    );
+    return response.status === 429 || response.status >= 500
+      ? 'failed-transient'
+      : 'failed-permanent';
+  }
+  logAdminAlertTeams({
+    text: fitted.text,
+    status: response.status,
+    truncated: fitted.truncated,
+  });
+  return 'sent';
+}
+
 export interface AdminAlertOptions {
   /** The caller's Telegram transport (the behaviour before this module). */
   telegram: () => Promise<AdminAlertResult>;
@@ -320,6 +556,21 @@ export async function dispatchAdminAlert(
       pending.push(
         runRoute('email', () => sendAdminAlertEmail(text)).then((r) => [
           'email',
+          r,
+        ]),
+      );
+    }
+  }
+  if (routes.includes('teams')) {
+    if (isInsideTeamsPost()) {
+      logger.error(
+        { text: text.slice(0, 500), routes },
+        'Admin alert raised during a Teams post; not posted to Teams (no recursion)',
+      );
+    } else {
+      pending.push(
+        runRoute('teams', () => sendAdminAlertTeams(text)).then((r) => [
+          'teams',
           r,
         ]),
       );
@@ -420,7 +671,7 @@ export function checkAdminAlertConfig(): string[] {
   const problems: string[] = [];
   if (parsed.invalid !== undefined) {
     problems.push(
-      `ADMIN_ALERT_ROUTE="${parsed.invalid}" is not valid (use telegram, email, or telegram,email); using telegram`,
+      `ADMIN_ALERT_ROUTE="${parsed.invalid}" is not valid (use telegram, email, teams, or several joined by commas, such as telegram,email); using telegram`,
     );
   }
   if (parsed.routes.includes('email')) {
@@ -428,6 +679,14 @@ export function checkAdminAlertConfig(): string[] {
     if (operator.problem) {
       problems.push(
         `ADMIN_ALERT_ROUTE includes email but ${operator.problem}; operator alerts will not be mailed`,
+      );
+    }
+  }
+  if (parsed.routes.includes('teams')) {
+    const target = resolveTeamsWorkflowUrl();
+    if (target.problem) {
+      problems.push(
+        `ADMIN_ALERT_ROUTE includes teams but ${target.problem}; operator alerts will not reach Teams`,
       );
     }
   }
@@ -447,6 +706,13 @@ export function checkAdminAlertConfig(): string[] {
   return problems;
 }
 
+/** `teams` is present only when that route is on. */
+export interface AdminAlertTestReport {
+  telegram: AdminAlertResult | 'off';
+  email: AdminAlertResult | 'off';
+  teams?: AdminAlertResult;
+}
+
 /**
  * First-start check: one test alert on each enabled route, each reported on
  * its own (a working route must not hide a broken one).
@@ -454,22 +720,22 @@ export function checkAdminAlertConfig(): string[] {
 export async function sendTestAdminAlerts(opts: {
   telegram: (text: string) => Promise<AdminAlertResult>;
   now?: Date;
-}): Promise<Record<AdminAlertRoute, AdminAlertResult | 'off'>> {
+}): Promise<AdminAlertTestReport> {
   const routes = resolveAdminAlertRoutes();
   const stamp = (opts.now ?? new Date()).toISOString();
   const text = `Test alert from ${ASSISTANT_NAME} (${stamp}). Operator alerts on this route arrive like this one. No action is needed.`;
-  const report: Record<AdminAlertRoute, AdminAlertResult | 'off'> = {
-    telegram: 'off',
-    email: 'off',
-  };
+  const report: AdminAlertTestReport = { telegram: 'off', email: 'off' };
   if (routes.includes('telegram')) {
     report.telegram = await runRoute('telegram', () => opts.telegram(text));
   }
   if (routes.includes('email')) {
     report.email = await runRoute('email', () => sendAdminAlertEmail(text));
   }
+  if (routes.includes('teams')) {
+    report.teams = await runRoute('teams', () => sendAdminAlertTeams(text));
+  }
   for (const route of routes) {
-    const result = report[route];
+    const result = report[route] ?? 'off';
     if (result === 'sent') {
       logger.info({ route }, 'Admin alert test delivered');
     } else {

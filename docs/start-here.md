@@ -42,7 +42,7 @@ Start with the smallest one that answers your question.
 
 **The pilot is the recommended first real version.** It is done when a real colleague has: asked a question by email and got an answer with a citation; sent an update that was recorded as a decision; made a request that reached the right approver; and each of these left an entry in the log. Your agent keeps that checklist with you.
 
-Some parts are new and have not yet been run against live services: the mail intake service in `inbound/`, operator alerts by email, the Microsoft Foundry option, and the step-by-step server recipe. Your agent will tell you when you reach one. Plan one real test of each before you tell colleagues the address.
+Some parts are new and have not yet been run against live services: the mail intake service in `inbound/`, operator alerts by email or in Microsoft Teams, the Microsoft Foundry option, and the step-by-step server recipe. Your agent will tell you when you reach one. Plan one real test of each before you tell colleagues the address.
 
 ## What you need before you start
 
@@ -89,7 +89,7 @@ One question at a time, each with an explanation and a recommendation. You can a
 5. Which address the bot sends from.
 6. Where the bot runs and where the record is kept.
 7. Who is on the allowlist, and what they are told about where their mail goes.
-8. How people reach the bot, and how the operator is alerted (Telegram, email, or both).
+8. How people reach the bot, and how the operator is alerted (Telegram, email, a Microsoft Teams channel, or more than one).
 9. Whether the bot sends any reminders on a schedule. For a first pilot: none.
 10. Whether the bot may search the web or reach the internet from its workspace. For a first pilot: no.
 

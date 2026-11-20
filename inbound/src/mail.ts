@@ -16,6 +16,12 @@ import {
 export interface Envelope {
   from: string;
   to: string;
+  /**
+   * `Authentication-Results` as the platform's own API reports it
+   * (`message.headers`), not as read from the raw bytes. Used only to
+   * confirm which raw header is the platform's (`auth.ts`).
+   */
+  authenticationResults?: string | null;
 }
 
 /**
@@ -114,6 +120,22 @@ function display(box: { name: string; address: string }): string {
   return name && name.toLowerCase() !== box.address
     ? `"${name}" <${box.address}>`
     : box.address;
+}
+
+/**
+ * How many different addresses the From header text holds, display name
+ * included, so a group or a second address the parser drops still counts.
+ * The same address as display name and as mailbox counts once. A character
+ * outside ASCII counts as one more: two readers may fold it differently.
+ */
+export function fromAddressCount(fromHeader: string): number {
+  const tokens = fromHeader.match(/[^\s<>(),;:]+@[^\s<>(),;:]+/g) ?? [];
+  const found = new Set(
+    tokens.map((a) => a.replace(/^["']+|["']+$/g, '').toLowerCase()),
+  );
+  // Checked before lower-casing: the Kelvin sign lower-cases to "k".
+  // eslint-disable-next-line no-control-regex
+  return found.size + (tokens.some((a) => /[^\x00-\x7f]/.test(a)) ? 1 : 0);
 }
 
 /** Lowercase ASCII words joined by hyphens, for the file name. */
@@ -226,15 +248,9 @@ export async function buildIntake(
   const auth = readAuth(
     email.headers,
     envelope.from,
-    // Distinct addresses in the header text, so a group or a second address
-    // the parser drops still counts. The same address as display name and
-    // as mailbox ("a@example.edu" <a@example.edu>) is one.
-    new Set(
-      (fromHeader.match(/[^\s<>"'(),;:]+@[^\s<>"'(),;:]+/g) ?? []).map((a) =>
-        a.toLowerCase(),
-      ),
-    ).size,
+    fromAddressCount(fromHeader),
     trust,
+    envelope.authenticationResults,
   );
   const toBoxes = mailboxes(email.to);
   const ccBoxes = mailboxes(email.cc);

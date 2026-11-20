@@ -8,19 +8,21 @@
 // deployer set can separate a real header from a planted one. The rule:
 //
 // 1. Platform result. The FIRST `Authentication-Results` header in the
-//    message is read only when its authserv-id equals PLATFORM_AUTHSERV_ID.
-//    The mail platform that runs this worker puts its header first, so
-//    every header the sender wrote is below it. No other header is ever
-//    read as the platform's, whatever name it carries.
+//    message is read only when its authserv-id equals PLATFORM_AUTHSERV_ID,
+//    no other header carries that name, and it is the header the platform's
+//    own API (`message.headers`) reports first. The mail platform that runs
+//    this worker puts its header first, so every header the sender wrote is
+//    below it.
 // 2. Forwarder result. One more header is read, the first one below the
 //    platform header whose authserv-id is in FORWARDER_AUTHSERV_IDS, and
 //    only when the platform result itself shows that a server of a domain
 //    in FORWARDER_DOMAINS handed the message over: SPF passed for an
-//    envelope sender in such a domain, or a DKIM signature of such a domain
-//    passed. Without that proof a header naming the forwarder is ignored:
-//    anyone can send a message straight to the bot's address with that
-//    header in it.
-// 3. Nothing else is read: no `ARC-*` header (this worker checks no
+//    envelope sender in such a domain. Without that proof a header naming
+//    the forwarder is ignored: anyone can send a message straight to the
+//    bot's address with that header in it.
+// 3. A header that is read must hold exactly one DMARC result and at most
+//    one SPF result. Otherwise it is dropped whole (see `toResult`).
+// 4. Nothing else is read: no `ARC-*` header (this worker checks no
 //    signature), no `Received-SPF`, no header below the ones above.
 //
 // With both settings empty (the default) nothing is read.
@@ -163,82 +165,132 @@ export function parseAuthenticationResults(value: string): Parsed | null {
   return { authservId: id, methods };
 }
 
+/** '' when the property is absent, 'invalid' when it is not a host name. */
+function domainProp(value: string | undefined): string {
+  if (value === undefined) return '';
+  return domainOf(value) || 'invalid';
+}
+
+/**
+ * Reduce one parsed header, or return null when it cannot be relied on. A
+ * header must carry exactly one DMARC result and at most one SPF result.
+ * A second one means text was added to the header: by a continuation line
+ * at the top of the sender's own headers, or by sender text that a server
+ * copied into a comment and that closed the comment early. Such a header
+ * is dropped whole, whichever of the two results came first.
+ */
 function toResult(
   parsed: Parsed,
   source: AuthResult['source'],
   envelopeDomain: string,
-): AuthResult {
-  const first = (method: string) =>
-    parsed.methods.find((m) => m.method === method);
-  const spf = first('spf');
-  const dmarc = first('dmarc');
+): AuthResult | null {
+  const of = (method: string) =>
+    parsed.methods.filter((m) => m.method === method);
+  const spfs = of('spf');
+  const dmarcs = of('dmarc');
+  if (dmarcs.length !== 1 || spfs.length > 1) return null;
+  const spf = spfs[0];
+  const dmarc = dmarcs[0];
+  // The platform checked SPF for the envelope sender it gave this worker,
+  // unless its result names another identity (the HELO name). A forwarder
+  // checked it for the sender it saw, which only its own header names.
+  let spfDomain = '';
+  if (spf) {
+    const mailfrom = spf.props.get('smtp.mailfrom');
+    if (mailfrom !== undefined) spfDomain = domainProp(mailfrom);
+    else if (source === 'platform' && !spf.props.has('smtp.helo'))
+      spfDomain = envelopeDomain;
+  }
   return {
     source,
     authserv_id: parsed.authservId,
     spf: spf?.result ?? '',
-    // The platform checked SPF for the envelope sender it gave this worker.
-    // A forwarder checked it for the sender it saw, which only its own
-    // header names.
-    spf_domain:
-      domainOf(spf?.props.get('smtp.mailfrom') ?? '') ||
-      (source === 'platform' && spf ? envelopeDomain : ''),
-    dkim: parsed.methods
-      .filter((m) => m.method === 'dkim')
+    spf_domain: spfDomain,
+    dkim: of('dkim')
       .slice(0, 10)
       .map((m) => ({
         result: m.result,
-        domain: domainOf(m.props.get('header.d') ?? ''),
+        domain: domainProp(m.props.get('header.d')),
       })),
-    dmarc: dmarc?.result ?? '',
-    dmarc_from: domainOf(dmarc?.props.get('header.from') ?? ''),
-    arc: first('arc')?.result ?? '',
+    dmarc: dmarc.result,
+    dmarc_from: domainProp(dmarc.props.get('header.from')),
+    arc: of('arc')[0]?.result ?? '',
   };
 }
 
-/** True when the platform result shows a forwarder's server handed it over. */
+/**
+ * True when the platform result shows a forwarder's server handed the
+ * message over: SPF passed for an envelope sender in a listed domain. A
+ * DKIM signature is not used as proof here.
+ */
 function cameThroughForwarder(platform: AuthResult, trust: AuthTrust): boolean {
-  const listed = (domain: string) =>
-    domain !== '' && trust.forwarderDomains.includes(domain);
   return (
-    (platform.spf === 'pass' && listed(platform.spf_domain)) ||
-    platform.dkim.some((d) => d.result === 'pass' && listed(d.domain))
+    platform.spf === 'pass' &&
+    trust.forwarderDomains.includes(platform.spf_domain)
   );
 }
+
+const squash = (value: string) => value.replace(/\s+/g, ' ').trim();
 
 /**
  * Apply the rule at the top of this file. `headers` is every header of the
  * message in the order it has in the raw bytes, first header first.
+ * `platformHeader` is what the mail platform's own API returns for
+ * `Authentication-Results` (`message.headers.get(...)`); the sender cannot
+ * set it apart from the raw bytes.
  */
 export function readAuth(
   headers: { key: string; value: string }[],
   envelopeFrom: string,
   fromMailboxes: number,
   trust: AuthTrust,
+  platformHeader?: string | null,
 ): AuthRecord {
   const envelopeDomain = domainOf(envelopeFrom);
   const record: AuthRecord = {
     version: 1,
     envelope_from_domain: envelopeDomain,
-    from_headers: headers.filter((h) => h.key === 'from').length,
+    // "From :" and a line with no colon are From headers to some readers.
+    from_headers: headers.filter((h) => /^from(\s|$)/.test(h.key)).length,
     from_mailboxes: fromMailboxes,
     results: [],
   };
-  const all = headers.filter((h) => h.key === 'authentication-results');
+  const all = headers
+    .filter((h) => h.key === 'authentication-results')
+    .map((h) => ({
+      value: h.value,
+      parsed: parseAuthenticationResults(h.value),
+    }));
   if (!trust.platformAuthservId || all.length === 0) return record;
 
-  const top = parseAuthenticationResults(all[0].value);
-  if (!top || top.authservId !== trust.platformAuthservId) return record;
-  const platform = toResult(top, 'platform', envelopeDomain);
+  const top = all[0];
+  if (!top.parsed || top.parsed.authservId !== trust.platformAuthservId)
+    return record;
+  // The platform's name on a second header: one of the two is planted, and
+  // position alone should not decide which.
+  if (
+    all.filter((h) => h.parsed?.authservId === trust.platformAuthservId)
+      .length !== 1
+  )
+    return record;
+  // The first header in the raw bytes must be the one the platform's API
+  // reports first. If the platform did not put its header into the raw
+  // message, the first one there was written by the sender.
+  if (!platformHeader || !squash(platformHeader).startsWith(squash(top.value)))
+    return record;
+  const platform = toResult(top.parsed, 'platform', envelopeDomain);
+  if (!platform) return record;
   record.results.push(platform);
 
   if (!cameThroughForwarder(platform, trust)) return record;
   for (const header of all.slice(1)) {
-    const parsed = parseAuthenticationResults(header.value);
-    if (!parsed || !trust.forwarderAuthservIds.includes(parsed.authservId))
+    if (
+      !header.parsed ||
+      !trust.forwarderAuthservIds.includes(header.parsed.authservId)
+    )
       continue;
-    // A forwarder that is also the platform would have been read above.
-    if (parsed.authservId === trust.platformAuthservId) continue;
-    record.results.push(toResult(parsed, 'forwarder', envelopeDomain));
+    const forwarder = toResult(header.parsed, 'forwarder', envelopeDomain);
+    if (forwarder) record.results.push(forwarder);
     break;
   }
   return record;

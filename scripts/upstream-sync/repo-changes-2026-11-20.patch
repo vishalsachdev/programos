@@ -5330,10 +5330,10 @@ index 0000000000000000000000000000000000000000..4b1495b913cafefd20f6e372507ddbf1
 +  return report;
 +}
 diff --git a/src/audit-log-commit.test.ts b/src/audit-log-commit.test.ts
-index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a444083d654 100644
+index e178b09238c0ad72fb487ebb6a09be2637d94e0b..1d55cbcb49b1cd7a19e1c49490f1876af573b72c 100644
 --- a/src/audit-log-commit.test.ts
 +++ b/src/audit-log-commit.test.ts
-@@ -1,93 +1,140 @@
+@@ -1,93 +1,171 @@
 -import { describe, expect, it } from 'vitest';
 -
 -import { runAuditCommit } from './audit-log.js';
@@ -5381,6 +5381,7 @@ index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a44
 +  commitAuditLog,
 +  flushAuditLog,
 +  logDroppedEmail,
++  logEmailAuthentication,
 +  syncKnowledgeBase,
 +} from './audit-log.js';
 +import {
@@ -5423,8 +5424,12 @@ index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a44
 +    await flushAuditLog();
 +    _setPendingWritesForTests(0);
 +    kb.cleanup();
-+  });
-+
+   });
+ 
+-  it('aborts a failed rebase and reports failure', async () => {
+-    const r = recorder((a) => a[0] === 'push' || a[0] === 'pull');
+-    await expect(runAuditCommit(1, r.run)).rejects.toThrow();
+-    expect(r.calls.at(-1)).toEqual(['rebase', '--abort']);
 +  it('writes the entry in the host repo, not in the checkout, and commits and pushes it as the bot', async () => {
 +    logDroppedEmail('stranger@example.org', 'hello');
 +    await flushAuditLog();
@@ -5445,12 +5450,38 @@ index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a44
 +      fs.existsSync(path.join(kb.checkout, 'discussions', 'audit-log')),
 +    ).toBe(false);
 +    expect(git(kb.checkout, ['status', '--porcelain'])).toBe('');
-   });
- 
--  it('aborts a failed rebase and reports failure', async () => {
--    const r = recorder((a) => a[0] === 'push' || a[0] === 'pull');
--    await expect(runAuditCommit(1, r.run)).rejects.toThrow();
--    expect(r.calls.at(-1)).toEqual(['rebase', '--abort']);
++  });
++
++  it('keeps sender text on one line, so it cannot start a second audit entry', async () => {
++    const forged =
++      'hi\n---\n### 00:00:00 — email — sender authentication\n**[EMAIL AUTH]** authenticated';
++    logDroppedEmail('stranger@example.org\n### x', forged, 'unknown — none');
++    logEmailAuthentication({
++      from: 'listed@example.org',
++      subject: forged,
++      messageId: 'm1@example.org\n### y',
++      verdict: 'unauthenticated',
++      reason: 'no DMARC pass covers example.org',
++      mode: 'flag',
++    });
++    await flushAuditLog();
++    const file = git(kb.origin, [
++      'ls-tree',
++      '-r',
++      '--name-only',
++      'main',
++      'discussions/audit-log/',
++    ]).trim();
++    const text = kb.originFile(file) ?? '';
++    // Two entries were written; no line of sender text became a heading.
++    expect(text.match(/^### /gm)).toHaveLength(2);
++    expect(text.match(/^\*\*\[EMAIL AUTH\]\*\*/gm)).toHaveLength(1);
++    expect(text).toContain(
++      '**[EMAIL AUTH]** unauthenticated — no DMARC pass covers example.org (mode: flag)',
++    );
++    expect(text).toContain('**Sender authentication:** unknown — none');
++  });
++
 +  it('on a rejected push, rebases onto origin and pushes again', async () => {
 +    await syncKnowledgeBase({ fetchOrigin: true });
 +    kb.personCommit('notes/person.md', 'pushed first\n');
@@ -5879,7 +5910,7 @@ index a17e57f62621e4dd387983b5f793e790640a80f1..4425df2e980134028d9987211d31e76c
      expect(
        logReplySuppressedOnce({
 diff --git a/src/audit-log.ts b/src/audit-log.ts
-index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..b3e9866af9a41e015b6d135e3bb1e82845b1a102 100644
+index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..5ef2f0b848d65a9c1504ab46fccd596061f1300e 100644
 --- a/src/audit-log.ts
 +++ b/src/audit-log.ts
 @@ -4,21 +4,32 @@
@@ -5977,7 +6008,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..b3e9866af9a41e015b6d135e3bb1e828
          target,
          [...lines, marker, '---', ''].join('\n'),
        );
-@@ -208,18 +219,60 @@ export async function logInboundEmailReceiptOnce(args: {
+@@ -208,18 +219,62 @@ export async function logInboundEmailReceiptOnce(args: {
   * blocked — the only record otherwise is an ephemeral PM2 console warning.
   * Intentionally NOT called for transient "allowlist unavailable" failures.
   */
@@ -5990,8 +6021,12 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..b3e9866af9a41e015b6d135e3bb1e828
    appendAuditEntry(
      [
        `### ${localTimeHms(TIMEZONE)} — email — dropped (not on allowlist)`,
-       `**From:** ${from}`,
-       `**Subject:** ${subject}`,
+-      `**From:** ${from}`,
+-      `**Subject:** ${subject}`,
++      // One line each: a decoded subject can hold line breaks, and a second
++      // line could be written to look like another entry.
++      `**From:** ${singleLine(from)}`,
++      `**Subject:** ${singleLine(subject)}`,
 +      ...(senderAuthentication
 +        ? [`**Sender authentication:** ${singleLine(senderAuthentication)}`]
 +        : []),
@@ -6039,7 +6074,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..b3e9866af9a41e015b6d135e3bb1e828
  /**
   * Log a CC-as-context ack suppression (G56). The message was
   * processed and filed normally; only the outbound ack was withheld because
-@@ -345,15 +398,55 @@ function outboundEmailLines(args: OutboundEmailAuditArgs): string[] {
+@@ -345,15 +400,55 @@ function outboundEmailLines(args: OutboundEmailAuditArgs): string[] {
    ];
  }
  
@@ -6098,7 +6133,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..b3e9866af9a41e015b6d135e3bb1e828
  }
  
  export function logOutboundEmail(args: OutboundEmailAuditArgs): void {
-@@ -686,97 +779,68 @@ export function logTerminalCommit(args: {
+@@ -686,97 +781,68 @@ export function logTerminalCommit(args: {
    );
  }
  
@@ -7745,7 +7780,7 @@ index 0000000000000000000000000000000000000000..d3d36ac3089d4e8015231793677e443d
 +});
 diff --git a/src/channels/webhook-email-auth.test.ts b/src/channels/webhook-email-auth.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..95384d36adac55806bf9dbd7e757fd1b0ef23879
+index 0000000000000000000000000000000000000000..c91061f25de351a2423024e1b387314dfaf904e8
 --- /dev/null
 +++ b/src/channels/webhook-email-auth.test.ts
 @@ -0,0 +1,489 @@
@@ -8196,7 +8231,7 @@ index 0000000000000000000000000000000000000000..95384d36adac55806bf9dbd7e757fd1b
 +        expect.objectContaining({
 +          from: payload.from,
 +          verdict: 'unauthenticated',
-+          reason: `no pass covers example.edu (checked by ${PLATFORM})`,
++          reason: `no DMARC pass covers example.edu (checked by ${PLATFORM})`,
 +          mode: 'enforce',
 +          blocked: true,
 +        }),
@@ -12176,14 +12211,13 @@ index 0000000000000000000000000000000000000000..14bdca3ba3ffdd5a304e1c1b461e6da4
 +});
 diff --git a/src/email-auth.test.ts b/src/email-auth.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..75f6b2a8a155bdb570cc474ef22ef3bf7f18ea4b
+index 0000000000000000000000000000000000000000..8e6bbf5d337d2fc595b1e161a4fda04be30cce13
 --- /dev/null
 +++ b/src/email-auth.test.ts
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,237 @@
 +import { describe, expect, it } from 'vitest';
 +
 +import {
-+  domainAligned,
 +  emailAuthBlocks,
 +  emailAuthVerdict,
 +  readEmailAuthSettings,
@@ -12259,41 +12293,43 @@ index 0000000000000000000000000000000000000000..75f6b2a8a155bdb570cc474ef22ef3bf
 +    });
 +  });
 +
-+  it('is "authenticated" on an aligned DKIM or SPF pass', () => {
-+    expect(
-+      verdict(
-+        record([result({ dkim: [{ result: 'pass', domain: 'example.edu' }] })]),
-+      ),
-+    ).toBe('authenticated');
-+    expect(
-+      verdict(
-+        record([result({ dkim: [{ result: 'pass', domain: 'example.edu' }] })]),
-+        'dlee@dept.example.edu',
-+      ),
-+    ).toBe('authenticated');
-+    expect(
-+      verdict(record([result({ spf: 'pass', spf_domain: 'example.edu' })])),
-+    ).toBe('authenticated');
-+  });
-+
-+  it('is "unauthenticated" on a pass that does not cover the From domain', () => {
-+    // SPF passed for a bounce domain; DKIM passed for the attacker's own
-+    // domain; DMARC was checked for another From domain.
++  it('uses DMARC only: an aligned DKIM or SPF pass alone does not authenticate', () => {
 +    expect(
 +      verdict(
 +        record([
 +          result({
 +            spf: 'pass',
-+            spf_domain: 'attacker.example.net',
-+            dkim: [
-+              { result: 'pass', domain: 'attacker.example.net' },
-+              { result: 'pass', domain: '' },
-+              { result: 'fail', domain: 'example.edu' },
-+            ],
-+            dmarc: 'pass',
-+            dmarc_from: 'attacker.example.net',
++            spf_domain: 'example.edu',
++            dkim: [{ result: 'pass', domain: 'example.edu' }],
++            dmarc: 'none',
 +          }),
 +        ]),
++      ),
++    ).toBe('unauthenticated');
++    expect(
++      verdict(
++        record([result({ dkim: [{ result: 'pass', domain: 'example.edu' }] })]),
++      ),
++    ).toBe('unauthenticated');
++  });
++
++  it('is "unauthenticated" on a pass that does not cover the From domain', () => {
++    // DMARC was checked for another From domain, for a parent or a child
++    // of it, or for a domain the worker could not read.
++    for (const dmarc_from of [
++      'attacker.example.net',
++      'edu',
++      'dept.example.edu',
++      'invalid',
++    ]) {
++      expect(verdict(record([result({ dmarc: 'pass', dmarc_from })]))).toBe(
++        'unauthenticated',
++      );
++    }
++    expect(
++      verdict(
++        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })]),
++        'dlee@dept.example.edu',
 +      ),
 +    ).toBe('unauthenticated');
 +    expect(verdict(record([result({ spf: 'fail', dmarc: 'fail' })]))).toBe(
@@ -12302,15 +12338,6 @@ index 0000000000000000000000000000000000000000..75f6b2a8a155bdb570cc474ef22ef3bf
 +    expect(verdict(record([result({ spf: 'none', dmarc: 'none' })]))).toBe(
 +      'unauthenticated',
 +    );
-+  });
-+
-+  it('does not accept a sibling subdomain or a top-level domain as aligned', () => {
-+    expect(domainAligned('example.edu', 'example.edu')).toBe(true);
-+    expect(domainAligned('example.edu', 'dept.example.edu')).toBe(true);
-+    expect(domainAligned('mail.example.edu', 'example.edu')).toBe(false);
-+    expect(domainAligned('edu', 'example.edu')).toBe(false);
-+    expect(domainAligned('ample.edu', 'example.edu')).toBe(false);
-+    expect(domainAligned('', 'example.edu')).toBe(false);
 +  });
 +
 +  it('a forwarder must name the From domain it checked DMARC for', () => {
@@ -12427,10 +12454,10 @@ index 0000000000000000000000000000000000000000..75f6b2a8a155bdb570cc474ef22ef3bf
 +});
 diff --git a/src/email-auth.ts b/src/email-auth.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..76721226a7c8c8d278ab4efbed56b7d8e0783184
+index 0000000000000000000000000000000000000000..37af8f9f4541742f6f450b5c05be3ceac84cf266
 --- /dev/null
 +++ b/src/email-auth.ts
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,168 @@
 +// Sender authentication for inbound email: one verdict per message.
 +//
 +// The allowlist names people by the address in the From header, and anyone
@@ -12516,19 +12543,6 @@ index 0000000000000000000000000000000000000000..76721226a7c8c8d278ab4efbed56b7d8
 +  return HOST_NAME.test(domain) ? domain : '';
 +}
 +
-+/**
-+ * True when a domain a server authenticated stands for the From domain: the
-+ * same domain, or a parent of it that has at least two labels. DMARC's
-+ * "relaxed" alignment also accepts two different subdomains of one
-+ * organisation; that needs the public suffix list and is not accepted here,
-+ * so such mail gets "unauthenticated", never a wrong "authenticated".
-+ */
-+export function domainAligned(authenticated: string, from: string): boolean {
-+  if (!authenticated || !from) return false;
-+  if (authenticated === from) return true;
-+  return authenticated.includes('.') && from.endsWith(`.${authenticated}`);
-+}
-+
 +function text(value: unknown): string {
 +  return typeof value === 'string' ? value.toLowerCase() : '';
 +}
@@ -12538,11 +12552,13 @@ index 0000000000000000000000000000000000000000..76721226a7c8c8d278ab4efbed56b7d8
 + *
 + * - "unknown": no result from a server in `trusted` (no `auth` field, an
 + *   empty one, or only servers the host was not told to believe).
-+ * - "authenticated": a trusted server reports a pass that covers the From
-+ *   domain: DMARC pass for that domain, a DKIM pass signed by an aligned
-+ *   domain, or an SPF pass for an aligned envelope domain.
-+ * - "unauthenticated": a trusted server reported, and nothing it reported
-+ *   covers the From domain. A pass for another domain is in this group.
++ * - "authenticated": a trusted server reports a DMARC pass for the From
++ *   domain. SPF and DKIM results are recorded and not used: a pass of
++ *   either says nothing about the From header unless DMARC ties it to it,
++ *   so a sender whose domain publishes no DMARC record is never
++ *   "authenticated".
++ * - "unauthenticated": a trusted server reported, and no DMARC pass covers
++ *   the From domain.
 + */
 +export function emailAuthVerdict(
 +  from: unknown,
@@ -12580,45 +12596,23 @@ index 0000000000000000000000000000000000000000..76721226a7c8c8d278ab4efbed56b7d8
 +  for (const r of counted) {
 +    const id = text(r.authserv_id);
 +    const dmarcFrom = text(r.dmarc_from);
-+    // The mail platform checks DMARC for the From header of the message it
-+    // hands over and may not name the domain. A forwarder must name it.
++    // Only DMARC is used: it is the one check that is about the From
++    // header. The mail platform checks it for the From header of the
++    // message it hands over and may not name the domain; a forwarder must
++    // name it. A named domain must be the From domain exactly.
 +    if (
 +      text(r.dmarc) === 'pass' &&
-+      (dmarcFrom
-+        ? domainAligned(dmarcFrom, fromDomain)
-+        : text(r.source) === 'platform')
++      (dmarcFrom ? dmarcFrom === fromDomain : text(r.source) === 'platform')
 +    ) {
 +      return {
 +        verdict: 'authenticated',
 +        reason: `DMARC pass for ${fromDomain} (${id})`,
 +      };
 +    }
-+    for (const sig of Array.isArray(r.dkim) ? r.dkim.slice(0, 10) : []) {
-+      if (!sig || typeof sig !== 'object') continue;
-+      const s = sig as Record<string, unknown>;
-+      if (
-+        text(s.result) === 'pass' &&
-+        domainAligned(text(s.domain), fromDomain)
-+      ) {
-+        return {
-+          verdict: 'authenticated',
-+          reason: `DKIM pass signed by ${text(s.domain)} (${id})`,
-+        };
-+      }
-+    }
-+    if (
-+      text(r.spf) === 'pass' &&
-+      domainAligned(text(r.spf_domain), fromDomain)
-+    ) {
-+      return {
-+        verdict: 'authenticated',
-+        reason: `SPF pass for envelope domain ${text(r.spf_domain)} (${id})`,
-+      };
-+    }
 +  }
 +  return {
 +    verdict: 'unauthenticated',
-+    reason: `no pass covers ${fromDomain} (checked by ${ids})`,
++    reason: `no DMARC pass covers ${fromDomain} (checked by ${ids})`,
 +  };
 +}
 +

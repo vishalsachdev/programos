@@ -227,8 +227,10 @@ export function logDroppedEmail(
   appendAuditEntry(
     [
       `### ${localTimeHms(TIMEZONE)} — email — dropped (not on allowlist)`,
-      `**From:** ${from}`,
-      `**Subject:** ${subject}`,
+      // One line each: a decoded subject can hold line breaks, and a second
+      // line could be written to look like another entry.
+      `**From:** ${singleLine(from)}`,
+      `**Subject:** ${singleLine(subject)}`,
       ...(senderAuthentication
         ? [`**Sender authentication:** ${singleLine(senderAuthentication)}`]
         : []),

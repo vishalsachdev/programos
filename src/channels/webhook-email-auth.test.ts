@@ -445,7 +445,7 @@ describe('sender authentication on inbound email', () => {
         expect.objectContaining({
           from: payload.from,
           verdict: 'unauthenticated',
-          reason: `no pass covers example.edu (checked by ${PLATFORM})`,
+          reason: `no DMARC pass covers example.edu (checked by ${PLATFORM})`,
           mode: 'enforce',
           blocked: true,
         }),

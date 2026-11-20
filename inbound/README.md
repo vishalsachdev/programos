@@ -210,11 +210,11 @@ The worker checks no signature itself. It reads what named mail servers wrote in
 
 | Setting (`wrangler.toml`) | Default | Meaning |
 |---|---|---|
-| `PLATFORM_AUTHSERV_ID` | empty | The server name the mail platform writes first in its `Authentication-Results` header. Cloudflare documents `mx.cloudflare.net` ([email handler](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/)). Only the first such header of the message is read, and only when it carries this name |
+| `PLATFORM_AUTHSERV_ID` | empty | The server name the mail platform writes first in its `Authentication-Results` header. Cloudflare documents `mx.cloudflare.net` ([email handler](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/)). Only the first such header of the message is read, and only when it carries this name, no second header carries it, and `message.headers` reports the same header first |
 | `FORWARDER_AUTHSERV_IDS` | empty | For a mailbox elsewhere that forwards to this address: the server name(s) that mail system writes. Comma-separated |
-| `FORWARDER_DOMAINS` | empty | The domain(s) that system's servers send forwarded mail as (the envelope sender after forwarding, or its DKIM signing domain). Set together with the line above |
+| `FORWARDER_DOMAINS` | empty | The domain(s) that system's servers send forwarded mail as (the envelope sender after forwarding). Set together with the line above |
 
-With all three empty nothing is read: the payload carries `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`, or a passing DKIM signature of such a domain). A wrong value (not a host name, a forwarder without a platform, one of the two forwarder settings alone) is a settings error: the message waits in the buffer until it is fixed.
+With all three empty nothing is read: the payload carries `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`). A header with two DMARC results or two SPF results is dropped whole. A wrong value (not a host name, a forwarder without a platform, one of the two forwarder settings alone) is a settings error: the message waits in the buffer until it is fixed.
 
 To find the names, send yourself a message through the real path, open the committed `.eml`, and read the `Authentication-Results` headers from the top: the text before the first `;` is the server name. Put the same names in the host's `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`.
 
@@ -233,7 +233,7 @@ The payload field, for a message the platform checked:
 }
 ```
 
-`from_mailboxes` counts the different addresses in the From header, display name included. A display name that holds another address than the mailbox makes it 2, and the host then never calls the message authenticated; the same address written twice counts once.
+`from_mailboxes` counts the different addresses in the From header, display name included (a character outside ASCII in an address counts as one more). A display name that holds another address than the mailbox makes it 2, and the host then never calls the message authenticated; the same address written twice counts once.
 
 ## Limits
 
@@ -247,7 +247,7 @@ The payload field, for a message the platform checked:
 
 No live Cloudflare account, domain, mailbox or GitHub repo was available. None of this has run end to end:
 
-- that `message.raw` holds the `Authentication-Results` header the platform prepends (its documentation names `message.headers`), that this header is always the first one, what the platform does with a header in the incoming message that already carries its name, and which properties (`header.d`, `header.from`) it writes. If the header is not in `message.raw`, every verdict stays `unknown`; nothing is believed wrongly;
+- that `message.raw` holds the `Authentication-Results` header the platform prepends (its documentation names `message.headers`), that this header is always the first one, what the platform does with a header in the incoming message that already carries its name, and which properties (`header.d`, `header.from`) it writes. The worker compares the first raw header with what `message.headers` reports first and reads nothing when they differ, so a platform that keeps its header out of `message.raw` gives `unknown`. A platform whose `message.headers` reports a sender-written header first would have that header believed; this was not ruled out on a live domain;
 - any forwarding mail system: its server name, whether it removes a planted header carrying that name, and whether it rewrites the envelope sender;
 - that Email Routing delivers to this worker, and what `message.from`, `message.to`, `message.raw` and `message.rawSize` hold for real mail;
 - what `setReject` does at SMTP (temporary or permanent error), and what the sender sees;

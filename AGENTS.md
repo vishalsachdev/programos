@@ -746,6 +746,9 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   field, or every verdict stays `unknown`.
 - *Settings:* `EMAIL_AUTH_MODE`, `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`,
   `EMAIL_AUTH_UNKNOWN` (process).
+- *Limit to tell the person:* only a DMARC pass confirms a sender. A colleague
+  whose mail domain publishes no DMARC record is never confirmed, and with
+  `enforce` their mail is dropped.
 - *Not tested:* never run against live mail. What a real mail system writes in
   its headers was taken from public documentation only, and the forwarding case
   rests on assumptions about the forwarding system that nobody checked. It

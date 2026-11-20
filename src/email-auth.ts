@@ -83,19 +83,6 @@ function domainOfAddress(address: string): string {
   return HOST_NAME.test(domain) ? domain : '';
 }
 
-/**
- * True when a domain a server authenticated stands for the From domain: the
- * same domain, or a parent of it that has at least two labels. DMARC's
- * "relaxed" alignment also accepts two different subdomains of one
- * organisation; that needs the public suffix list and is not accepted here,
- * so such mail gets "unauthenticated", never a wrong "authenticated".
- */
-export function domainAligned(authenticated: string, from: string): boolean {
-  if (!authenticated || !from) return false;
-  if (authenticated === from) return true;
-  return authenticated.includes('.') && from.endsWith(`.${authenticated}`);
-}
-
 function text(value: unknown): string {
   return typeof value === 'string' ? value.toLowerCase() : '';
 }
@@ -105,11 +92,13 @@ function text(value: unknown): string {
  *
  * - "unknown": no result from a server in `trusted` (no `auth` field, an
  *   empty one, or only servers the host was not told to believe).
- * - "authenticated": a trusted server reports a pass that covers the From
- *   domain: DMARC pass for that domain, a DKIM pass signed by an aligned
- *   domain, or an SPF pass for an aligned envelope domain.
- * - "unauthenticated": a trusted server reported, and nothing it reported
- *   covers the From domain. A pass for another domain is in this group.
+ * - "authenticated": a trusted server reports a DMARC pass for the From
+ *   domain. SPF and DKIM results are recorded and not used: a pass of
+ *   either says nothing about the From header unless DMARC ties it to it,
+ *   so a sender whose domain publishes no DMARC record is never
+ *   "authenticated".
+ * - "unauthenticated": a trusted server reported, and no DMARC pass covers
+ *   the From domain.
  */
 export function emailAuthVerdict(
   from: unknown,
@@ -147,45 +136,23 @@ export function emailAuthVerdict(
   for (const r of counted) {
     const id = text(r.authserv_id);
     const dmarcFrom = text(r.dmarc_from);
-    // The mail platform checks DMARC for the From header of the message it
-    // hands over and may not name the domain. A forwarder must name it.
+    // Only DMARC is used: it is the one check that is about the From
+    // header. The mail platform checks it for the From header of the
+    // message it hands over and may not name the domain; a forwarder must
+    // name it. A named domain must be the From domain exactly.
     if (
       text(r.dmarc) === 'pass' &&
-      (dmarcFrom
-        ? domainAligned(dmarcFrom, fromDomain)
-        : text(r.source) === 'platform')
+      (dmarcFrom ? dmarcFrom === fromDomain : text(r.source) === 'platform')
     ) {
       return {
         verdict: 'authenticated',
         reason: `DMARC pass for ${fromDomain} (${id})`,
       };
     }
-    for (const sig of Array.isArray(r.dkim) ? r.dkim.slice(0, 10) : []) {
-      if (!sig || typeof sig !== 'object') continue;
-      const s = sig as Record<string, unknown>;
-      if (
-        text(s.result) === 'pass' &&
-        domainAligned(text(s.domain), fromDomain)
-      ) {
-        return {
-          verdict: 'authenticated',
-          reason: `DKIM pass signed by ${text(s.domain)} (${id})`,
-        };
-      }
-    }
-    if (
-      text(r.spf) === 'pass' &&
-      domainAligned(text(r.spf_domain), fromDomain)
-    ) {
-      return {
-        verdict: 'authenticated',
-        reason: `SPF pass for envelope domain ${text(r.spf_domain)} (${id})`,
-      };
-    }
   }
   return {
     verdict: 'unauthenticated',
-    reason: `no pass covers ${fromDomain} (checked by ${ids})`,
+    reason: `no DMARC pass covers ${fromDomain} (checked by ${ids})`,
   };
 }
 

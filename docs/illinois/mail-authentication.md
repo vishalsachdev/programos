@@ -37,15 +37,17 @@ before any setting is changed.
    such as `spf=pass` and has no server name in front, it cannot be named and
    this code will not read it.** Then the forwarder settings cannot be used;
    record that on issue 20.
-5. In the first line (step 3), look at what passed: an SPF pass for an envelope
-   sender in a campus domain, or a DKIM pass with `header.d=` a campus domain.
-   That domain is the candidate for `FORWARDER_DOMAINS`. If neither is there,
+5. In the first line (step 3), look at SPF: a pass for an envelope sender in
+   a campus domain (the forwarder rewrote the sender). That domain is the
+   candidate for `FORWARDER_DOMAINS`. If SPF did not pass for a campus domain,
    the worker cannot tell forwarded mail from mail sent straight to the bot,
    and it will ignore the campus line.
 6. Ask the mail administrators the two questions the rule depends on: does the
    system remove an `Authentication-Results` header carrying its own name from
    mail it receives, and can anyone outside the university send mail that
-   passes SPF or DKIM for the domain from step 5?
+   passes SPF for the domain from step 5? Anyone with a campus account can
+   pass that proof by sending straight to the bot; decide whether that is
+   acceptable before naming the forwarder.
 7. Set the values, keep `EMAIL_AUTH_MODE=flag`, and read the `[EMAIL AUTH]`
    entries in the audit log for a week of real mail before considering
    `enforce`.

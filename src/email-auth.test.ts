@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  domainAligned,
   emailAuthBlocks,
   emailAuthVerdict,
   readEmailAuthSettings,
@@ -77,41 +76,43 @@ describe('emailAuthVerdict', () => {
     });
   });
 
-  it('is "authenticated" on an aligned DKIM or SPF pass', () => {
-    expect(
-      verdict(
-        record([result({ dkim: [{ result: 'pass', domain: 'example.edu' }] })]),
-      ),
-    ).toBe('authenticated');
-    expect(
-      verdict(
-        record([result({ dkim: [{ result: 'pass', domain: 'example.edu' }] })]),
-        'dlee@dept.example.edu',
-      ),
-    ).toBe('authenticated');
-    expect(
-      verdict(record([result({ spf: 'pass', spf_domain: 'example.edu' })])),
-    ).toBe('authenticated');
-  });
-
-  it('is "unauthenticated" on a pass that does not cover the From domain', () => {
-    // SPF passed for a bounce domain; DKIM passed for the attacker's own
-    // domain; DMARC was checked for another From domain.
+  it('uses DMARC only: an aligned DKIM or SPF pass alone does not authenticate', () => {
     expect(
       verdict(
         record([
           result({
             spf: 'pass',
-            spf_domain: 'attacker.example.net',
-            dkim: [
-              { result: 'pass', domain: 'attacker.example.net' },
-              { result: 'pass', domain: '' },
-              { result: 'fail', domain: 'example.edu' },
-            ],
-            dmarc: 'pass',
-            dmarc_from: 'attacker.example.net',
+            spf_domain: 'example.edu',
+            dkim: [{ result: 'pass', domain: 'example.edu' }],
+            dmarc: 'none',
           }),
         ]),
+      ),
+    ).toBe('unauthenticated');
+    expect(
+      verdict(
+        record([result({ dkim: [{ result: 'pass', domain: 'example.edu' }] })]),
+      ),
+    ).toBe('unauthenticated');
+  });
+
+  it('is "unauthenticated" on a pass that does not cover the From domain', () => {
+    // DMARC was checked for another From domain, for a parent or a child
+    // of it, or for a domain the worker could not read.
+    for (const dmarc_from of [
+      'attacker.example.net',
+      'edu',
+      'dept.example.edu',
+      'invalid',
+    ]) {
+      expect(verdict(record([result({ dmarc: 'pass', dmarc_from })]))).toBe(
+        'unauthenticated',
+      );
+    }
+    expect(
+      verdict(
+        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })]),
+        'dlee@dept.example.edu',
       ),
     ).toBe('unauthenticated');
     expect(verdict(record([result({ spf: 'fail', dmarc: 'fail' })]))).toBe(
@@ -120,15 +121,6 @@ describe('emailAuthVerdict', () => {
     expect(verdict(record([result({ spf: 'none', dmarc: 'none' })]))).toBe(
       'unauthenticated',
     );
-  });
-
-  it('does not accept a sibling subdomain or a top-level domain as aligned', () => {
-    expect(domainAligned('example.edu', 'example.edu')).toBe(true);
-    expect(domainAligned('example.edu', 'dept.example.edu')).toBe(true);
-    expect(domainAligned('mail.example.edu', 'example.edu')).toBe(false);
-    expect(domainAligned('edu', 'example.edu')).toBe(false);
-    expect(domainAligned('ample.edu', 'example.edu')).toBe(false);
-    expect(domainAligned('', 'example.edu')).toBe(false);
   });
 
   it('a forwarder must name the From domain it checked DMARC for', () => {

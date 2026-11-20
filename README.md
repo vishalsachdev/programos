@@ -82,6 +82,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
+| [`docs/dependency-audit.md`](./docs/dependency-audit.md) | Each `npm audit` finding: fixed, not reachable (and why), or accepted (risk and owner); counts before and after | Yes; run 2026-11-20 |
 | [`docs/model-providers.md`](./docs/model-providers.md) | Claude on Microsoft Foundry (Azure) as a backup or primary model provider: deployments, hosting option, settings, failover and its limits | Yes for the code; not yet checked against a live Foundry endpoint |
 | [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) | One university's open questions about that provider | Pointer and open items; not verified |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
@@ -96,7 +97,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 
 ## Known issues
 
-- The dependency audit reports 26 findings inherited from the source. They are reported there; this repo keeps the source's exact versions until it fixes them.
+- `npm audit` on 2026-11-20 reports 9 findings at the root (1 high, 7 moderate, 1 low; was 24) and none in `container/agent-runner/` or `inbound/`. The high one is `xlsx`, which has no fixed version on npm and is mitigated, not fixed. Each finding and its decision: [`docs/dependency-audit.md`](./docs/dependency-audit.md).
 - One timing test can fail when the machine is busy. It passes when run alone.
 - Several values that should be settings are still in code. `AGENTS.md` lists them.
 

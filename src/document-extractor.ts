@@ -1,5 +1,7 @@
 import fs from 'fs';
+import { createRequire } from 'module';
 import path from 'path';
+import { Worker } from 'worker_threads';
 import { writeToCheckout } from './checkout-fs.js';
 
 import { logger } from './logger.js';
@@ -58,35 +60,81 @@ async function extractDocx(buffer: Buffer): Promise<string> {
   return result.value;
 }
 
+// The registry has no fixed release of `xlsx` (GHSA-4r6h-8v6p-xvw6, prototype
+// pollution when reading a crafted file; GHSA-5pgg-2g8v-p4x9, ReDoS). Mail and
+// chat attachments are untrusted, so the parse runs in a worker thread: a
+// polluted Object.prototype stays in the worker's own realm and cannot change
+// objects in the host (the delivery gate, allowlists, config), and a slow parse
+// does not block the host's event loop. The worker gets an empty environment.
+// The output for a valid file is the same as parsing in the host.
+// See docs/dependency-audit.md.
+const XLSX_WORKER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads');
+const XLSX = require(workerData.xlsxPath);
+const u8 = workerData.data;
+const buffer = Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength);
+const workbook = XLSX.read(buffer, { type: 'buffer' });
+const sheets = workbook.SheetNames.map((n) => String(n));
+const parts = [];
+for (const name of sheets) {
+  const sheet = workbook.Sheets[name];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+  if (rows.length === 0) {
+    parts.push('## Sheet: ' + name + '\\n\\n(empty)');
+    continue;
+  }
+  const header = rows[0].map((c) => String(c ?? ''));
+  const separator = header.map(() => '---');
+  const body = rows
+    .slice(1)
+    .map((row) => header.map((_, i) => String(row[i] ?? '')));
+  const table = [
+    '| ' + header.join(' | ') + ' |',
+    '| ' + separator.join(' | ') + ' |',
+    ...body.map((row) => '| ' + row.join(' | ') + ' |'),
+  ].join('\\n');
+  parts.push('## Sheet: ' + name + '\\n\\n' + table);
+}
+parentPort.postMessage({ fullText: parts.join('\\n\\n'), sheets });
+`;
+
+const requireFromHere = createRequire(import.meta.url);
+
 async function extractXlsx(
   buffer: Buffer,
 ): Promise<{ fullText: string; sheets: string[] }> {
-  const XLSX = await import('xlsx');
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheets = workbook.SheetNames;
-  const parts: string[] = [];
-
-  for (const name of sheets) {
-    const sheet = workbook.Sheets[name];
-    const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-    if (rows.length === 0) {
-      parts.push(`## Sheet: ${name}\n\n(empty)`);
-      continue;
-    }
-    const header = (rows[0] as unknown[]).map((c) => String(c ?? ''));
-    const separator = header.map(() => '---');
-    const body = rows
-      .slice(1)
-      .map((row) => header.map((_, i) => String((row as unknown[])[i] ?? '')));
-    const table = [
-      `| ${header.join(' | ')} |`,
-      `| ${separator.join(' | ')} |`,
-      ...body.map((row) => `| ${row.join(' | ')} |`),
-    ].join('\n');
-    parts.push(`## Sheet: ${name}\n\n${table}`);
-  }
-
-  return { fullText: parts.join('\n\n'), sheets };
+  const xlsxPath = requireFromHere.resolve('xlsx');
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const worker = new Worker(XLSX_WORKER_SOURCE, {
+      eval: true,
+      env: {},
+      workerData: { xlsxPath, data: new Uint8Array(buffer) },
+    });
+    worker.once('message', (msg: { fullText: unknown; sheets: unknown }) => {
+      settled = true;
+      void worker.terminate();
+      if (
+        typeof msg?.fullText !== 'string' ||
+        !Array.isArray(msg.sheets) ||
+        !msg.sheets.every((n) => typeof n === 'string')
+      ) {
+        reject(new Error('spreadsheet worker returned an unexpected result'));
+        return;
+      }
+      resolve({ fullText: msg.fullText, sheets: msg.sheets as string[] });
+    });
+    worker.once('error', (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`spreadsheet worker exited with code ${code}`));
+    });
+  });
 }
 
 function extractText(buffer: Buffer): string {

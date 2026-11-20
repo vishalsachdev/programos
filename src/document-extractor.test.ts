@@ -214,6 +214,63 @@ describe('extractDocument — xlsx multi-sheet', () => {
     expect(result.fullText).toContain('Sheets: Data');
     expect(result.fullText).toContain('## Sheet: Data');
   });
+
+  it('gives exactly the text an in-process parse gives (worker isolation keeps output)', async () => {
+    const XLSX = await import('xlsx');
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.aoa_to_sheet([
+        ['Name', 'Due', 'Done'],
+        ['Avery Morgan', 45000, true],
+        ['', null, 'n/a'],
+        ['Tab\there', 'pipe | cell', 'line\nbreak'],
+      ]),
+      'Tracker',
+    );
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([]), 'Blank');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    // Reference: the in-process code this module used before the worker.
+    const book = XLSX.read(buffer, { type: 'buffer' });
+    const parts: string[] = [];
+    for (const name of book.SheetNames) {
+      const rows: unknown[][] = XLSX.utils.sheet_to_json(book.Sheets[name], {
+        header: 1,
+      });
+      if (rows.length === 0) {
+        parts.push(`## Sheet: ${name}\n\n(empty)`);
+        continue;
+      }
+      const header = (rows[0] as unknown[]).map((c) => String(c ?? ''));
+      const body = rows
+        .slice(1)
+        .map((row) => header.map((_, i) => String(row[i] ?? '')));
+      parts.push(
+        `## Sheet: ${name}\n\n` +
+          [
+            `| ${header.join(' | ')} |`,
+            `| ${header.map(() => '---').join(' | ')} |`,
+            ...body.map((row) => `| ${row.join(' | ')} |`),
+          ].join('\n'),
+      );
+    }
+    const expected = `Sheets: ${book.SheetNames.join(', ')}\n\n${parts.join('\n\n')}`;
+
+    const result = await extractDocument(Buffer.from(buffer), 'tracker.xlsx');
+    expect(result.sheets).toEqual(['Tracker', 'Blank']);
+    expect(result.fullText).toBe(expected);
+  });
+
+  it('reports a corrupt workbook as a parse failure, and the host prototype is untouched', async () => {
+    const corrupt = Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.alloc(64, 0xff),
+    ]);
+    const result = await extractDocument(corrupt, 'broken.xlsx');
+    expect(result.fullText).toContain('[Could not parse: broken.xlsx');
+    expect(Object.keys(Object.prototype)).toEqual([]);
+  });
 });
 
 describe('extractDocument — docx error handling', () => {

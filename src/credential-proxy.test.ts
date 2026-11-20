@@ -110,7 +110,7 @@ describe('credential-proxy', () => {
     proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
     const refused = await post(proxyPort);
     expect(refused.statusCode).toBe(403);
-    expect(refused.body).toContain('turned off');
+    expect(refused.body).toContain('web tools are off');
     expect(lastUpstreamHeaders).toEqual({});
 
     await new Promise<void>((r) => proxyServer.close(() => r()));

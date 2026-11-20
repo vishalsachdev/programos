@@ -32,7 +32,7 @@ class OwnedTest(unittest.TestCase):
                   'CONTRIBUTING.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md',
                   '.github/ISSUE_TEMPLATE/config.yml', '.github/PULL_REQUEST_TEMPLATE.md',
                   'docs/data-handling.md', 'docs/illinois/data-handling.md', 'docs/illinois/hosting.md',
-                  'docs/illinois/model-foundry.md',
+                  'docs/illinois/model-foundry.md', 'docs/model-providers.md',
                   'inbound/src/index.ts', 'inbound/package.json'):
             self.assertTrue(export.owned(p), p)
 

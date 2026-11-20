@@ -1,10 +1,16 @@
-# AGENTS.md: adapting ProgramOS to a new project
+# AGENTS.md: setting up ProgramOS with the person who cloned it
 
 You are the coding agent of a person who cloned this repo to run a coordinator for
-their own project or program. This file tells you what is here, what you must
-change, and where you must stop and ask.
+their own project or program. That person may be a program director or a
+coordinator, not an engineer. This file tells you how to guide them, what choices
+exist, what you must change, and where you must stop and ask.
 
-## What this repo is
+Read the whole file once before your first reply. Parts 1 to 6 are the guided
+conversation. Parts 7 to 15 are reference; use them when a step sends you there.
+[`docs/setup-reference.md`](./docs/setup-reference.md) holds the longer reference:
+every setting key, the inbound mail contract, and the two optional webhooks.
+
+## 1. What this repo is
 
 - A working coordinator bot: it answers email (and optionally Telegram or web chat)
   from an allowlisted team, reads and writes a knowledge-base repo (the "program
@@ -16,21 +22,206 @@ change, and where you must stop and ask.
 - **We did not rewrite the code to be configurable.** Many identity values are
   still written in the code as placeholders. Your job is to replace them for this
   user. The tests tell you if you broke something.
+- [`docs/start-here.md`](./docs/start-here.md) is the page for the person. Point
+  them to it. It says the same things as parts 3 and 4 below, in fewer words.
 
-## Rules for you
+## 2. Rules for you
 
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 1,824 passing tests (1,761 from the source, 63 for the model provider
-   setting added here). One timing test in `src/channels/webhook-ingest-context.test.ts`
-   can fail under load; rerun it alone before you treat it as real.
+   is 1,994 passing tests (1,761 from the source, 233 added here). One timing test
+   in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
+   alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
 5. Never put real secrets, real people's data, or mail content in this repo.
 
-## Ask the user first (ASK)
+## 3. How to work with this person
 
-Policy comes before setup. Get these answers before you change anything:
+Assume the person knows their program well and knows little about servers. Follow
+these rules in every message.
+
+1. **Ask one decision at a time.** Do not send a list of questions. Wait for the
+   answer before the next one.
+2. **Explain before you ask.** For each decision say, in plain words: what it is,
+   why it matters, what the options are, which one you recommend for a first pilot
+   and why, and what it costs them in accounts, approvals or effort. Part 5 has
+   this for every choice.
+3. **Never assume a technical term is known.** The first time you use a word such
+   as webhook, container, DNS record, API key, repository or allowlist, explain it
+   in one sentence. Part 6 has wording you can use.
+4. **Say who does what.** You can read and change files, run the tests, and write
+   settings. Only the person can create an account, pay for a service, ask their
+   IT or data office for an approval, or add a DNS record at their domain. Say
+   which it is each time, and give them the exact words to send to their IT office
+   when they need to ask for something.
+5. **Confirm before anything that costs money, sends mail, or goes live.** Name the
+   action and its effect, and wait for a clear yes. This includes: creating a paid
+   account or a machine, sending any test mail or test alert, registering a
+   webhook at an outside service, starting a schedule, and adding real people to
+   an allowlist.
+6. **Do not invent a price, a time estimate or a policy.** For cost, name the
+   provider and say "check their current pricing". For what an institution allows,
+   say that only their own offices can answer, and help them write the question.
+7. **Keep a written record.** Create `setup-decisions.md` in the repo root at the
+   start (it is in `.gitignore`, so it is not pushed). After each answer, add the
+   question, the answer, who gave it and the date. For an approval, add its
+   source. Tell the person where the file is. When the program repo exists, copy
+   the policy answers into its `program/kb-governance.md`.
+8. **Say what is not tested.** Some options here have run only against test
+   doubles. Parts 4 and 5 mark each one. Repeat that mark when you offer the option.
+9. **Stop when an answer is "I do not know".** Help the person find who can answer.
+   Do not pick for them on a policy question.
+
+### Your first reply
+
+Do not start with questions about servers. In your first reply:
+
+1. Say in three sentences what this is (part 1, first bullet, in plain words).
+2. Say that you will ask one thing at a time and write the answers in
+   `setup-decisions.md`, and that nothing is sent or deployed without their yes.
+3. Describe the three ways to start (part 4), each in two or three plain sentences.
+4. Recommend one, and ask which they want. If they only want to see it work, that
+   is "Try it". If they have a real team in mind, that is "Pilot".
+
+Then ask the policy questions in part 4 that apply to the chosen path, one at a time.
+
+## 4. Three ways to start
+
+Smallest first. Each later path contains the earlier one's work, so a person can
+move up without starting again. "First start" means part 14.
+
+### (a) Try it: one person, one laptop
+
+- **What you get:** the bot answers the person's own questions in one private
+  Telegram chat, from a small knowledge-base repo, with citations.
+- **What you need:** a laptop that can run Docker and Node; an account with the
+  model provider and its key (choice 1); a Telegram account and a bot token (ask
+  Telegram's BotFather for one); a private repo on a git host for the knowledge
+  base, started from `templates/program-repo/`.
+- **Why a git host even for a trial:** the bot reads the list of allowed Telegram
+  handles from a mirror that it clones from the program repo's origin
+  (`src/repo-reader.ts`, `src/channels/telegram-allowlist.ts`). With a real
+  origin, `PROGRAM_ORIGIN_PATTERN`, `INSTITUTION_DOMAIN` and `ADMIN_AUTHOR_EMAILS`
+  must be set, or the host refuses to start.
+- **What it does NOT give you:** no email, so no colleague can use it; no routed
+  approval by mail; no public address; it stops when the laptop sleeps. It is a look at the
+  behaviour, not a service.
+- **Steps that apply:** part 13 steps 1 to 6 with only the model, identity and
+  Telegram settings; First start steps 1, 2, 3, 4 (the main group and the Telegram
+  group; no email group), 5, 6 and 7. Skip "Inbound mail" and both optional webhooks.
+  Keep the reply sensor off (choice 2).
+- **Not verified:** `docs/deployment.md` names this stage ("Trial"), but no
+  step-by-step run of it is recorded in this repo. Treat the first start as the
+  test and tell the person so.
+
+### (b) Pilot: the recommended MVP
+
+- **What you get:** a handful of allowlisted colleagues write to one mail
+  address. The bot answers from the knowledge base with citations, records
+  decisions and action items, routes approval requests, checks each reply at the
+  delivery gate, writes the audit log, and alerts the operator when something fails.
+- **What you need:**
+  - a small virtual machine that is always on (choice 8), and a public name for it
+    (a DNS record);
+  - the model provider account (choice 1);
+  - a private knowledge-base repo on a git host (choice 7);
+  - an outbound mail provider account and a sending address (choice 6). The
+    provider asks you to prove you control the sending domain with DNS records;
+  - an inbound mail intake service (choice 5). The one in `inbound/` needs a
+    Cloudflare account and a domain or subdomain that receives no other mail;
+  - a route for operator alerts (choice 4): a Telegram account, or the operator's
+    mailbox, or both;
+  - the names and addresses of the first colleagues, and who approves for each
+    (choice 10);
+  - where the institution requires it, an answer from the IT or data office on
+    which AI service and mail service this team's mail may reach (part 4, policy
+    questions).
+- **What it does NOT give you:** no channel for students or the public; no
+  single sign-on; no retention or deletion of old mail (the code never deletes
+  from the program repo); no restriction on the agent container's network on
+  `main` (see "Coming" below); no second mail provider. Sender caps are in memory
+  and reset on restart.
+- **Steps that apply:** all of part 13, all of First start, "Inbound mail", and
+  the supported hosting recipe in `docs/deployment.md`. Add the two optional
+  webhooks when the machine has its public HTTPS name.
+- **Not verified:** the hosting recipe has not been run end to end (each step in
+  `docs/deployment.md` says what was checked). The intake worker in `inbound/`
+  has never run against a live Cloudflare account, mailbox or GitHub repo. Operator
+  alerts by email have not been sent through a live mail provider. Plan one real
+  test of each before colleagues are told the address.
+- **Known gap on `main`:** the agent in the container cannot push with an SSH
+  deploy key (`docs/deployment.md`, step 4). Until that is solved for the
+  deployment, the agent's commits can stay on the machine. Test a push from the
+  container before real users.
+
+**The MVP, exactly.** The smallest setup that does these four things with a real
+colleague, not the operator:
+
+1. answers a real question sent by email, from the knowledge base, with a citation;
+2. records one decision in the program repo;
+3. routes one approval request to the right approver;
+4. leaves an audit entry for each of these.
+
+**MVP exit checklist.** Copy it into `setup-decisions.md` and tick each line with
+the person. The pilot is not done until every line is ticked or has a written reason.
+
+- [ ] An allowlisted colleague sent a real question by email and got an answer
+      that cites a file in the knowledge-base repo.
+- [ ] A status update by email produced one entry in `discussions/DECISIONS.md`,
+      committed and pushed to the git host.
+- [ ] One approval request from a read-only sender reached the approver named in
+      that sender's allowlist row, with the sender's own words quoted.
+- [ ] `discussions/audit-log/<date>.md` holds the inbound and outbound entries
+      for the three exchanges above.
+- [ ] A sender who is not on the allowlist got no answer (or the one courtesy
+      reply, if they are at the institution's domain).
+- [ ] A test alert reached the operator on each enabled route (First start, step 8).
+- [ ] Every line of "Decide before go-live" in `docs/data-handling.md` has a
+      written answer.
+- [ ] The person has read "Before real users" in `docs/deployment.md` and agreed
+      to each line.
+
+### (c) Institutional: approved services only
+
+- **What you get:** the same bot and the same code as the pilot, placed on
+  services the institution has approved.
+- **What you need,** in addition to the pilot:
+  - a virtual machine from a host the institution approves for this data. The
+    same recipe applies (`docs/deployment.md`);
+  - a model provider the institution approves: an endpoint that serves the
+    Anthropic API (`ANTHROPIC_BASE_URL`), or Claude on Microsoft Foundry in the
+    institution's own Azure subscription (`MODEL_PROVIDERS`). See choice 1;
+  - institutional mail. With the worker in `inbound/`, the mail administrators add
+    a forwarding rule or alias from an institutional address to the worker's
+    address (`inbound/README.md`, step 1). If mail must stay inside the
+    institution's own mail system, you must write the intake service
+    (`docs/setup-reference.md`, "Inbound mail");
+  - the knowledge-base repo on the institution's git host if it has one, such as
+    a GitHub Enterprise host (choice 7);
+  - a written sign-off on data handling from the offices that approve it. Take
+    them `docs/data-handling.md`.
+- **What it does NOT give you:** no new feature. This repo holds no institution's
+  policy and no approval. It supports an API key for Foundry only (no Entra ID or
+  managed identity). One instance serves one program.
+- **Steps that apply:** the pilot's steps, with the approved values. Do the live
+  checks in `docs/model-providers.md`, section 6, before the person relies on Foundry.
+- **Not verified:** no request from this repo has reached a real Foundry
+  endpoint; the failover was tested against fake servers only. One university's
+  open questions are under `docs/illinois/`; none of them is answered there.
+
+### Coming, not on `main`
+
+- **PR 40 (issues 32 and 33):** a restricted network for the agent container,
+  web search and web fetch off by default, and the host pushing the agent's
+  commits. Do not offer these as options until that pull request is merged and
+  this file lists them in part 5.
+
+### Policy questions (ASK)
+
+Policy comes before setup. Get these answers before you change anything. Ask them
+one at a time, after the person has chosen a path, with the explanation from the
+matching choice in part 5.
 
 1. **Which AI service may this team's mail reach?** The agent sends message text to
    a model. The user's institution may limit this. The code uses Claude through the
@@ -39,7 +230,7 @@ Policy comes before setup. Get these answers before you change anything:
    - the Anthropic API or a Claude subscription (the default);
    - an endpoint that serves the Anthropic API, set with `ANTHROPIC_BASE_URL`;
    - Claude on Microsoft Foundry in the user's own Azure subscription
-     (`MODEL_PROVIDERS`, [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md)).
+     (`MODEL_PROVIDERS`, [`docs/model-providers.md`](./docs/model-providers.md)).
      Tested here against fake servers only; that page has the live checks.
 
    `MODEL_PROVIDERS` is an ordered list. A second entry is a backup, and it
@@ -51,11 +242,15 @@ Policy comes before setup. Get these answers before you change anything:
    from the user and write down its source and date.
    **There are two model call paths.** The agent goes through the host proxy and
    follows `MODEL_PROVIDERS` and `ANTHROPIC_BASE_URL`. The reply sensor
-   (`src/behaviour-sensor.ts`) calls a model API directly with its own key and
-   follows neither. Its destination is `SENSOR_PROVIDER`: the public Anthropic
-   API by default, or `foundry`. It does not fail over.
-   Keep `BEHAVIOUR_SENSOR_DISABLED=1` unless the user confirms the sensor's
-   destination is approved too.
+   (`src/behaviour-sensor.ts`) calls a model API directly from the host, with
+   its own API key, but it goes to the same place as the agent's first choice:
+   the first provider in `MODEL_PROVIDERS` (or `anthropic`), and on `anthropic`
+   the host in `ANTHROPIC_BASE_URL` when that is set. `SENSOR_PROVIDER`
+   overrides the provider. It does not fail over, and it needs an API key (a
+   subscription token cannot call it); with no usable key it does nothing. The
+   host logs the provider and host it sends to. Still keep
+   `BEHAVIOUR_SENSOR_DISABLED=1` unless the user confirms that destination is
+   approved. Not tested against a live endpoint.
 2. **Who may approve records and access changes?** (the admin and any approvers)
 3. **Which address does the bot send from?** And which mail provider delivers it.
 4. **Where does the data live?** The host for the bot, and the git host for the program repo.
@@ -64,7 +259,297 @@ Policy comes before setup. Get these answers before you change anything:
    Ask also where operator alerts should go: Telegram (the default), email to the
    operator's address, or both (`ADMIN_ALERT_ROUTE`; see "Safety items").
 
-## Placeholders to replace
+For "Try it", questions 1, 2 and 4 apply. Questions 3 and 5 apply as soon as
+email is used.
+
+## 5. Every choice you will be asked to make
+
+One entry for each setup choice that exists on `main`. For each: what it means in
+plain words, the options, what the code does when nothing is set, what to choose
+for a first pilot, the setting names, and where the detail is. Setting names were
+checked against `config/instance.env.example` and the code; a test
+(`scripts/upstream-sync/test_setup_docs.py`) fails when a key in that file is
+named neither here nor in `docs/setup-reference.md`.
+
+Two places hold settings. Keys marked **(.env)** go in the `.env` file. Keys marked
+**(process)** are read only from the process environment, and a line in `.env`
+does nothing for them. `docs/setup-reference.md` has the full table.
+
+**1. Model provider, and the order of providers**
+- *Plain words:* the bot sends each message, and the files it reads, to an AI
+  service that writes the reply. You choose which service, and whether a second
+  one takes over when the first fails.
+- *Options:* (a) Anthropic directly, with an API key or a Claude subscription
+  token; (b) another endpoint that serves the Anthropic API; (c) Claude on
+  Microsoft Foundry in your own Azure subscription, alone, as the primary, or as
+  the backup.
+- *Code default:* Anthropic only.
+- *First pilot:* one provider, the one your institution allows. No backup yet: a
+  backup is a second place your team's mail goes, and the failover has run only
+  against fake servers.
+- *Cost to the person:* an account with the provider and a key; usage is billed
+  by the provider (check Anthropic's or Microsoft's current pricing). For
+  Foundry, an Azure subscription and three deployments.
+- *Settings:* `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (one of the two),
+  `ANTHROPIC_BASE_URL`, `MODEL_PROVIDERS` (`anthropic`, `foundry`,
+  `anthropic,foundry`, `foundry,anthropic`), `ANTHROPIC_FOUNDRY_RESOURCE` or
+  `ANTHROPIC_FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_API_KEY`, `FOUNDRY_KEY_HEADER`,
+  `FOUNDRY_AGENT_MODEL`, `FOUNDRY_GATE_MODEL`, `FOUNDRY_OPUS_MODEL`,
+  `FOUNDRY_SONNET_MODEL`, `FOUNDRY_HAIKU_MODEL`, `MODEL_FAILOVER_THRESHOLD`,
+  `MODEL_FAILOVER_COOLDOWN_MS` (all .env). Which model and how much reasoning:
+  `NANOCLAW_AGENT_MODEL`, `NANOCLAW_GATE_MODEL`, `NANOCLAW_AGENT_EFFORT` (process).
+- *Detail:* policy question 1; "Safety items" (model endpoint, backup provider);
+  `docs/model-providers.md`.
+
+**2. Reply sensor: on or off, and which provider it uses**
+- *Plain words:* a second check that compares a reply with the facts that must
+  not be wrong (the ground-truth files). It makes its own call to an AI service,
+  separate from the bot's.
+- *Options:* off; on, following the agent's first provider (the public
+  Anthropic API, the endpoint in `ANTHROPIC_BASE_URL`, or Foundry); on with a
+  provider chosen on its own.
+- *Code default:* on, when a key and the ground-truth file exist. It checks chat
+  replies (Telegram and web chat), not email replies (`docs/data-handling.md`).
+- *First pilot:* off. Turn it on only when its destination is approved for your
+  data and the ground-truth files fit your project (part 8).
+- *Settings:* `BEHAVIOUR_SENSOR_DISABLED=1` (process), `SENSOR_PROVIDER`
+  (`anthropic` or `foundry`; .env or process; unset follows the first entry of
+  `MODEL_PROVIDERS`), `SENSOR_MODEL` (process). It also reads
+  `ANTHROPIC_BASE_URL` and `MODEL_PROVIDERS` (.env).
+- *Detail:* policy question 1; part 8; `docs/data-handling.md`.
+
+**3. Channels: email, Telegram, web chat**
+- *Plain words:* the ways people reach the bot.
+- *Options and limits:*
+  - **Email.** The main channel. Needs choices 5 and 6 and a public HTTPS
+    address. Has a per-person allowlist and per-sender daily caps.
+  - **Telegram.** Use it with one chat only, the admin's: with two chats a reply
+    can go to the wrong one. No per-sender cap. Needs the handle list in the
+    program repo and the chat sender allowlist file (choice 10).
+  - **Web chat.** Anyone who has its shared secret is answered; there is no list
+    of people and no cap. The reference deployment retired it. Treat it as untested.
+- *Code default:* a channel runs when its settings are present (`WEBHOOK_SECRET`
+  for the mail listener, `TELEGRAM_BOT_TOKEN` for Telegram, `WEBCHAT_SECRET` for
+  web chat). **Web chat also needs `WEBHOOK_SECRET`:** the one HTTP listener is
+  started by the mail webhook channel (`src/channels/webhook.ts`), and web chat
+  only adds its `/chat` route to it. With `WEBCHAT_SECRET` alone the channel
+  reports ready and no port is open.
+- *First pilot:* email for the team; Telegram for the admin only, if the admin
+  wants it; web chat off.
+- *Settings:* `WEBHOOK_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`,
+  `WEBCHAT_SECRET` (.env); `WEBHOOK_HOST`, `WEBHOOK_PORT` (process).
+- *Detail:* part 9; "Safety items"; `SPEC.md` sections 3 and 11.
+
+**4. Where operator alerts go**
+- *Plain words:* when a reply is refused, a mail bounces or a check fails, the
+  bot tells one person, the operator. You choose how.
+- *Options:* Telegram; email to the operator's own mailbox; both.
+- *Code default:* Telegram. With no bot token, alerts are not delivered.
+- *First pilot:* Telegram if the operator will use it (it is the route tested in
+  production), with email added as a second route. Email alone works without a
+  Telegram account, but it has limits ("Safety items") and has not been sent
+  through a live mail provider.
+- *Cost to the person:* a Telegram account and a bot token, or nothing new for email.
+- *Settings:* `ADMIN_ALERT_ROUTE` (`telegram`, `email`, `telegram,email`),
+  `OPERATOR_CC_EMAIL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`,
+  `DEAD_LETTER_ALERT_JID`, `OUTREACH_SUMMARY_JID` (.env); `ADMIN_ALERT_TEST=1`
+  (process, first start only).
+- *Detail:* "Safety items" (operator alerts); First start, step 8.
+
+**5. Inbound mail intake**
+- *Plain words:* the bot does not receive mail itself. A small separate service
+  receives each message, files a copy in the knowledge-base repo, and tells the bot.
+- *Options:* (a) the worker in `inbound/`, which runs at Cloudflare; (b) a
+  service you write for your own mail provider.
+- *Code default:* none. Without an intake service there is no email channel.
+- *First pilot:* the worker in `inbound/`, on a domain or subdomain that receives
+  no other mail. It has never run against live services: plan a real test.
+- *Cost to the person:* a Cloudflare account, a domain whose DNS they or their IT
+  office can change, and a GitHub token limited to the knowledge-base repo. For
+  an institutional address, a forwarding rule from the mail administrators.
+- *Settings:* `WEBHOOK_SECRET`, `INTAKE_GIT_AUTHOR_EMAIL` (.env). The worker's own
+  settings are in `inbound/wrangler.toml`.
+- *Detail:* part 12; `inbound/README.md`; `docs/setup-reference.md`, "Inbound mail".
+
+**6. Outbound mail provider and the from-address**
+- *Plain words:* a mail service that delivers the bot's replies, and the address
+  those replies come from.
+- *Options:* the code supports one provider, Resend. Another provider needs code.
+- *Code default:* none. Without the key no mail is sent, and each send is
+  reported as a shortfall.
+- *First pilot:* Resend, with an address on a domain you control, the same
+  address colleagues write to.
+- *Cost to the person:* an account with the provider (check Resend's current
+  pricing) and DNS records on the sending domain to prove control of it.
+- *Settings:* `RESEND_API_KEY`, `SEND_FROM_EMAIL`, `SEND_FROM_NAME`,
+  `BOT_MAIL_DOMAIN`, `RESEND_WEBHOOK_SECRET` (bounce reports),
+  `OUTBOUND_EMAIL_STAGGER_MS` (.env).
+- *Detail:* policy question 3; `docs/setup-reference.md`, "Mail delivery events".
+
+**7. Knowledge-base repo: which git host, and who can push**
+- *Plain words:* the team's record lives in its own private repository (a folder
+  with full history, kept at a hosting service). The bot reads and writes it. It
+  also holds every inbound mail and the audit log, so whoever can read it can
+  read all the team's mail to the bot.
+- *Options:* github.com, or a GitHub Enterprise host at your institution. Any git
+  host works for reading and writing; the push webhook and the `inbound/` worker
+  are written for GitHub's API.
+- *Code default:* the placeholder origin `example-org/program-repo`. Any other
+  origin is refused until the pattern is set.
+- *First pilot:* a private repo; readers are the pilot team and the operator;
+  push rights for the admin, the bot's machine (a deploy key for that one repo)
+  and the intake service (a token for that one repo).
+- *Settings:* `PROGRAM_REPO`, `PROGRAM_ORIGIN_PATTERN`, `PROGRAM_READ_MIRROR`
+  (process); `GITHUB_PUSH_WEBHOOK_SECRET` (.env or process).
+- *Detail:* part 11; First start, step 5; `docs/illinois/github-enterprise.md`;
+  `docs/data-handling.md`, "Who can read the audit log and the raw mail".
+
+**8. Hosting: where the bot runs**
+- *Plain words:* the bot is a program that must stay running on a computer that
+  can start containers (small sealed workspaces, one per message).
+- *Options:* (a) a laptop, for "Try it" only; (b) one virtual machine with the
+  systemd recipe in `docs/deployment.md`, the one supported recipe; (c) the pm2
+  files `start.sh`, `ecosystem.config.cjs` and `scripts/deploy.sh`, which are
+  examples from the reference deployment and not supported here.
+- *Code default:* none; you start it.
+- *First pilot:* (b), run as a dedicated non-root user. The recipe has not been
+  run end to end.
+- *Cost to the person:* a virtual machine from a cloud provider or their
+  institution (check the provider's current pricing), and a DNS name for it.
+- *Settings:* `WEBHOOK_HOST=127.0.0.1`, `WEBHOOK_PORT`, `CREDENTIAL_PROXY_PORT`
+  (process); `TZ` (.env). Only when the host process runs as root, which the
+  recipe does not do: `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID`,
+  `CHECKOUT_OWNER_HOME` (process).
+- *Detail:* `docs/deployment.md`; `docs/illinois/hosting.md` (a stub).
+
+**9. Identity: names and domains**
+- *Plain words:* what the bot is called, which mail domain is "yours", and which
+  people count as the admin.
+- *Required:* `ASSISTANT_NAME` and `SEND_FROM_EMAIL` (marked REQUIRED in the
+  settings example). With a real program
+  repo, `INSTITUTION_DOMAIN` and `ADMIN_AUTHOR_EMAILS`: the host refuses to start
+  when either is missing or still a placeholder. For the domain, `example.edu`
+  and any subdomain of it (`mail.example.edu`) count as the placeholder.
+- *Not enforced, but set them:* `BOT_MAIL_DOMAIN`, `INTAKE_GIT_AUTHOR_EMAIL`,
+  `OPERATOR_CC_EMAIL`. Each default is a placeholder.
+- *First pilot:* set all of them. ASK for the admin's real git commit addresses;
+  do not guess them.
+- *Settings:* all (.env). The placeholders that are still text in code and
+  prompts are in part 7.
+- *Detail:* part 7; First start, step 7.
+
+**10. Allowlists: who may write to the bot**
+- *Plain words:* an allowlist is the list of people the bot will answer. Anyone
+  else gets no answer.
+- *The three lists:*
+  - the email allowlist, a table in the program repo
+    (`program/EMAIL_ALLOWLIST.md`): address, role, access tier (may this person's
+    updates be recorded as fact, or only as a request), and approver;
+  - the Telegram handle list, a section of the same file;
+  - the chat sender allowlist, a file on the bot's machine
+    (`~/.config/nanoclaw/sender-allowlist.json`). **If this file is missing or
+    invalid, nobody is allowed on chat.**
+- *Code default:* the template's placeholder rows. Email caps: 30 messages a day
+  for a person, 10 for an automated agent or an unknown sender.
+- *First pilot:* staff only, a handful of people, each with an approver. No
+  students. Only the admin on Telegram.
+- *Settings:* `EMAIL_SENDER_DAILY_CAP`, `EMAIL_PERSON_SENDER_DAILY_CAP` (process).
+- *Detail:* "Safety items"; First start, step 3; `templates/program-repo/`.
+
+**11. Approvers and routed approvals**
+- *Plain words:* when someone asks for something that another person must
+  approve, the bot records the request and sends it to that approver.
+- *Options:* who the admin is, and who approves for each sender (one column in
+  the allowlist).
+- *First pilot:* one admin; one approver per sender. Test one exchange.
+- *Settings:* the allowlist rows; `INSTITUTION_DOMAIN`; `ADMIN_AUTHOR_EMAILS`.
+- *Detail:* policy question 2; `SPEC.md` section 4.
+
+**12. Reminders and scheduled outreach**
+- *Plain words:* the bot can send mail on a schedule, such as a weekly list of
+  open action items to their owners.
+- *Options:* none; or jobs you list in a reminder registry.
+- *Code default:* no outreach mail is sent until one approved task id is set.
+- *First pilot:* none until the MVP checklist is ticked. Then one job, listed in
+  the registry, started only after the operator agrees (ASK).
+- *Settings:* `EMAIL_OUTREACH_TASK_ID`, `OUTREACH_SUMMARY_JID` (.env).
+- *Detail:* `docs/reminder-registry.md`; `SPEC.md` section 4.
+
+**13. Optional webhooks from other services**
+- *Plain words:* a webhook is a message one service sends to another when
+  something happens. Two are optional: the mail provider reporting a bounce, and
+  the git host reporting a change to the knowledge-base repo.
+- *Code default:* both off (the route answers 503 with no secret).
+- *First pilot:* add the mail delivery one, so bounces are reported. Add the
+  push one if the repo is on GitHub.
+- *Settings:* `RESEND_WEBHOOK_SECRET` (.env), `GITHUB_PUSH_WEBHOOK_SECRET`.
+- *Detail:* `docs/setup-reference.md`, "Webhooks from other services". ASK
+  before you create either one.
+
+**14. Data handling and retention**
+- *Plain words:* where the team's messages go, who can read them, and how long
+  they are kept.
+- *What the code does:* message text reaches the model provider, the mail
+  provider, the intake service, Telegram if used, and the git host. The code
+  never deletes anything from the program repo, and there is no retention setting.
+- *First pilot:* the conservative default in `docs/data-handling.md`: staff
+  senders only, no student records, the reply sensor off, a private repo, web
+  chat off. Take that page to the people who approve data use, and write each
+  answer in `setup-decisions.md`.
+- *Settings:* none for retention. Leave `LOG_LEVEL` unset.
+- *Detail:* `docs/data-handling.md`; `docs/illinois/data-handling.md` (open
+  questions only).
+
+**15. What senders are told**
+- *Plain words:* the words colleagues see about where their mail goes.
+- *Options:* the person writes them; the code has no fixed text.
+- *First pilot:* a short written note to each pilot colleague before their
+  address is added, including what not to send.
+- *Detail:* policy question 5; `docs/data-handling.md`.
+
+**16. Vocabulary and the facts that must not be wrong**
+- *Plain words:* the examples in the bot's instructions come from an academic
+  program. For another kind of project the words, and the list of facts the
+  reply sensor checks, need adapting.
+- *First pilot:* adapt the wording; keep the sensor off unless the ground-truth
+  files are right for the project.
+- *Detail:* part 8.
+
+## 6. Words to explain
+
+Use these, or your own words of the same length, the first time each term comes up.
+
+- **Allowlist:** the list of people the bot will answer. A message from anyone
+  else is not answered and never reaches the AI service.
+- **Delivery gate:** a check on the bot's machine that every reply and every
+  outgoing mail must pass before it is sent. A reply that fails is not sent, and
+  the operator is told.
+- **Audit log:** a dated file in the knowledge-base repo where the bot's machine
+  writes each accepted message and each reply, so a person can review later what
+  was asked and what was answered.
+- **Knowledge-base repo (program repo):** a private, versioned folder at a git
+  host that holds the team's record: decisions, action items, open questions,
+  the allowlist, the mail copies and the audit log. Every change is kept in its history.
+- **Routed approval:** a request that needs another person's yes. The bot
+  records it and sends it to the approver named for that sender; it does not
+  decide.
+- **Container:** a sealed workspace that the bot's machine starts for one
+  message and then removes. The AI agent works inside it and sees only the
+  folders it was given.
+- **Webhook:** a message one service sends to another over the internet when
+  something happens, such as "a new mail arrived" or "this mail bounced".
+- **Credential proxy:** a small relay on the bot's machine that adds the secret
+  key to each request to the AI service, so the key is never inside the container.
+- **Model provider:** the company or cloud service that runs the AI model the bot
+  sends text to.
+- **API key (or token):** a long secret string that proves to a service that a
+  request comes from your account. Treat it like a password.
+- **DNS record:** an entry at the place that manages a domain name, which says
+  where mail or web traffic for that name should go.
+- **Operator (admin):** the one person who looks after the bot, receives its
+  alerts, and is the only one who may change roles and access.
+
+## 7. Placeholders to replace
 
 Search for each placeholder (include tests; exclude `node_modules`):
 
@@ -74,7 +559,7 @@ Search for each placeholder (include tests; exclude `node_modules`):
 | `Program`, `program-email`, `program-telegram`, `web-chat-program`, `tg-program` | The program or project name and its channel group names | `groups/` folder names, `seed-db.cjs`, `src/index.ts`, `src/task-scheduler.ts` and others |
 | `program-repo`, `/workspace/extra/program-repo` | The knowledge-base repo and its mount point in the container | `PROGRAM_REPO` (process environment), `src/program-repo.ts`, prompts, container skills |
 | `example-org/program-repo` | The git origin the host accepts for the program repo. A different origin is refused and the read mirror is not created. | `isExpectedOrigin` in `src/repo-reader.ts`; set `PROGRAM_ORIGIN_PATTERN` (process environment). Any git host works, including a GitHub Enterprise host; `config/instance.env.example` has example patterns |
-| `example.edu` | The institution mail domain. It is used in logic: the "access closed" courtesy reply (`src/channels/webhook.ts`) and approver addresses in `src/routed-approvals.ts` | Setting: `INSTITUTION_DOMAIN` in `.env`. **Required for a real program repo:** the host refuses to start when it is missing or `example.edu` (`src/identity-settings-check.ts`). The operator's address, the shared mailbox in `src/trusted-body-mailboxes.ts`, prompts and tests still hold `example.edu` as text |
+| `example.edu` | The institution mail domain. It is used in logic: the "access closed" courtesy reply (`src/channels/webhook.ts`) and approver addresses in `src/routed-approvals.ts` | Setting: `INSTITUTION_DOMAIN` in `.env`. **Required for a real program repo:** the host refuses to start when it is missing, `example.edu` or a subdomain of `example.edu` (`src/identity-settings-check.ts`). The operator's address, the shared mailbox in `src/trusted-body-mailboxes.ts`, prompts and tests still hold `example.edu` as text |
 | `example.org` | The bot's own mail domain: the default bot address, the Message-ID domain, and the bot's git author `program-bot@example.org` | Setting: `BOT_MAIL_DOMAIN` in `.env`. Prompts in `groups/` and skills in `container/skills/` name the git author as text; change them to match. The site address `program-repo.example.org` in `src/behaviour-sensor.ts` is not covered by the setting |
 | `email-inbox@example.org` | The git author of the inbound mail intake service (see "Inbound mail") | Setting: `INTAKE_GIT_AUTHOR_EMAIL` in `.env` |
 | `Avery Morgan`, `avery@example.edu`, `tg-avery@program` | The operator (admin). Outreach, routed approvals and admin checks name this person | `src/config.ts`, `src/outreach-recipient-roster.ts`, `src/routed-approvals.ts`, `src/channels/webhook.ts`, prompts |
@@ -82,11 +567,11 @@ Search for each placeholder (include tests; exclude `node_modules`):
 | `/^greta\b/i` | A one-person exception in the outreach roster (a departed owner whose section is skipped) | `src/outreach-recipient-roster.ts`, near `unmatchedOwners`. Remove it or replace it with your own case. |
 | Other synthetic people (in `OWNER_ALIASES` in `src/outreach-recipient-roster.ts`) | A short-name table for the team | Replace with the user's team or empty it |
 | `PeerAgent`, `averybot@gmail.com` | A second automated agent that also mails the bot | `src/config.ts` (`AGENT_INBOX_ADDRESSES`); empty the list if the user has none |
-| `CRS`, `ELC`, `LAB` plus three digits | Course-code prefixes | See "Academic examples" below |
+| `CRS`, `ELC`, `LAB` plus three digits | Course-code prefixes | See part 8 |
 
 Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `PROGRAM_ORIGIN_PATTERN`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. The supported way to run the bot is the systemd recipe in `docs/deployment.md`; `start.sh` and `ecosystem.config.cjs` are pm2 examples from the reference deployment.
 
-## Academic examples
+## 8. Academic examples
 
 The prompts, skills and two pieces of logic use an academic program as the example
 domain: courses, faculty, curriculum, cohort. This text is kept because it is the
@@ -103,7 +588,7 @@ For a project with no course-like codes, ASK the user what the equivalent "facts
 that must not be wrong" are, or turn the sensor off (`BEHAVIOUR_SENSOR_DISABLED=1`)
 and say so.
 
-## Features and what each needs
+## 9. Features and what each needs
 
 | Feature | Status | Needs |
 |---|---|---|
@@ -120,7 +605,7 @@ and say so.
 | Web search, web fetch, `agent-browser` | Off by default since 2026-11-20 | `AGENT_WEB_TOOLS=1`; fetch and browser also need `CONTAINER_NETWORK=open`. ASK first |
 | Web chat | Was in production, later retired there | A secret and a reverse proxy; treat as untested. **No allowlist of people: any caller with the secret is answered** |
 
-## Safety items you must handle
+## 10. Safety items you must handle
 
 - **Chat sender allowlist:** if `~/.config/nanoclaw/sender-allowlist.json` is missing,
   unreadable or invalid, the chat trigger check allows nobody and the host logs the
@@ -164,7 +649,7 @@ and say so.
   alert. The turn that hit the failure still fails and is retried. The state is
   in memory, the audit log has no per-turn provider field, and resuming a
   session on the other provider is untested. Do the live checks in
-  `docs/illinois/model-foundry.md` before the user relies on the backup.
+  `docs/model-providers.md` before the user relies on the backup.
 - **Sender caps exist only on email.** Telegram and web chat have no per-sender
   limit (`src/channels/sender-quota.ts` is called only from the email handler).
   Keep the chat allowlists short, and do not put an automated agent on a chat channel.
@@ -209,43 +694,20 @@ and say so.
 - **Email addresses come only from the allowlist or the inbound mail** (enforced for email; an instruction for chat). Do not
   weaken this rule (G59) when you adapt prompts.
 
-## Governance
-
-The prompts and code cite numbered rules (G6, G39, G46 and so on). `docs/12-governance.md`
-defines each number and says what failure it prevents. Keep the numbers when you
-adapt text. To change a rule, follow the change protocol in that file; do not
-edit a rule in one prompt only.
-
-## The program repo
+## 11. The program repo
 
 The bot needs a separate git repo for the team's knowledge base. Start from
 `templates/program-repo/`: it has the file names and table formats this code reads.
 ASK where the repo will be hosted
 and who can push.
 
-## Inbound mail
+## 12. Inbound mail and the optional webhooks
 
-The host does not receive mail itself. A separate intake service does, and for
-each inbound message it must:
-
-1. Write the message as a Markdown file into the program repo's email inbox folder,
-   commit and push it. The agent reads that committed file; the webhook does not
-   carry the body as the source of record.
-2. POST JSON to this host's webhook with `Authorization: Bearer <WEBHOOK_SECRET>`.
-   `filename` and `subject` are required. The handler also reads `from`, `to`, `cc`,
-   `date`, `message_id`, `raw_file_path`, `eml_file_path`, `raw_email`,
-   `inbound_text`, `phase`, `attachment_count` and `attachment_state`.
-
-3. Keep the original message too. Routed approvals compare a sender's quoted words
-   with the original mail, not with the Markdown copy. The host takes the original
-   from `raw_email` or `inbound_text` in the payload, or from an `.eml` file the
-   service committed (`eml_file_path`; the default raw path is `discussions/raw/<filename>`).
-   When the host reads the committed `.eml`, it accepts only a file first committed
-   by the intake service's git author. Set `INTAKE_GIT_AUTHOR_EMAIL` in `.env` to
-   the author email on the service's commits (the default is the placeholder
-   `email-inbox@example.org`). `src/repo-reader.ts` and
-   `src/channels/github-push-events.ts` both read that one setting.
-4. After setup, test one routed-approval exchange, not only a plain question.
+The host does not receive mail itself. A separate intake service does.
+The four things it must do (file a Markdown copy in the program repo, call this
+host's webhook, keep the original message, and pass a routed-approval test) are
+in [`docs/setup-reference.md`](./docs/setup-reference.md), "Inbound mail: the
+contract". Read it before you set up or write an intake service.
 
 **`inbound/` holds one such service: a Cloudflare Email Worker.** It needs a domain
 on Cloudflare Email Routing. `inbound/README.md` has the setup steps, the file
@@ -258,46 +720,44 @@ the user these three things before they choose it:
   Plan a real test (README, step 6) before go-live.
 - Mail it files gets no text extraction of PDF, Word or Excel attachments on the
   host. The attachments stay inside the committed `.eml`.
-- Its git author is a setting (`GIT_AUTHOR_EMAIL`), with the address above as the
-  default. The host side is still fixed in the two files named in point 3.
+- Its git author is a setting in the worker (`GIT_AUTHOR_EMAIL`, default
+  `email-inbox@example.org`). The host must hold the same address in
+  `INTAKE_GIT_AUTHOR_EMAIL` (`.env`). With a different address on one side,
+  plain questions still work but routed approvals are held.
 
 ASK which mail provider the user has. If it is not Cloudflare, or the user's
 institution requires mail to stay inside its own mail system, you must write the
-service: read the handler in `src/channels/webhook.ts` (search for
+service: read the contract, then the handler in `src/channels/webhook.ts` (search for
 `Missing filename or subject`) and `src/cc-context.ts`, check the service's git
 author against `src/governance-protection.ts`, and use `inbound/` and its fixtures
 as the worked example. `src/channels/webhook-inbound-intake.test.ts` runs those
 fixtures through the real handler; a new service should pass the same checks.
 
-## Webhooks from other services
 
-Two more routes share the listener with the inbound mail webhook (`src/channels/webhook.ts`). Both are optional, and both exist only when `WEBHOOK_SECRET` is set, because the listener does not start without it. Each checks its own signature and does not use `WEBHOOK_SECRET`. A route with no secret set answers 503. Set them up after "First start", when the host has a public HTTPS name. ASK before you create either one: each tells an outside service to send data to this host.
+**Two optional webhooks** share the listener with inbound mail: mail delivery
+events from the mail provider (`/resend/webhook`) and pushes to the program repo
+(`/api/github-push`). Each tells an outside service to send data to this host, so
+ASK before you create either one. Set them up after First start, when the host
+has a public HTTPS name. The steps and checks are in
+[`docs/setup-reference.md`](./docs/setup-reference.md), "Webhooks from other services".
 
-### Mail delivery events: `/resend/webhook`
+## 13. Order of work
 
-What it does (`src/channels/resend-events.ts`): records each recipient's delivery outcome, and on a bounce, a complaint or a failure it writes a delivery-problem record and alerts the admin on Telegram. Without it, the bot does not learn that a sent mail bounced. The handler is written for the reference deployment's provider, Resend, which signs with Svix headers. Another provider needs a different handler.
+1. Send your first reply (part 3). Help the person choose one of the three ways
+   to start (part 4). Create `setup-decisions.md` and record the choice.
+2. Ask the policy questions (part 4) and then each choice in part 5 that the
+   chosen path needs, one at a time. Write each answer down for the user.
+3. Create the program repo skeleton and the allowlist.
+4. Copy `config/instance.env.example` to `.env`; fill the REQUIRED lines.
+5. Replace placeholders (part 7). Run the tests after each group.
+6. Adapt prompts in `groups/` and skills in `container/skills/`. `src/channel-claude-sync.test.ts`
+   checks exact phrases in the prompts; update that test with the prompts.
+7. Do the "First start" steps, set up the inbound mail service, and run locally with a test mailbox.
+   Add the two optional webhooks (part 12) when the host has a public HTTPS name.
+8. Show the user a test exchange. For a pilot, go through the MVP exit checklist
+   (part 4) with them. Deploy only when they say so.
 
-1. In the provider's dashboard, add a webhook endpoint with the URL `https://<your-host>/resend/webhook`.
-2. Subscribe it to four events: `email.delivered`, `email.bounced`, `email.complained`, `email.failed`. The handler acts on these only; any other event is logged and answered 200.
-3. Copy the endpoint's signing secret (it starts with `whsec_`) into `.env` as `RESEND_WEBHOOK_SECRET=`. This key is read from the `.env` file only; the process environment is not read for it. Restart the host process.
-4. Check: send a test event from the dashboard. It must show 200. A 401 means the secret does not match. The check is HMAC-SHA256 over `<svix-id>.<svix-timestamp>.<body>`, compared with the `svix-signature` header. The handler does not reject an old timestamp.
-5. Check the alert path: a bounce event must produce a Telegram message to the admin. If Telegram is down for a short time the handler answers 500 so that the provider retries.
-
-### Program repo pushes: `/api/github-push`
-
-What it does (`src/channels/github-push-events.ts`): on each push to `main` of the program repo it refreshes the host's read mirror at once, writes an audit-log entry for each knowledge-base commit a person made directly, and alerts the admin when an author who is not an admin changes a protected governance file. Without it, direct commits get no audit entry and that tripwire does not run. The handler reads GitHub's push payload; another git host needs a different handler.
-
-1. Choose a long random secret (for example `openssl rand -hex 32`). Put it in `.env` as `GITHUB_PUSH_WEBHOOK_SECRET=`, or export it in the process environment; the `.env` value wins. Restart the host process.
-2. In the **program repo** on GitHub (not this repo): Settings, Webhooks, Add webhook.
-   - Payload URL: `https://<your-host>/api/github-push`
-   - Content type: `application/json`. The handler parses the raw body as JSON; the form-encoded type fails.
-   - Secret: the same value.
-   - Events: "Just the push event".
-3. Check: GitHub sends a `ping` when you save. A 200 there shows that the signature matches (`X-Hub-Signature-256`, HMAC-SHA256 of the body). A 401 means the secret differs. Then push a commit to `main`: the delivery must show 200 and the log must show `GitHub push: read mirror refreshed`. Pushes to other branches are ignored. The mirror path is `PROGRAM_READ_MIRROR` (process environment); the code default is a fixed path from the reference deployment.
-4. Before you rely on it, set the three identity lists in code: `BOT_AUTHORS` in `src/channels/github-push-events.ts` (commits by these authors get no audit entry; use the bot's and the mail service's git author addresses), the admin identities in `src/governance-protection.ts`, and the path prefixes that count as knowledge base (`KB_INCLUDE_PREFIXES`, `KB_EXCLUDE_PREFIXES`), which follow the reference program's folder layout.
-5. Tell the user: GitHub does not retry a failed delivery. When an alert cannot reach Telegram or an audit entry cannot be written, the handler answers 500 on purpose, so the failure shows in the webhook's "Recent Deliveries" list. Someone must look there and press "Redeliver". The audit entry is written once per commit, so a redelivery is safe.
-
-## First start
+## 14. First start
 
 Do these once, in this order, before the first test message:
 
@@ -338,8 +798,8 @@ Do these once, in this order, before the first test message:
 7. Set `INSTITUTION_DOMAIN` and `ADMIN_AUTHOR_EMAILS` in `.env` before the first
    start with the real program repo: the institution's mail domain, and the
    admin's real git author emails. The host refuses to start when either is
-   missing or still a placeholder (`example.edu`, or a placeholder address in
-   the list) once the repo is a real one: `PROGRAM_ORIGIN_PATTERN` is set, or the
+   missing or still a placeholder (`example.edu` or a subdomain of it, or a
+   placeholder address in the list) once the repo is a real one: `PROGRAM_ORIGIN_PATTERN` is set, or the
    origin of the checkout or the read mirror is not `example-org/program-repo`.
    The error names each setting to fix.
 8. Test the operator alert routes. This sends real messages, so do it only when the
@@ -357,14 +817,9 @@ Do these once, in this order, before the first test message:
    host's push; and the host's credential can push from the real checkout (a dry
    run). Do not send the first test message until it passes.
 
-## Order of work
+## 15. Governance
 
-1. Ask the ASK questions. Write the answers down for the user.
-2. Create the program repo skeleton and the allowlist.
-3. Copy `config/instance.env.example` to `.env`; fill the REQUIRED lines.
-4. Replace placeholders (table above). Run the tests after each group.
-5. Adapt prompts in `groups/` and skills in `container/skills/`. `src/channel-claude-sync.test.ts`
-   checks exact phrases in the prompts; update that test with the prompts.
-6. Do the "First start" steps, set up the inbound mail service, and run locally with a test mailbox.
-   Add the two optional webhooks ("Webhooks from other services") when the host has a public HTTPS name.
-7. Show the user a test exchange. Deploy only when they say so.
+The prompts and code cite numbered rules (G6, G39, G46 and so on). `docs/12-governance.md`
+defines each number and says what failure it prevents. Keep the numbers when you
+adapt text. To change a rule, follow the change protocol in that file; do not
+edit a rule in one prompt only.

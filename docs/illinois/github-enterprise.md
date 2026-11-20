@@ -30,7 +30,7 @@ PROGRAM_ORIGIN_PATTERN=^git@github[.]illinois[.]edu:your-org/your-program-repo([
 For an HTTPS origin, with or without a token in the URL:
 
 ```
-PROGRAM_ORIGIN_PATTERN=^https://([^@/?#\s]+@)?github[.]illinois[.]edu/your-org/your-program-repo([.]git)?$
+PROGRAM_ORIGIN_PATTERN=^https://([A-Za-z0-9_.~:-]+@)?github[.]illinois[.]edu/your-org/your-program-repo([.]git)?$
 ```
 
 Keep `^` and `$`. When the setting is present the URL is checked against the

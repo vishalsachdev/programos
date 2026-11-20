@@ -6,19 +6,20 @@ Fixes, adapters and doc corrections are welcome. This page says how the repo tak
 
 **Exported code.** `src/`, `container/`, `groups/`, `setup/`, `scripts/` (outside `scripts/upstream-sync/`), `package.json`, `setup.sh` and most other files are an export from the reference deployment. `UPSTREAM.md` records the version. The next export writes these paths again from the source.
 
-**Owned files.** The paths in `OWNED` in [`scripts/upstream-sync/export.py`](./scripts/upstream-sync/export.py) belong to this repo: `README.md`, `AGENTS.md`, `SPEC.md`, `ARCHITECTURE.md`, `docs/12-governance.md`, `docs/deployment.md`, `docs/design/`, `config/`, `templates/`, `site/`, `scripts/upstream-sync/`, `.github/` templates and CI, and this file. An export never writes or deletes them. That list in the code is the exact one.
+**Owned files.** The paths in `OWNED` in [`scripts/upstream-sync/export.py`](./scripts/upstream-sync/export.py) belong to this repo: `README.md`, `AGENTS.md`, `SPEC.md`, `ARCHITECTURE.md`, `docs/12-governance.md`, `docs/deployment.md`, `docs/start-here.md`, `docs/setup-reference.md`, `docs/design/`, `config/`, `templates/`, `site/`, `scripts/upstream-sync/`, `.github/` templates and CI, and this file. An export never writes or deletes them. That list in the code is the exact one.
 
 ## The patch-file rule
 
-A change to exported code is lost at the next export unless it is recorded. So a pull request that changes exported code must also add a patch file:
+A change to exported code is lost at the next export unless it is recorded. This repo records all such changes in one file, `scripts/upstream-sync/repo-changes-2026-11-20.patch`. You never edit that file by hand. The rule is one command:
 
 1. Make the change and get the checks green.
-2. Write the diff of the exported paths you changed to a new file:
-   `git diff main -- <exported paths> > scripts/upstream-sync/<topic>-<date>.patch`
-3. Check that it applies to a clean checkout of `main`: `git apply --check scripts/upstream-sync/<topic>-<date>.patch`.
-4. Leave owned paths out of the patch.
+2. Run `python3 scripts/upstream-sync/repo_patch.py` and commit the patch file it rewrites, in the same pull request.
 
-After each export the maintainer reapplies every patch file in name order ([`scripts/upstream-sync/README.md`](./scripts/upstream-sync/README.md)). A patch that the source later takes is deleted here. The source repo is private; you do not need access to it, and you must not copy from it.
+The command writes the difference between the last export and your working tree, on exported paths only. It needs the full git history (a shallow clone: `git fetch --unshallow`). Do not add a patch file of your own.
+
+CI runs `python3 scripts/upstream-sync/repo_patch.py --check` and fails when the patch file does not reproduce the exported code in the pull request. When `main` has moved and the patch file conflicts, merge `main`, keep either side of that one file, and run the command again.
+
+After each export the maintainer reapplies the patch files ([`scripts/upstream-sync/README.md`](./scripts/upstream-sync/README.md)). The source repo is private; you do not need access to it, and you must not copy from it.
 
 A change to owned files only needs no patch.
 
@@ -30,15 +31,17 @@ npm run format:check
 npx tsc --noEmit
 npx vitest run
 python3 -B -m unittest discover scripts/upstream-sync
+python3 scripts/upstream-sync/repo_patch.py --check
 ```
 
-CI runs the same five and a secret scan. The baseline is 1,761 passing tests. One timing test in `src/channels/webhook-ingest-context.test.ts` can fail on a busy machine; run it alone before you treat it as real. Do not skip, delete or weaken a test to get green. Placeholders live in code and tests together, so a renamed placeholder needs both.
+CI runs the same six, the tests of `inbound/` and a secret scan. The baseline is 1,761 passing tests. One timing test in `src/channels/webhook-ingest-context.test.ts` can fail on a busy machine; run it alone before you treat it as real. Do not skip, delete or weaken a test to get green. Placeholders live in code and tests together, so a renamed placeholder needs both.
 
 ## Docs
 
 - A doc covers what the code cannot say: the contract, the reasons, the decisions and what the host needs. Do not add a doc that restates code.
 - Where a doc and the code differ, fix the doc, or open a "Template or docs fix" issue.
 - List every new doc in the README docs table.
+- **A change that adds or changes a setup option, a setting, a channel or a safety limit updates `AGENTS.md` in the same pull request:** the entry in part 5 ("Every choice you will be asked to make"), the path it belongs to in part 4, and the table in `docs/setup-reference.md`. `AGENTS.md` is what an adopter's agent reads to a person who is not technical, so say what the option means in plain words, what the default is, and what was not tested. `scripts/upstream-sync/test_setup_docs.py` fails when a key in `config/instance.env.example` is named in neither file.
 - Facts on the public page (`site/public/index.html`) repeat `README.md` or `SPEC.md`. Change the page in the same commit.
 - `docs/design/` holds ideas that are not implemented. Each file says so in its first lines.
 - The prompts and code cite numbered rules (G6, G39 and so on). To change a rule, follow the change protocol in `docs/12-governance.md`; do not edit a rule in one prompt only.

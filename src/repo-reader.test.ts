@@ -465,7 +465,7 @@ describe('RepoReader', () => {
 
     vi.stubEnv(
       'PROGRAM_ORIGIN_PATTERN',
-      '^https://([^@/?#\\s]+@)?git[.]example[.]edu/team/kb([.]git)?$',
+      '^https://([A-Za-z0-9_.~:-]+@)?git[.]example[.]edu/team/kb([.]git)?$',
     );
     expect(isExpectedOrigin('https://git.example.edu/team/kb.git')).toBe(true);
     expect(

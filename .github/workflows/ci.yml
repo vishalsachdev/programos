@@ -34,6 +34,10 @@ jobs:
       - name: Export tool tests
         run: python3 -B -m unittest discover scripts/upstream-sync
 
+      # Needs the export baseline commit, so the checkout above is not shallow.
+      - name: Consolidated patch reproduces the exported code
+        run: python3 -B scripts/upstream-sync/repo_patch.py --check
+
       - name: Inbound mail worker (typecheck and tests)
         working-directory: inbound
         run: |

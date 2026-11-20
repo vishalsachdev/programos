@@ -7,7 +7,7 @@ A Cloudflare Email Worker that receives mail for the bot's address and hands it 
 3. commits the Markdown copy and the original `.eml` to your knowledge-base repo, in one commit, as the git author in `GIT_AUTHOR_EMAIL`;
 4. POSTs a JSON payload to the host webhook with `Authorization: Bearer <WEBHOOK_SECRET>`.
 
-It was written from the contract in this repo (`AGENTS.md`, "Inbound mail", and the handler in `src/channels/webhook.ts`). It is not a copy of the reference deployment's worker.
+It was written from the contract in this repo (`docs/setup-reference.md`, "Inbound mail: the contract", and the handler in `src/channels/webhook.ts`). It is not a copy of the reference deployment's worker.
 
 **Nothing here has run against a live Cloudflare account, domain, mailbox or GitHub repo.** The tests use a mocked network. Read "Not verified" before you rely on it.
 
@@ -36,7 +36,7 @@ Create a fine-grained personal access token (or a GitHub App installation token)
 - repository access: **only** the knowledge-base repo;
 - repository permissions: **Contents: Read and write**. Nothing else.
 
-The token can write any path in that repo, not only the inbox folder; the worker writes only under `INBOX_DIR`. The host's push check (`src/channels/github-push-events.ts`) alerts the operator if a commit by a non-admin author changes a protected file, and the intake author is not an admin author. Do not add the intake author to `ADMIN_AUTHOR_EMAILS` in `src/governance-protection.ts`.
+The token can write any path in that repo, not only the inbox folder; the worker writes only under `INBOX_DIR`. The host's push check (`src/channels/github-push-events.ts`) alerts the operator if a commit by a non-admin author changes a protected file, and the intake author is not an admin author. Do not add the intake author to the host setting `ADMIN_AUTHOR_EMAILS`.
 
 If the branch is protected, the token's owner must be allowed to push to it. The worker never force-pushes.
 
@@ -68,7 +68,7 @@ npx wrangler secret put GITHUB_TOKEN
 npx wrangler secret put WEBHOOK_SECRET
 ```
 
-**The git author.** When the host reads a committed `.eml`, it accepts the file only if the commit that first added it has the author email `email-inbox@example.org`. That address is fixed in the host today (`src/repo-reader.ts`, and the bot-author list in `src/channels/github-push-events.ts`). Keep the worker's default, or change the host in both places and the worker setting together. With a different author on one side only, plain questions still work, but routed approvals are held: the host has no copy of the sender's words. `src/channels/webhook-inbound-intake.test.ts` shows both cases.
+**The git author.** When the host reads a committed `.eml`, it accepts the file only if the commit that first added it has the author email in the host setting `INTAKE_GIT_AUTHOR_EMAIL` (`.env`; the default is `email-inbox@example.org`). `src/repo-reader.ts` and the bot-author list in `src/channels/github-push-events.ts` both read that setting. Keep the worker's default, or set the host setting and the worker's `GIT_AUTHOR_EMAIL` to the same address. With a different author on one side only, plain questions still work, but routed approvals are held: the host has no copy of the sender's words. `src/channels/webhook-inbound-intake.test.ts` shows both cases.
 
 ### 5. Deploy and route
 

@@ -24,12 +24,24 @@ Safety rules in the tool (tested in `test_export.py`):
 
 After `--apply`:
 
-1. Update the version in `UPSTREAM.md`.
-   Reapply every `*.patch` file in `scripts/upstream-sync/`, in name order. For each one run `git apply --check <file>`, then `git apply <file>`. If one no longer applies, reconcile it by hand against the new export before you continue; do not discard it. Delete a patch only when the source has taken the same change. `prompt-audit-2026-11-15.patch` includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`.
-2. Run `npx tsc --noEmit` and `npx vitest run`. All tests must pass with none skipped.
-3. Run a secret scan (`gitleaks detect --no-git -s .`).
-4. Read the diff. New files need the closest look: a new file can carry names that no rule covers yet.
-5. Commit as one snapshot commit. Get a second review before a push.
+1. Update the version in `UPSTREAM.md`. Commit the raw export alone and note the commit.
+2. Reapply every `*.patch` file in `scripts/upstream-sync/`, in name order. For each one run `git apply --check <file>`, then `git apply <file>`. If one no longer applies, reconcile it by hand against the new export before you continue; do not discard it. Delete a patch only when the source has taken the same change.
+3. Set `BASELINE` in `repo_patch.py` to the raw export commit. Leave in `BEFORE` only the patches that still exist and sort before the consolidated patch. Run `python3 scripts/upstream-sync/repo_patch.py`, then the same with `--check`.
+4. Run `npx tsc --noEmit` and `npx vitest run`. All tests must pass with none skipped.
+5. Run a secret scan (`gitleaks detect --no-git -s .`).
+6. Read the diff. New files need the closest look: a new file can carry names that no rule covers yet.
+7. Commit the reapplied patches as a second commit. Get a second review before a push.
+
+## The patch files
+
+There are two, applied in name order:
+
+- `prompt-audit-2026-11-15.patch`: the prompt audit. It includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`.
+- `repo-changes-2026-11-20.patch`: the consolidated patch. It holds every other change this repo made to exported paths. No one edits it by hand, and no pull request adds a third file.
+
+The rule for a pull request that changes exported code: run `python3 scripts/upstream-sync/repo_patch.py` and commit the file it rewrites. The command builds the baseline (the commit `BASELINE` with the `BEFORE` patches applied, both named at the top of `repo_patch.py`) and writes the difference to the working tree on exported paths. `--check` applies the patch to that baseline and fails unless the result equals the exported paths of the working tree, contents and executable bit. CI runs `--check` on every pull request; the CI checkout fetches the full history, which the baseline commit needs.
+
+When two pull requests both change exported code, the second one merges `main` and runs the command again; the conflict in the patch file needs no reading.
 
 ## What the tool does not touch
 

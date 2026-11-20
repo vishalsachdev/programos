@@ -69,6 +69,7 @@ async function commit(
     envelope,
     receivedAt,
     settings.inboxDir,
+    settings.authTrust,
   );
   await commitFiles(
     settings,

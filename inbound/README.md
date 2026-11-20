@@ -118,6 +118,7 @@ List-Unsubscribe: ...
 X-Autoreply: ...
 X-Autorespond: ...
 X-Mailer: ...
+X-Intake-Authentication: ...   (always; written by the worker, see "Sender authentication")
 
 # <subject>
 
@@ -203,9 +204,40 @@ Both files go in one commit, so the repo never holds a Markdown copy without its
 
 A message over `MAX_MESSAGE_BYTES` is refused at SMTP with a reason that states the limit. The worker never truncates: a cut `.eml` loses attachments and can lose the words a routed approval is checked against. The default of 10 MiB is below the host's 16 MiB limit for reading an original and below the 25 MiB limit of a KV value.
 
+## Sender authentication
+
+The worker checks no signature itself. It reads what named mail servers wrote in `Authentication-Results` headers and passes it to the host, which makes the verdict (`docs/setup-reference.md`, "Sender authentication for inbound mail", has the whole rule and its limits).
+
+| Setting (`wrangler.toml`) | Default | Meaning |
+|---|---|---|
+| `PLATFORM_AUTHSERV_ID` | empty | The server name the mail platform writes first in its `Authentication-Results` header. Cloudflare documents `mx.cloudflare.net` ([email handler](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/)). Only the first such header of the message is read, and only when it carries this name |
+| `FORWARDER_AUTHSERV_IDS` | empty | For a mailbox elsewhere that forwards to this address: the server name(s) that mail system writes. Comma-separated |
+| `FORWARDER_DOMAINS` | empty | The domain(s) that system's servers send forwarded mail as (the envelope sender after forwarding, or its DKIM signing domain). Set together with the line above |
+
+With all three empty nothing is read: the payload carries `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`, or a passing DKIM signature of such a domain). A wrong value (not a host name, a forwarder without a platform, one of the two forwarder settings alone) is a settings error: the message waits in the buffer until it is fixed.
+
+To find the names, send yourself a message through the real path, open the committed `.eml`, and read the `Authentication-Results` headers from the top: the text before the first `;` is the server name. Put the same names in the host's `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`.
+
+The payload field, for a message the platform checked:
+
+```json
+"auth": {
+  "version": 1,
+  "envelope_from_domain": "mail.example.edu",
+  "from_headers": 1,
+  "from_mailboxes": 1,
+  "results": [
+    { "source": "platform", "authserv_id": "mx.platform.example", "spf": "pass", "spf_domain": "mail.example.edu",
+      "dkim": [{ "result": "pass", "domain": "example.edu" }], "dmarc": "pass", "dmarc_from": "example.edu", "arc": "" }
+  ]
+}
+```
+
+`from_mailboxes` counts every `@` in the From header, so a display name that holds an address counts as a second one, and the host then never calls the message authenticated.
+
 ## Limits
 
-- **No sender authentication.** The worker does not check SPF, DKIM or DMARC results. The host's allowlist trusts the `From` header, as it did before. A forged `From` of an allowlisted person is filed and answered (the answer goes to the real person).
+- **Sender authentication is read, not done.** The worker trusts what the named servers wrote and checks no SPF record, DKIM signature or ARC chain itself. With no server named (the default) the host records `unknown` for every message and a forged `From` of an allowlisted person is filed and answered, as before. With servers named, the host still answers such mail unless it runs with `EMAIL_AUTH_MODE=enforce`.
 - **Mail from senders who are not on the allowlist is still committed.** The worker does not read the allowlist. Anyone who knows the address can add files to `discussions/raw/`, up to the size limit each.
 - **One cron run handles at most five waiting messages**, oldest first, to stay inside a Worker's request limits. A long outage drains at that rate.
 - **Text extraction of attachments does not happen** (see "Attachments").
@@ -215,6 +247,8 @@ A message over `MAX_MESSAGE_BYTES` is refused at SMTP with a reason that states 
 
 No live Cloudflare account, domain, mailbox or GitHub repo was available. None of this has run end to end:
 
+- that `message.raw` holds the `Authentication-Results` header the platform prepends (its documentation names `message.headers`), that this header is always the first one, what the platform does with a header in the incoming message that already carries its name, and which properties (`header.d`, `header.from`) it writes. If the header is not in `message.raw`, every verdict stays `unknown`; nothing is believed wrongly;
+- any forwarding mail system: its server name, whether it removes a planted header carrying that name, and whether it rewrites the envelope sender;
 - that Email Routing delivers to this worker, and what `message.from`, `message.to`, `message.raw` and `message.rawSize` hold for real mail;
 - what `setReject` does at SMTP (temporary or permanent error), and what the sender sees;
 - that the worker stays inside CPU, memory and request limits for a message near 10 MiB, on any plan;
@@ -223,7 +257,7 @@ No live Cloudflare account, domain, mailbox or GitHub repo was available. None o
 - the POST against a real host through a reverse proxy;
 - a routed-approval exchange with real mail. The host test proves it with files committed the way this worker commits them, on a local git mirror.
 
-What the tests do cover, with a mocked network: MIME parsing (multipart, attachment, inline part, non-ASCII subject and names, quoted-printable), the exact Markdown and payload, the commit author, the Bearer header, the size limit, both failure paths, the backoff, and the host's acceptance of the result.
+What the tests do cover, with a mocked network: MIME parsing (multipart, attachment, inline part, non-ASCII subject and names, quoted-printable), which `Authentication-Results` headers are read and which are ignored, the exact Markdown and payload, the commit author, the Bearer header, the size limit, both failure paths, the backoff, and the host's acceptance of the result.
 
 ## Tests
 

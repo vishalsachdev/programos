@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,243 passing tests (1,761 from the source, 482 added here). One timing test
+   is 2,264 passing tests (1,761 from the source, 503 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -146,7 +146,9 @@ move up without starting again. "First start" means part 14.
   from the program repo); one outbound mail service at a time, with no fallback
   to another; no web search, web fetch or
   browsing for the agent unless you turn them on (choice 17). Sender caps are in
-  memory and reset on restart. No second check of email replies by the reply
+  memory and reset on restart. No proof of who sent a message: the allowlist
+  matches the From line, and the sender-authentication check only records its
+  result until you name the mail servers and choose `enforce` (choice 18). No second check of email replies by the reply
   sensor: it is off in the pilot, and when on it checks chat replies only unless
   `SENSOR_EMAIL_REPLIES=1` (choice 2).
 - **Steps that apply:** all of part 13, all of First start, "Inbound mail", and
@@ -202,7 +204,8 @@ the person. The pilot is not done until every line is ticked or has a written re
     institution's own Azure subscription (`MODEL_PROVIDERS`). See choice 1;
   - institutional mail. With the worker in `inbound/`, the mail administrators add
     a forwarding rule or alias from an institutional address to the worker's
-    address (`inbound/README.md`, step 1). If mail must stay inside the
+    address (`inbound/README.md`, step 1). Forwarded mail needs the forwarder
+    settings of choice 18 before its senders can be confirmed; If mail must stay inside the
     institution's own mail system, you must write the intake service
     (`docs/setup-reference.md`, "Inbound mail");
   - the knowledge-base repo on the institution's git host if it has one, such as
@@ -617,6 +620,46 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Detail:* "Safety items"; First start, step 9; `SPEC.md` sections 2 and 11;
   `docs/data-handling.md`, "The container's network".
 
+**18. Sender authentication for inbound mail**
+- *Plain words:* the email allowlist looks at the "From" line of a message, and
+  anyone can type any name there, the way anyone can write a false return address
+  on an envelope. Mail servers can check whether a message really came from the
+  domain it names (the checks are called SPF, DKIM and DMARC) and note the result
+  in the message. The bot can read that note, from servers you name, and record
+  for each message whether the sender was confirmed. It can also refuse mail that
+  was not confirmed.
+- *Options:* (a) `flag`: record the result in the audit log and change nothing
+  else; (b) `enforce`: also drop mail from a listed address that was not
+  confirmed. It gets no answer and no reply of any kind. With (b) one more
+  choice: what to do with mail that carries no result from a named server
+  (`EMAIL_AUTH_UNKNOWN`: `block`, the default, or `allow`).
+- *Code default:* `flag`, with no server named. Every message is then recorded
+  as `unknown` and handled as before.
+- *First pilot:* name the servers (below), stay on `flag` for the first weeks,
+  and read the `[EMAIL AUTH]` lines in the audit log for real mail from each
+  listed person. When they say `authenticated`, ASK the admin whether to change
+  to `enforce`. Recommend it: a forged approval or status update is the most
+  damaging thing a stranger could send. Do not set `enforce` before those lines
+  are right; real mail would be dropped without notice to the sender. The host
+  refuses to start with `enforce` and no server named.
+- *Naming the servers:* two places must agree. In the intake worker
+  (`inbound/wrangler.toml`): `PLATFORM_AUTHSERV_ID` (the name the mail platform
+  writes; Cloudflare documents `mx.cloudflare.net`), and, only when a mailbox
+  elsewhere forwards to the bot's address, `FORWARDER_AUTHSERV_IDS` and
+  `FORWARDER_DOMAINS`. On the host: `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`, the same
+  names. Read the names off a real message with the person's mail administrator;
+  do not guess them. An intake service you wrote yourself must send the `auth`
+  field, or every verdict stays `unknown`.
+- *Settings:* `EMAIL_AUTH_MODE`, `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`,
+  `EMAIL_AUTH_UNKNOWN` (process).
+- *Not tested:* never run against live mail. What a real mail system writes in
+  its headers was taken from public documentation only, and the forwarding case
+  rests on assumptions about the forwarding system that nobody checked. It
+  confirms a domain, not a person. Email only: Telegram and web chat are not
+  covered.
+- *Detail:* `docs/setup-reference.md`, "Sender authentication for inbound mail";
+  "Safety items"; `SPEC.md` section 11.
+
 ## 6. Words to explain
 
 Use these, or your own words of the same length, the first time each term comes up.
@@ -721,6 +764,13 @@ and say so.
   for when the builder or operator leaves. Run `chmod 600 .env` when you create the
   file (`docs/deployment.md`, step 3); no step in this guide does it for you. Do not
   paste a secret into the chat or into `setup-decisions.md`.
+- **A listed address is not proof of the sender.** The email allowlist matches the
+  From line, which a sender can forge. By default the host only records a
+  sender-authentication verdict for each message (`[EMAIL AUTH]` in the audit log)
+  and still processes forged mail from a listed address. Until a trusted mail
+  server is named on both the intake worker and the host, every verdict is
+  `unknown`. `EMAIL_AUTH_MODE=enforce` drops mail that is not authenticated
+  (choice 18). Tell the user which of the two they are running.
 - **Listener address:** set `WEBHOOK_HOST=127.0.0.1` and use a reverse proxy. The code
   default listens on all interfaces.
 - **The host runs no git in the agent's checkout.** The agent can write the whole
@@ -841,7 +891,7 @@ contract". Read it before you set up or write an intake service.
 **`inbound/` holds one such service: a Cloudflare Email Worker.** It needs a domain
 on Cloudflare Email Routing. `inbound/README.md` has the setup steps, the file
 format it writes, its choices for failures and attachments, and its limits. Tell
-the user these three things before they choose it:
+the user these four things before they choose it:
 
 - It was written for this repo from the contract above. It is not the worker the
   reference deployment runs, and **it has never run against a live Cloudflare
@@ -849,6 +899,8 @@ the user these three things before they choose it:
   Plan a real test (README, step 6) before go-live.
 - Mail it files gets no text extraction of PDF, Word or Excel attachments on the
   host. The attachments stay inside the committed `.eml`.
+- It reads sender-authentication results only from mail servers named in its
+  settings, and none is named by default (choice 18).
 - Its git author is a setting in the worker (`GIT_AUTHOR_EMAIL`, default
   `email-inbox@example.org`). The host must hold the same address in
   `INTAKE_GIT_AUTHOR_EMAIL` (`.env`). With a different address on one side,

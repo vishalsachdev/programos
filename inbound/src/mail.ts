@@ -4,6 +4,14 @@
 import PostalMime from 'postal-mime';
 import type { Address, Email } from 'postal-mime';
 
+import {
+  NO_TRUST,
+  authLine,
+  readAuth,
+  type AuthRecord,
+  type AuthTrust,
+} from './auth.js';
+
 /** SMTP envelope values, as the mail platform reports them. */
 export interface Envelope {
   from: string;
@@ -28,6 +36,12 @@ export interface HostPayload {
   eml_file_path: string;
   attachment_count: number;
   attachment_state: 'ready';
+  /**
+   * What trusted mail servers recorded about the sender (`auth.ts`). The
+   * host turns it into one verdict; it never reads the message's own
+   * headers for this.
+   */
+  auth: AuthRecord;
 }
 
 export interface Intake {
@@ -143,6 +157,7 @@ function markdownCopy(
     subject: string;
   },
   emlPath: string,
+  auth: AuthRecord,
 ): string {
   const lines: string[] = [
     `From: ${fields.from}`,
@@ -158,6 +173,9 @@ function markdownCopy(
       if (value) lines.push(`${HEADER_NAMES[key]}: ${value}`);
     }
   }
+  // Written by this worker, never copied from the message: no header of
+  // this name is in COPIED_HEADERS.
+  lines.push(`X-Intake-Authentication: ${authLine(auth)}`);
   const body = (email.text ?? '').replace(/\r\n?/g, '\n').trim();
   lines.push('', `# ${fields.subject}`, '', body || '_(no text body)_');
 
@@ -193,6 +211,7 @@ export async function buildIntake(
   envelope: Envelope,
   receivedAt: Date,
   inboxDir: string,
+  trust: AuthTrust = NO_TRUST,
 ): Promise<Intake> {
   const email = await PostalMime.parse(raw);
   const id = await sha256Hex(raw);
@@ -203,6 +222,15 @@ export async function buildIntake(
     name: '',
     address: oneLine(envelope.from).toLowerCase(),
   };
+  const fromHeader = email.headers.find((h) => h.key === 'from')?.value ?? '';
+  const auth = readAuth(
+    email.headers,
+    envelope.from,
+    // Counted on the header text, so a group or a second address the parser
+    // drops still counts.
+    (fromHeader.match(/@/g) ?? []).length,
+    trust,
+  );
   const toBoxes = mailboxes(email.to);
   const ccBoxes = mailboxes(email.cc);
   const subject = oneLine(email.subject) || '(no subject)';
@@ -232,6 +260,7 @@ export async function buildIntake(
       subject,
     },
     emlPath,
+    auth,
   );
 
   return {
@@ -254,6 +283,7 @@ export async function buildIntake(
       // the `.eml` that the same commit adds. Nothing is stored later, so
       // "pending" and "partial" never apply.
       attachment_state: 'ready',
+      auth,
     },
   };
 }

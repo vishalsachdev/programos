@@ -140,6 +140,7 @@ import {
   shutdownOutboundEmailQueue,
   startOutboundEmailQueue,
 } from './outbound-email.js';
+import { assertEmailAuthConfigured } from './email-auth.js';
 
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
@@ -896,6 +897,9 @@ async function main(): Promise<void> {
 
   // OUTBOUND_MAIL_PROVIDER=smtp: only an encrypted, authenticated submission.
   assertOutboundMailConfigured();
+
+  // EMAIL_AUTH_MODE=enforce needs a trusted mail server to be named.
+  assertEmailAuthConfigured();
 
   // The host-owned repository must not sit inside the agent's checkout.
   const hostRepoProblem = hostRepoPlacementProblem();

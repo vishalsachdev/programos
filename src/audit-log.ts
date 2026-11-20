@@ -219,15 +219,57 @@ export async function logInboundEmailReceiptOnce(args: {
  * blocked — the only record otherwise is an ephemeral PM2 console warning.
  * Intentionally NOT called for transient "allowlist unavailable" failures.
  */
-export function logDroppedEmail(from: string, subject: string): void {
+export function logDroppedEmail(
+  from: string,
+  subject: string,
+  senderAuthentication?: string,
+): void {
   appendAuditEntry(
     [
       `### ${localTimeHms(TIMEZONE)} — email — dropped (not on allowlist)`,
       `**From:** ${from}`,
       `**Subject:** ${subject}`,
+      ...(senderAuthentication
+        ? [`**Sender authentication:** ${singleLine(senderAuthentication)}`]
+        : []),
       '',
     ],
     'dropped-email',
+  );
+}
+
+/**
+ * The sender-authentication verdict for one inbound email
+ * (`src/email-auth.ts`). Written for every message that passes the
+ * allowlist, in both modes. `[EMAIL AUTH]` is the marker to search for;
+ * "unauthenticated" means the From address may be forged.
+ */
+export function logEmailAuthentication(args: {
+  from: string;
+  subject: string;
+  messageId?: string;
+  verdict: string;
+  reason: string;
+  mode: string;
+  /** enforce mode only: the message was dropped for this verdict. */
+  blocked?: boolean;
+}): void {
+  appendAuditEntry(
+    [
+      `### ${localTimeHms(TIMEZONE)} — email — ${
+        args.blocked
+          ? 'dropped (sender not authenticated)'
+          : 'sender authentication'
+      }`,
+      `**[EMAIL AUTH]** ${args.verdict} — ${singleLine(args.reason)} (mode: ${args.mode})`,
+      `**From:** ${singleLine(args.from || 'unknown')}`,
+      `**Subject:** ${singleLine(args.subject || 'unknown')}`,
+      ...(args.messageId
+        ? [`**Message-ID:** ${singleLine(args.messageId, 200)}`]
+        : []),
+      '',
+    ],
+    'email-auth',
   );
 }
 

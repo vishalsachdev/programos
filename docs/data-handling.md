@@ -106,7 +106,7 @@ It does not:
 
 - Keep a blocked sender's mail out of the program repo. The intake service commits it before the host checks (see the table). The host then also writes the sender's address and subject to the audit log.
 - Apply to web chat. Any caller with the shared secret is answered.
-- Verify identity beyond what the mail headers and the intake service provide. Ask your mail administrator what sender checks (SPF, DKIM, DMARC) the intake path enforces.
+- Prove who sent a message. The email allowlist is matched on the From header, and a sender can write any From header. Since 2026-11-20 the host records a sender-authentication verdict for each allowlisted message in the audit log (search for `[EMAIL AUTH]`). By default it only records: every message is processed as before, and until you name a trusted mail server every verdict is `unknown`. With `EMAIL_AUTH_MODE=enforce` the host drops allowlisted mail that is not `authenticated`. [`setup-reference.md`](./setup-reference.md), "Sender authentication for inbound mail", gives the rule and its limits. Ask your mail administrator what sender checks (SPF, DKIM, DMARC) the intake path enforces, and which server name it writes in the `Authentication-Results` header.
 - Limit what a listed sender may write about. A staff member can send mail that names a student, quotes a grade or attaches a roster. That text is then stored and sent on exactly as the table describes. The code has no filter for kinds of data.
 - Limit who reads the record. That is repo access (above).
 - Limit the agent's network (above).

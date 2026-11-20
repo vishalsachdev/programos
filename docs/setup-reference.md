@@ -80,6 +80,9 @@ The Foundry path and the failover were tested against fake servers only. [`model
 | `OUTBOUND_EMAIL_STAGGER_MS` | .env or process | `30000` | The wait between outgoing mails, in milliseconds (30000 to 60000) | 6 |
 | `EMAIL_SENDER_DAILY_CAP` | process | `10` | Messages in 24 hours from an automated agent or a sender the allowlist cannot vouch for | 10 |
 | `EMAIL_PERSON_SENDER_DAILY_CAP` | process | `30` | Messages in 24 hours from a person on the allowlist | 10 |
+| `EMAIL_AUTH_MODE` | process | `flag` | What the sender-authentication verdict does. `flag`: it is written to the audit log and nothing else changes. `enforce`: allowlisted mail that is not `authenticated` is dropped. Any other value stops the host at startup. See "Sender authentication for inbound mail" | 18 |
+| `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS` | process | Empty: every verdict is `unknown` | Comma-separated names of the mail servers whose results the host counts (the name a server writes first in its `Authentication-Results` header). `enforce` with this empty stops the host at startup | 18 |
+| `EMAIL_AUTH_UNKNOWN` | process | `block` | With `enforce` only: what happens to a message with the verdict `unknown`. `block` drops it; `allow` processes it | 18 |
 | `EMAIL_OUTREACH_TASK_ID` | .env or process | No scheduled outreach mail is sent | The one scheduled task that the operator approved to send outreach mail | 12 |
 
 The caps count in memory and reset when the process restarts. They apply to email only.
@@ -120,7 +123,10 @@ The host does not receive mail itself. A separate intake service does. `inbound/
 2. POST JSON to this host's webhook with `Authorization: Bearer <WEBHOOK_SECRET>`.
    `filename` and `subject` are required. The handler also reads `from`, `to`, `cc`,
    `date`, `message_id`, `raw_file_path`, `eml_file_path`, `raw_email`,
-   `inbound_text`, `phase`, `attachment_count` and `attachment_state`.
+   `inbound_text`, `phase`, `attachment_count`, `attachment_state` and `auth`.
+   `auth` is optional: it carries what trusted mail servers recorded about the
+   sender ("Sender authentication for inbound mail", below). A service that
+   does not send it gets the verdict `unknown` for every message.
 
 3. Keep the original message too. Routed approvals compare a sender's quoted words
    with the original mail, not with the Markdown copy. The host takes the original
@@ -134,6 +140,45 @@ The host does not receive mail itself. A separate intake service does. `inbound/
 4. After setup, test one routed-approval exchange, not only a plain question.
 
 To write your own service, read the handler in `src/channels/webhook.ts` (search for `Missing filename or subject`) and `src/cc-context.ts`, check the service's git author against `src/governance-protection.ts`, and use `inbound/` and its fixtures as the worked example. `src/channels/webhook-inbound-intake.test.ts` runs those fixtures through the real handler; a new service should pass the same checks.
+
+## Sender authentication for inbound mail
+
+**Never run against live mail.** The tests use synthetic messages. Which headers a real mail system writes is stated below only as far as its public documentation states it.
+
+The email allowlist is matched on the address in the From header. A sender can write any From header, so the match does not show who sent the message. A mail server that receives a message can check it (SPF for the envelope sender, DKIM for a signing domain, DMARC for the From domain) and writes what it found in an `Authentication-Results` header. This code checks no signature itself. It reads those headers from servers you name and turns them into one verdict per message.
+
+**What is read (the intake worker, `inbound/src/auth.ts`).** A header inside a message proves nothing by itself: the sender can add a header that names any server. Each server adds its headers above the ones it received. So:
+
+1. The first `Authentication-Results` header of the message is read only when its server name (authserv-id) equals the worker's `PLATFORM_AUTHSERV_ID`. That is the header of the mail platform that runs the worker; every header the sender wrote is below it.
+2. One more header is read: the first one below it whose server name is in `FORWARDER_AUTHSERV_IDS`. It is read only when the platform's own result shows that a server of a domain in `FORWARDER_DOMAINS` handed the message over (SPF passed for an envelope sender in such a domain, or a DKIM signature of such a domain passed). This is for a mailbox elsewhere that forwards to the bot's address: forwarding makes SPF fail for the original sender at the bot's domain, and can break the sender's DKIM signature, so the platform's result alone would call real forwarded mail unauthenticated. Without that proof a header naming the forwarder is ignored, because anyone can send a message straight to the bot's address with such a header in it.
+3. Nothing else is read. No `ARC-*` header, no `Received-SPF`, no header without a server name.
+
+The worker puts the result in the `auth` field of its payload and in one line of the Markdown copy (`X-Intake-Authentication:`). With the three worker settings empty, which is the default, nothing is read.
+
+**The verdict (the host, `src/email-auth.ts`).** The host counts only results whose server name is in `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`.
+
+| Verdict | When |
+|---|---|
+| `authenticated` | A counted server reports a pass that covers the From domain: DMARC pass (a forwarder must name the From domain it checked; the platform checks the From header of the message it hands over), or a DKIM pass signed by the From domain or a parent of it, or an SPF pass for an envelope sender in the From domain or a parent of it |
+| `unauthenticated` | A counted server reported, and no pass covers the From domain. A pass for another domain is in this group: SPF for a bounce domain, DKIM for the sender's own unrelated domain. Also: a message with two From headers, or more than one address in From |
+| `unknown` | No result from a counted server. This is every message until you set both sides, and every message from an intake service that sends no `auth` field |
+
+The host takes the results from the payload, which it accepts only with `WEBHOOK_SECRET`, and does not read the committed original for them: the payload already carries the `from` that the allowlist is matched against, and only the mail platform knows the envelope sender. The list of servers the host believes is its own setting, not a field of the payload.
+
+**What the verdict changes.**
+
+- `EMAIL_AUTH_MODE=flag` (the default): nothing. Each message that passes the allowlist gets an audit entry, `[EMAIL AUTH] <verdict> — <reason>`; a dropped message from an address that is not on the allowlist carries the verdict in its entry. A forged message from a listed address is still processed.
+- `EMAIL_AUTH_MODE=enforce`: mail from a listed address that is not `authenticated` is handled like mail from an address that is not listed. It does not reach the agent. No reply of any kind is sent, so the bot cannot be used to send mail to a forged address. The audit entry is `dropped (sender not authenticated)`. The courtesy reply to an unlisted colleague is also withheld unless that message is `authenticated`. `unknown` is dropped too, unless `EMAIL_AUTH_UNKNOWN=allow`. The host does not start in `enforce` with no trusted server named.
+
+Run in `flag` first and read the `[EMAIL AUTH]` entries for real mail from each listed person. Change to `enforce` when they say `authenticated`. Routed approvals and status updates are what a forger would aim at, so `enforce` is the recommended setting once a trusted server is named and the entries are right. In `flag` an approval reply from a forged address is still accepted; requiring `authenticated` for approvals alone is issue 75.
+
+**What it does not prove, and what was not checked.**
+
+- A verdict is about a domain, not a person. Whoever the domain's mail system lets send as an address passes.
+- Alignment is narrower than DMARC's: two different subdomains of one organisation do not match (`mail.example.edu` signing for `example.edu`). Such mail is `unauthenticated`, never wrongly `authenticated`.
+- The platform result rests on the platform putting its header first on every message. The one documented platform, Cloudflare Email Routing, states that it prepends an `Authentication-Results` header with the name `mx.cloudflare.net`, that it validates DMARC before it calls the worker, and that other such headers "may have been supplied by the sender and should not be trusted" ([email handler](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/)). Its documentation does not say whether it removes a header in the incoming message that already carries its name, whether the header is in `message.raw` (it names `message.headers`), or which properties (`header.d`, `header.from`) the header carries. It also states that mail failing both SPF and DKIM, or failing the sender domain's DMARC policy, is rejected ([postmaster](https://developers.cloudflare.com/email-service/reference/postmaster/)); whether that happens before the worker runs for every message is not stated.
+- The forwarder result rests on two things nobody checked for any real mail system: that the forwarder removes a header carrying its own name from mail it receives (RFC 8601 section 5 asks for this), and that only its own servers pass SPF or sign DKIM for the domains in `FORWARDER_DOMAINS`. A mail system shared by many organisations may fail the second. A user inside the forwarding organisation is not stopped by either.
+- No ARC chain is validated. The platform's documentation says it supports ARC and does not say that it validates one or writes the result.
 
 ## Webhooks from other services
 

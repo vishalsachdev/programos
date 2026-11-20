@@ -91,6 +91,16 @@ This change runs the parse in a worker thread with an empty environment. A pollu
 
 What is not covered: a crafted file can still hang the worker or use up its memory, and then that one attachment is never extracted. No time or memory limit was added, because a limit changes what happens to a large valid file and that is the owner's decision. Owner of the remaining risk: the deployment's operator. Follow-up: issue 64 (the vendor's fixed build from its own site, a time limit setting, or a different parser).
 
+## Added after the audit: `nodemailer` as a direct dependency (2026-11-20, issue 9)
+
+The SMTP outbound provider (`src/outbound-email-smtp.ts`, used only with `OUTBOUND_MAIL_PROVIDER=smtp`) imports `nodemailer`'s SMTP client and message composer. This is the first code of ours that imports it; the row above that says "our code does not import nodemailer" was true when written.
+
+- `nodemailer` `^10.5.0`, locked at 10.5.0: the same version `mailparser` 3.14.3 already pulls in, so the lockfile gains no second copy. It has no dependencies of its own. `npm audit` reports nothing for it (the advisories above end at 10.1.3). 10.6.0 existed but was 5 days old, under the 7-day minimum in `.npmrc`.
+- Dev only, for the tests' local mail server: `smtp-server` 3.21.4 (pins `nodemailer` 10.5.0; brings `ipv6-normalize` and `punycode.js`), `@types/nodemailer` 8.0.2, `@types/smtp-server` 3.5.13. 3.21.6 existed and was 4 days old.
+- Root count after the change: 9, the same nine as above.
+- Untrusted input that reaches it: a reply's `In-Reply-To` and `References` come from the inbound mail's `Message-ID`, and the subject can echo the inbound subject. The provider strips line breaks from every header value before the library sees it and sets the envelope recipients itself from the allowlist-checked list; a test sends a line break in both and checks that no header or recipient is added. The server's replies are also untrusted input to the client; the session is TLS with certificate checks, so they come from the configured server.
+- The type package is for major version 8 while the library is 10. The calls used (`SMTPConnection` connect, login, send; `MailComposer`) typecheck and are exercised by the tests against a real local server.
+
 ## Versions that now differ from the source
 
 The repo keeps the source's exact versions on purpose. After this change, `package-lock.json` and `container/agent-runner/package-lock.json` differ from the source for the packages above marked FIXED, plus the packages they pull in. The direct dependencies that moved: `vitest` 4.1.12, `mailparser` 3.14.3, `zod` 4.6.7, `typescript-eslint` 8.72.2 (root) and `@modelcontextprotocol/sdk` 1.32.2, `zod` 4.6.7 (agent container). The reason is this audit. The lockfiles are exported code, so the consolidated patch records them. `src/document-extractor.ts` (the worker) is recorded the same way.

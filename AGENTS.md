@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,232 passing tests (1,761 from the source, 471 added here). One timing test
+   is 2,303 passing tests (1,761 from the source, 542 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -129,7 +129,9 @@ move up without starting again. "First start" means part 14.
   - the model provider account (choice 1);
   - a private knowledge-base repo on a git host (choice 7);
   - an outbound mail provider account and a sending address (choice 6). The
-    provider asks you to prove you control the sending domain with DNS records;
+    default provider asks you to prove you control the sending domain with DNS
+    records. To send as an address on the institution's own mail domain, see
+    choice 6, option (b);
   - an inbound mail intake service (choice 5). The one in `inbound/` needs a
     Cloudflare account and a domain or subdomain that receives no other mail;
   - a route for operator alerts (choice 4): a Telegram account, or the operator's
@@ -142,7 +144,8 @@ move up without starting again. "First start" means part 14.
 - **What it does NOT give you:** no channel for students or the public; no
   single sign-on; no retention or deletion of old mail (the code never deletes
   from the program repo; the bot's own machine keeps its stores forever unless
-  you set a period, choice 14); no second mail provider; no web search, web fetch or
+  you set a period, choice 14); one outbound mail service at a time, with no
+  fallback to another; no web search, web fetch or
   browsing for the agent unless you turn them on (choice 17). Sender caps are in
   memory and reset on restart. No second check of email replies by the reply
   sensor: it is off in the pilot, and when on it checks chat replies only unless
@@ -254,6 +257,11 @@ matching choice in part 5.
    too, which sends their text to that destination (choice 2).
 2. **Who may approve records and access changes?** (the admin and any approvers)
 3. **Which address does the bot send from?** And which mail provider delivers it.
+   An address on a domain the team controls works today with the default
+   provider. An address on the institution's own mail domain needs that
+   institution's mail system to accept a login from the bot (choice 6, option
+   (b)); only the mail administrators can say whether it does. Do not tell the
+   user it is allowed. ASK them to get the answer in writing.
 4. **Where does the data live?** The host for the bot, and the git host for the program repo.
 5. **What consent wording do senders see**, if any, and who is on the allowlist.
 6. **Which channels?** Email only is the simplest. Telegram and web chat are optional.
@@ -386,17 +394,45 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 **6. Outbound mail provider and the from-address**
 - *Plain words:* a mail service that delivers the bot's replies, and the address
   those replies come from.
-- *Options:* the code supports one provider, Resend. Another provider needs code.
-- *Code default:* none. Without the key no mail is sent, and each send is
-  reported as a shortfall.
-- *First pilot:* Resend, with an address on a domain you control, the same
-  address colleagues write to.
-- *Cost to the person:* an account with the provider (check Resend's current
-  pricing) and DNS records on the sending domain to prove control of it.
-- *Settings:* `RESEND_API_KEY`, `SEND_FROM_EMAIL`, `SEND_FROM_NAME`,
-  `BOT_MAIL_DOMAIN`, `RESEND_WEBHOOK_SECRET` (bounce reports),
-  `OUTBOUND_EMAIL_STAGGER_MS` (.env).
-- *Detail:* policy question 3; `docs/setup-reference.md`, "Mail delivery events".
+- *Options:*
+  - (a) **Your own domain, through Resend.** The default, and the only path
+    that has run in production. You prove you control the sending domain with
+    DNS records. It cannot send as an address on a domain someone else runs:
+    an institution's own mail domain is not supported on this path.
+  - (b) **SMTP submission** (`OUTBOUND_MAIL_PROVIDER=smtp`). The bot logs in
+    to a mail server you name, as a mailbox there, and hands it each mail.
+    This is how the bot can send as an address on the institution's mail
+    domain, if the institution's mail system allows a program to log in with
+    a username and a password or app password. ASK the user to ask the mail
+    administrators; do not assume it. New in this repo (2026-11-20), tested
+    against a local test server only, never against a real mail system.
+  - Another service needs code. Sending through Microsoft Graph is not
+    implemented (issue 67).
+- *What option (b) loses:* no bounce or complaint reports and no
+  "unconfirmed after 12 hours" report. A bounce arrives as mail in the sending
+  mailbox, the bot ignores it, and nobody is alerted: a person must read that
+  mailbox. If the connection drops after a mail was handed over and before
+  the server answered, the bot cannot tell whether it was delivered; it
+  reports that to the operator and does not send again. Tell the user both.
+- *Code default:* option (a). Without the key no mail is sent, and each send
+  is reported as a shortfall. With option (b) the host does not start until
+  the SMTP settings are complete and name an encrypted mode.
+- *First pilot:* option (a), with an address on a domain you control, the same
+  address colleagues write to. Choose (b) only when the address must be on
+  the institution's domain and the mail administrators have said yes.
+- *Cost to the person:* (a) an account with the provider (check Resend's
+  current pricing) and DNS records on the sending domain. (b) a mailbox on the
+  mail system, its login, and whatever approval the mail administrators ask for.
+- *Settings:* `OUTBOUND_MAIL_PROVIDER` (`resend`, `smtp`), `SEND_FROM_EMAIL`,
+  `SEND_FROM_NAME`, `BOT_MAIL_DOMAIN`, `OUTBOUND_EMAIL_STAGGER_MS` (.env).
+  For (a): `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` (bounce reports). For
+  (b): `SMTP_HOST`, `SMTP_SECURITY` (`starttls` or `tls`; there is no
+  unencrypted mode), `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` (a secret,
+  `.env` only), `SMTP_ENVELOPE_FROM` (optional). With (b), set
+  `SEND_FROM_EMAIL` to the mailbox's address and `BOT_MAIL_DOMAIN` to its domain.
+- *Detail:* policy question 3; `docs/setup-reference.md`, "Outbound mail over
+  SMTP" (how each server answer is treated, and the setup steps) and "Mail
+  delivery events".
 
 **7. Knowledge-base repo: which git host, and who can push**
 - *Plain words:* the team's record lives in its own private repository (a folder
@@ -693,6 +729,7 @@ and say so.
 | Routed approvals | In production in K-ai | Approver recorded per sender in the allowlist; the institution domain set correctly |
 | Telegram admin channel | In production in K-ai. The default route for operator alerts (see "Safety items") | Bot token, admin chat ID, **the chat sender allowlist file** |
 | Operator alerts by email (`ADMIN_ALERT_ROUTE=email`) | New in this repo, not in K-ai. Tested here with the mail provider stubbed; **not yet run against a live provider** | `OPERATOR_CC_EMAIL` set to one person's address, the outbound provider key |
+| Outbound mail over SMTP (`OUTBOUND_MAIL_PROVIDER=smtp`) | New in this repo (2026-11-20), not in K-ai. Tested with a local SMTP server inside the tests; **never run against a real mail server**. No bounce reports | A mailbox on a mail server that accepts an encrypted login with a username and password; the mail administrators' agreement |
 | Behaviour sensor and evaluation scripts | In production in K-ai | Ground-truth files in the program repo; see "Academic examples" |
 | Restricted container network (`CONTAINER_NETWORK`) | New in this repo (2026-11-20); not in K-ai. Checked with real containers on Docker Engine on Linux only | Docker Engine on Linux for the default; see "Safety items" |
 | Web search, web fetch, `agent-browser` | Off by default since 2026-11-20 | `AGENT_WEB_TOOLS=1`; fetch and browser also need `CONTAINER_NETWORK=open`. ASK first |
@@ -736,6 +773,8 @@ and say so.
   - It uses the same mail provider as everything else. When the provider or its key
     is the thing that failed, the alert about it cannot be mailed either. It is then
     in the host log only. Use `telegram,email` if the user needs a second path.
+  - With `OUTBOUND_MAIL_PROVIDER=smtp`, alert mail goes through the same SMTP
+    server, and a bounced mail raises no alert at all (there are no bounce reports).
   - An alert about an alert mail (it bounced, or could not be sent) is never mailed
     again. It goes to Telegram if that route is on; otherwise it is logged and dropped.
   - Alert mail waits in its own queue (about 30 seconds between mails), and at most
@@ -853,7 +892,8 @@ fixtures through the real handler; a new service should pass the same checks.
 
 
 **Two optional webhooks** share the listener with inbound mail: mail delivery
-events from the mail provider (`/resend/webhook`) and pushes to the program repo
+events from the mail provider (`/resend/webhook`; not used when
+`OUTBOUND_MAIL_PROVIDER=smtp`) and pushes to the program repo
 (`/api/github-push`). Each tells an outside service to send data to this host, so
 ASK before you create either one. Set them up after First start, when the host
 has a public HTTPS name. The steps and checks are in

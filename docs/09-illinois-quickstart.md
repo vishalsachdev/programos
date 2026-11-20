@@ -65,7 +65,7 @@ Note: UIUC's M365 tenant does allow user-controlled forwarding to external domai
 
 Three options, in order of preference:
 
-**A. SMTP relay through the shared mailbox.** The bot authenticates to `smtp.office365.com` as the shared mailbox using an app password or OAuth2 client credentials, and sends `From: <unit>@illinois.edu`. Cleanest — replies look identical to a human reply, threading is perfect, no SPF/DKIM gymnastics. Requires the mailbox to have SMTP AUTH enabled (default-on for most UIUC accounts; if disabled, Tech Services can enable per-account).
+**A. SMTP submission as the mailbox.** The bot logs in to the university's mail system as the mailbox and sends `From: <unit>@illinois.edu`. The code supports this since 2026-11-20 (`OUTBOUND_MAIL_PROVIDER=smtp`), with a username and a password or app password only (no OAuth). Whether the university allows it for your mailbox is **not verified**; an earlier version of this page said it was on by default, and that claim was never checked. Read [`illinois/institutional-address.md`](./illinois/institutional-address.md) and ask your central IT office.
 
 **B. Send via the inbound provider with `From: <unit>@illinois.edu`.** Works, but you'll fail SPF/DKIM checks unless you can add `include:_spf.<provider>` to the `illinois.edu` SPF record (you can't). Recipients may see "via postmarkapp.com" in the From header. Acceptable for internal stakeholders, awkward for external.
 
@@ -75,14 +75,7 @@ Three options, in order of preference:
 
 In the bot's `.env`:
 
-```
-EMAIL_INBOUND_HMAC_SECRET=<from step 1>
-EMAIL_OUTBOUND_MODE=smtp-relay        # or postmark, or bot-domain
-EMAIL_SMTP_HOST=smtp.office365.com
-EMAIL_SMTP_USER=<unit>@illinois.edu
-EMAIL_SMTP_PASS=<app password>
-EMAIL_FROM_DISPLAY=Coordinator Bot <<unit>@illinois.edu>
-```
+The setting names this page used to list here were from the spec-only version and do not exist in the code. The real ones are in [`setup-reference.md`](./setup-reference.md): `WEBHOOK_SECRET` for inbound mail, and for option A `OUTBOUND_MAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_SECURITY`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, with `SEND_FROM_EMAIL` and `BOT_MAIL_DOMAIN` set to the mailbox's address and domain. The server name and port come from your central IT office; this page does not state them.
 
 In the program repo's `program/EMAIL_ALLOWLIST.md`, add the addresses that may interact with the bot. Stakeholders not in this list get filtered silently.
 

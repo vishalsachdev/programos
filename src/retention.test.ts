@@ -882,8 +882,10 @@ describe('path safety', () => {
     fs.symlinkSync(target, path.join(dir, '2026-01-01-link.md'));
     fs.linkSync(target, path.join(dir, '2026-01-01-hard.md'));
     const real = file('groups/main/conversations/2026-01-01-real.md', 400);
+    const dry = await runRetention(on, deps(), { dryRun: true });
+    expect(dry.transcriptArchives).toEqual({ deleted: 1, refused: 2 });
     const report = await runRetention(on, deps());
-    expect(report.transcriptArchives).toEqual({ deleted: 1 });
+    expect(report.transcriptArchives).toEqual({ deleted: 1, refused: 2 });
     expect(fs.existsSync(real)).toBe(false);
     expect(fs.readFileSync(target, 'utf8')).toBe('KEEP');
     expect(fs.lstatSync(path.join(dir, '2026-01-01-link.md'))).toBeTruthy();

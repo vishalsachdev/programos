@@ -471,8 +471,9 @@ function groupFolders(groupsDir: string): string[] {
 
 /**
  * Delete the files directly in `root/relDir` that are older than the window
- * and that `wanted` accepts. Only single-link regular files are considered;
- * a link anywhere on the path makes the folder count as refused.
+ * and that `wanted` accepts. Only single-link regular files are deleted. A
+ * link on the path, and a link or hard link under a wanted name, count as
+ * refused.
  */
 function pruneFolder(
   root: string,
@@ -484,12 +485,19 @@ function pruneFolder(
 ): void {
   let files;
   try {
-    files = listFilesInTree(root, relDir);
+    files = listFilesInTree(root, relDir, { includeUnsafe: true });
   } catch {
     result.refused = (result.refused ?? 0) + 1;
     return;
   }
   for (const file of files ?? []) {
+    // A link or hard link under a name this store would delete is reported
+    // and left alone. A link has no age of its own worth trusting.
+    if (!file.plain) {
+      if (wanted(file.name) !== 'ignore')
+        result.refused = (result.refused ?? 0) + 1;
+      continue;
+    }
     if (file.mtimeMs >= cutoffMs) continue;
     const verdict = wanted(file.name);
     if (verdict === 'ignore') continue;

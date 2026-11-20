@@ -360,6 +360,12 @@ describe('listFilesInTree and unlinkFileInTree', () => {
     fs.mkdirSync(path.join(root, 'd.md'));
     fs.linkSync(path.join(outside, 'secret.env'), path.join(root, 'h.md'));
     expect(listFilesInTree(root)).toEqual([]);
+    // On request the link and the hard link are named, marked not plain.
+    expect(
+      listFilesInTree(root, '', { includeUnsafe: true })
+        ?.map((f) => `${f.name}:${f.plain}`)
+        .sort(),
+    ).toEqual(['h.md:false', 'l.md:false']);
     for (const name of ['l.md', 'd.md', 'h.md']) {
       expect(() => unlinkFileInTree(root, name)).toThrow(
         /not a single-link regular file/,

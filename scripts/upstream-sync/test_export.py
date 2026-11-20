@@ -33,14 +33,16 @@ class OwnedTest(unittest.TestCase):
                   '.github/ISSUE_TEMPLATE/config.yml', '.github/PULL_REQUEST_TEMPLATE.md',
                   'docs/data-handling.md', 'docs/illinois/data-handling.md', 'docs/illinois/hosting.md',
                   'docs/illinois/model-foundry.md', 'docs/model-providers.md', 'docs/dependency-audit.md', '.gitleaksignore',
-                  'docs/service-ownership.md', 'docs/illinois/service-ownership.md',
+                  'docs/service-ownership.md', 'docs/illinois/service-ownership.md', 'docs/teams-alerts.md',
+                  'docs/illinois/teams-alerts.md',
                   'inbound/src/index.ts', 'inbound/package.json'):
             self.assertTrue(export.owned(p), p)
 
     def test_exported_paths(self):
         for p in ('src/index.ts', 'docs/reminder-registry.md', 'scripts/deploy.sh', 'README.md.bak',
                   'docs/data-handling.md.bak', 'docs/illinois-notes.md', 'inbound.md',
-                  'docs/dependency-audit.md.bak', '.gitleaksignore.bak', 'docs/service-ownership.md.bak'):
+                  'docs/dependency-audit.md.bak', '.gitleaksignore.bak', 'docs/service-ownership.md.bak',
+                  'docs/teams-alerts.md.bak'):
             self.assertFalse(export.owned(p), p)
 
 

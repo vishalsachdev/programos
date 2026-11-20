@@ -190,13 +190,13 @@ describe('admin alert route', () => {
     });
 
     it('falls back to telegram on a value it does not know, and says so', () => {
-      expect(parseAdminAlertRoute('teams')).toEqual({
+      expect(parseAdminAlertRoute('slack')).toEqual({
         routes: ['telegram'],
-        invalid: 'teams',
+        invalid: 'slack',
       });
-      expect(parseAdminAlertRoute('email,teams')).toEqual({
+      expect(parseAdminAlertRoute('email,slack')).toEqual({
         routes: ['telegram'],
-        invalid: 'email,teams',
+        invalid: 'email,slack',
       });
     });
 
@@ -788,13 +788,13 @@ describe('admin alert route', () => {
     });
 
     it('names a route value it does not know', () => {
-      setRoute('teams', {
+      setRoute('slack', {
         ...BASE_ENV,
         TELEGRAM_BOT_TOKEN: 'token',
         TELEGRAM_ADMIN_CHAT_ID: '1',
       } as typeof BASE_ENV);
       expect(checkAdminAlertConfig()).toEqual([
-        expect.stringContaining('ADMIN_ALERT_ROUTE="teams" is not valid'),
+        expect.stringContaining('ADMIN_ALERT_ROUTE="slack" is not valid'),
       ]);
     });
   });

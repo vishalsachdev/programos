@@ -64,7 +64,8 @@ The Foundry path and the failover were tested against fake servers only. [`model
 | `TELEGRAM_BOT_TOKEN` | .env | No Telegram channel, and no alerts on the Telegram route | The Telegram bot's token | 3, 4 |
 | `TELEGRAM_ADMIN_CHAT_ID` | .env | None | The admin's Telegram chat, for alerts | 3, 4 |
 | `WEBCHAT_SECRET` | .env | No web chat | The web chat's shared secret. Anyone who holds it is answered. Web chat is reachable only when `WEBHOOK_SECRET` is set too, because that channel starts the one HTTP listener | 3 |
-| `ADMIN_ALERT_ROUTE` | .env | `telegram` | Where operator alerts go: `telegram`, `email`, or `telegram,email` | 4 |
+| `ADMIN_ALERT_ROUTE` | .env | `telegram` | Where operator alerts go: `telegram`, `email`, `teams`, or several joined by commas (`telegram,email`, `email,teams`, ...) | 4 |
+| `ADMIN_ALERT_TEAMS_WORKFLOW_URL` | .env only | None; the Teams route then sends nothing and the startup check names this key | **Secret.** The HTTP POST URL of a Teams Workflows webhook that anyone may trigger; the URL is the credential and is never logged. Must be `https://`. Not verified against a live Teams tenant: [`teams-alerts.md`](./teams-alerts.md) | 4 |
 | `ADMIN_ALERT_TEST` | process | No test | `1` sends one test alert on each enabled route at startup. First start only; remove it after | 4 |
 | `DEAD_LETTER_ALERT_JID` | .env or process | The operator's Telegram chat (`tg-avery@program`, a placeholder) | The chat id that receives dead-letter and delivery-shortfall alerts on the Telegram route | 4 |
 | `OUTREACH_SUMMARY_JID` | .env or process | The same operator chat | The chat id that receives weekly outreach summaries. It does not follow `ADMIN_ALERT_ROUTE` | 4, 12 |

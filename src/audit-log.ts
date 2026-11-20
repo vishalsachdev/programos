@@ -415,6 +415,31 @@ export function logOutboundEmail(args: OutboundEmailAuditArgs): void {
   appendAuditEntry(outboundEmailLines(args), 'outbound-email');
 }
 
+/**
+ * Log one operator alert posted to the Teams route (admin-alert.ts), the
+ * counterpart of the `[OUTBOUND EMAIL]` entry the email route writes. Only
+ * a delivered post is logged, as on the email route. `text` is the text as
+ * posted (after any truncation for the size limit). The workflow URL is a
+ * credential and is never passed here.
+ */
+export function logAdminAlertTeams(args: {
+  text: string;
+  status: number;
+  truncated: boolean;
+}): void {
+  appendAuditEntry(
+    [
+      `### ${localTimeHms(TIMEZONE)} — teams — outbound`,
+      `**[ADMIN ALERT TEAMS]** Accepted: HTTP ${args.status}${args.truncated ? ' | Truncated: yes' : ''}`,
+      `**Source:** admin-alert`,
+      '',
+      args.text,
+      '',
+    ],
+    'admin-alert-teams',
+  );
+}
+
 /** Cap on the embedded gate-verdict JSON in a gate-result entry. */
 const GATE_RESULT_JSON_CAP = 8000;
 

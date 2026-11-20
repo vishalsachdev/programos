@@ -54,6 +54,14 @@ function mirrorErrorText(err: any): string {
 }
 
 /** Benign "the file/revision just isn't there" stderr patterns from git. */
+/** `user:password` as [user, password]; the password may hold a colon. */
+function splitUserinfo(userinfo: string): [string, string?] {
+  const colon = userinfo.indexOf(':');
+  return colon < 0
+    ? [userinfo]
+    : [userinfo.slice(0, colon), userinfo.slice(colon + 1)];
+}
+
 const BENIGN_MISSING_RE =
   /does not exist in|Not a valid object name|bad revision|path .* does not exist/i;
 
@@ -209,11 +217,11 @@ export class RepoReader {
 
   /**
    * A mirror made by an earlier version, or cloned by hand, can hold the
-   * origin's token in its config. When PROGRAM_ORIGIN_URL is that same URL,
-   * or names the same address with a password or token of its own (a newer
-   * one, after a rotation), the stored URL is rewritten without the
-   * credential (git then reads it from the setting). The setting is taken as
-   * the current one. Otherwise the config is the credential's only home:
+   * origin's token in its config. When PROGRAM_ORIGIN_URL names the same
+   * address with a credential of its own (the same one, or a newer one after
+   * a rotation), the stored URL is rewritten without the credential (git
+   * then reads it from the setting). The setting is taken as the current
+   * one. Otherwise the config is the credential's only home:
    * it is left as it is, made readable by its owner only, and a warning
    * says how to move it. Never throws.
    */
@@ -238,21 +246,29 @@ export class RepoReader {
           'RepoReader: the read mirror config holds a credential and was readable by other users; now private to its owner',
         );
       }
-      // The stored credential is not needed when the setting is the same
-      // URL, or names the same address and carries a password or token of
-      // its own (`user:secret@`). The second case is a token rotated before
-      // this start: git would go on using the stored one, because the rewrite
-      // from the setting matches the bare address only. A setting with a
-      // user name and no password proves no secret of its own (it may be a
-      // name, it may be a token written as the name), so only an exact match
-      // counts there and the stored credential is otherwise kept.
+      // The stored credential is not needed when the setting names the same
+      // address and carries a credential of its own. That covers a token
+      // rotated before this start, in both forms (`user:token@` and the
+      // token written as the user name, `token@`): git would go on using the
+      // stored one, because the rewrite from the setting matches the bare
+      // address only. One case is kept apart: the setting has a user name
+      // and no password, and the stored URL has that same user name with a
+      // password. The setting then holds no secret at all and the stored
+      // password is the only one, so it stays.
       const setting = process.env.PROGRAM_ORIGIN_URL || '';
       const fromSetting = splitOriginCredential(setting);
-      const settingHasSecret = /^[^:]*:.+$/.test(fromSetting.userinfo);
+      const fromStored = splitOriginCredential(stored);
+      const [settingUser, settingPass = ''] = splitUserinfo(
+        fromSetting.userinfo,
+      );
+      const [storedUser, storedPass = ''] = splitUserinfo(fromStored.userinfo);
+      const settingLacksStoredPassword =
+        !settingPass && Boolean(storedPass) && settingUser === storedUser;
       if (
         stored === setting ||
-        (settingHasSecret &&
-          splitOriginCredential(stored).bare === fromSetting.bare)
+        (fromSetting.userinfo !== '' &&
+          fromStored.bare === fromSetting.bare &&
+          !settingLacksStoredPassword)
       ) {
         execFileSync(
           'git',

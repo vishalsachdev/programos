@@ -41,6 +41,10 @@ Each rule has a number so that code comments, prompts and tests can cite it. Kee
 
 `G1` to `G10` as a block are the knowledge-base write protocol in the program repo's governance file. `RC-nnn` numbers are root-cause IDs: each names the failure that led to a rule (for example `RC-018`: the agent must learn what the host actually sent).
 
+## What the rules do not cover
+
+The numbered rules govern who may change the record and what the bot may send. They do not say which kinds of data may enter the record, which outside services may receive it, who may read the program repo, or how long anything is kept. Those are decisions for the adopter and the institution. [`data-handling.md`](./data-handling.md) lists each outside service and storage place as traced from the code, and the decisions to make before go-live. Record your answers in the program repo's governance file.
+
 ## Changing a rule
 
 1. Propose the change in the program repo, with the reason and the failure seen or expected.

@@ -33,7 +33,7 @@ After `--apply`:
 
 ## What the tool does not touch
 
-The `OWNED` list in `export.py` names the paths that belong to this repo (`AGENTS.md`, `SPEC.md`, `templates/`, `docs/12-governance.md`, `CONTRIBUTING.md`, the `.github/` templates and others). An export never writes or deletes them.
+The `OWNED` list in `export.py` names the paths that belong to this repo (`AGENTS.md`, `SPEC.md`, `templates/`, `docs/12-governance.md`, `CONTRIBUTING.md`, the `.github/` templates, `docs/illinois/` and others). An export never writes or deletes them.
 
 ## Limits
 

@@ -1,0 +1,38 @@
+# Inbound mail intake for ProgramOS. Every value below is a placeholder:
+# replace it with your own before you deploy. See README.md in this folder.
+
+name = "programos-inbound"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+# The retry run. Each run reads the buffer once; nothing else happens when
+# the buffer is empty.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# The retry buffer. Create it with `npx wrangler kv namespace create PENDING`
+# and paste the id it prints.
+[[kv_namespaces]]
+binding = "PENDING"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+# The knowledge-base repo (owner/name) and the branch the host reads.
+GITHUB_REPO = "example-org/program-repo"
+GITHUB_BRANCH = "main"
+# The folder for inbound mail. The host reads originals only from this one.
+INBOX_DIR = "discussions/raw"
+# The git author of each intake commit. The host accepts only this address
+# today; change it here only together with the host (see README.md).
+GIT_AUTHOR_NAME = "Email Inbox"
+GIT_AUTHOR_EMAIL = "email-inbox@example.org"
+# The host's webhook, through your reverse proxy.
+HOST_WEBHOOK_URL = "https://bot.example.org/"
+# Largest message accepted, in bytes (10 MiB). A larger one is refused at SMTP.
+MAX_MESSAGE_BYTES = "10485760"
+# Attempts per message before it is set aside under "failed:" in the buffer.
+MAX_ATTEMPTS = "12"
+
+# Secrets are not in this file. Set them with:
+#   npx wrangler secret put GITHUB_TOKEN
+#   npx wrangler secret put WEBHOOK_SECRET

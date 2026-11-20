@@ -44,6 +44,12 @@ import {
   registerProxyCaller,
   revokeProxyCaller,
 } from './credential-proxy.js';
+import {
+  basePath,
+  getModelProviderConfig,
+  ModelProvider,
+  selectProvider,
+} from './model-provider.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { webToolsEnabled } from './web-tools.js';
 import {
@@ -362,6 +368,7 @@ function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   proxyToken: string,
+  provider: ModelProvider,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -369,24 +376,52 @@ function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
 
   // Route API traffic through the credential proxy (containers never see real secrets)
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
-  args.push(
-    '-e',
-    `ANTHROPIC_CUSTOM_HEADERS=X-NanoClaw-Proxy-Token: ${proxyToken}`,
-  );
-
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
-  const authMode = detectAuthMode();
-  if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  const proxyOrigin = `http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`;
+  const foundry =
+    provider === 'foundry' ? getModelProviderConfig().foundry : undefined;
+  const modelOverrides: Record<string, string | undefined> = {};
+  if (foundry) {
+    // Foundry mode. The token is also in the base URL path, because it is
+    // not verified that the SDK sends the custom header in this mode. The
+    // key is a placeholder; the proxy puts the real one in.
+    args.push('-e', 'CLAUDE_CODE_USE_FOUNDRY=1');
+    args.push(
+      '-e',
+      `ANTHROPIC_FOUNDRY_BASE_URL=${proxyOrigin}/_t/${proxyToken}${basePath(foundry.baseUrl)}`,
+    );
+    args.push('-e', 'ANTHROPIC_FOUNDRY_API_KEY=placeholder');
+    args.push(
+      '-e',
+      `ANTHROPIC_CUSTOM_HEADERS=X-NanoClaw-Proxy-Token: ${proxyToken}`,
+    );
+    // Deployment names. Without these pins the SDK's aliases resolve to an
+    // older built-in default.
+    for (const [key, value] of [
+      ['ANTHROPIC_DEFAULT_OPUS_MODEL', foundry.opusModel],
+      ['ANTHROPIC_DEFAULT_SONNET_MODEL', foundry.sonnetModel],
+      ['ANTHROPIC_DEFAULT_HAIKU_MODEL', foundry.haikuModel],
+    ] as const) {
+      if (value) args.push('-e', `${key}=${value}`);
+    }
+    modelOverrides.NANOCLAW_AGENT_MODEL = foundry.agentModel;
+    modelOverrides.NANOCLAW_GATE_MODEL = foundry.gateModel;
   } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    args.push('-e', `ANTHROPIC_BASE_URL=${proxyOrigin}`);
+    args.push(
+      '-e',
+      `ANTHROPIC_CUSTOM_HEADERS=X-NanoClaw-Proxy-Token: ${proxyToken}`,
+    );
+
+    // Mirror the host's auth method with a placeholder value.
+    // API key mode: SDK sends x-api-key, proxy replaces with real key.
+    // OAuth mode:   SDK exchanges placeholder token for temp API key,
+    //               proxy injects real OAuth token on that exchange request.
+    const authMode = detectAuthMode();
+    if (authMode === 'api-key') {
+      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    } else {
+      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    }
   }
 
   // Per-call-site model config: forward the model knobs into the container
@@ -399,7 +434,8 @@ function buildContainerArgs(
     'NANOCLAW_GATE_MODEL',
     'NANOCLAW_AGENT_EFFORT',
   ]) {
-    const value = process.env[key];
+    // On a Foundry run, a FOUNDRY_*_MODEL deployment name wins.
+    const value = modelOverrides[key] || process.env[key];
     if (value) {
       args.push('-e', `${key}=${value}`);
     }
@@ -453,13 +489,25 @@ export async function runContainerAgent(
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const proxyToken = randomBytes(32).toString('hex');
-  const containerArgs = buildContainerArgs(mounts, containerName, proxyToken);
+  // Once per run. A retry is a new run, so it picks again.
+  const provider = selectProvider();
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    proxyToken,
+    provider,
+  );
+  // Both of these carry the per-run proxy token.
   const loggedArgs = containerArgs
-    .map((arg) =>
-      arg.startsWith('ANTHROPIC_CUSTOM_HEADERS=')
-        ? 'ANTHROPIC_CUSTOM_HEADERS=[REDACTED]'
-        : arg,
-    )
+    .map((arg) => {
+      for (const key of [
+        'ANTHROPIC_CUSTOM_HEADERS',
+        'ANTHROPIC_FOUNDRY_BASE_URL',
+      ]) {
+        if (arg.startsWith(`${key}=`)) return `${key}=[REDACTED]`;
+      }
+      return arg;
+    })
     .join(' ');
 
   logger.debug(
@@ -481,6 +529,7 @@ export async function runContainerAgent(
       containerName,
       mountCount: mounts.length,
       isMain: input.isMain,
+      provider,
     },
     'Spawning container agent',
   );
@@ -490,7 +539,9 @@ export async function runContainerAgent(
   ensureDirInTree(groupDir, 'logs');
 
   return new Promise((resolve) => {
-    registerProxyCaller(proxyToken);
+    // One argument on the default route, as before this module existed.
+    if (provider === 'anthropic') registerProxyCaller(proxyToken);
+    else registerProxyCaller(proxyToken, provider);
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -678,6 +729,7 @@ export async function runContainerAgent(
         `Timestamp: ${new Date().toISOString()}`,
         `Group: ${group.name}`,
         `IsMain: ${input.isMain}`,
+        `Provider: ${provider}`,
         `Duration: ${duration}ms`,
         `Exit Code: ${code}`,
         `Stdout Truncated: ${stdoutTruncated}`,

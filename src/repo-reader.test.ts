@@ -116,6 +116,34 @@ describe('RepoReader', () => {
     ).toBeNull();
   });
 
+  it('accepts an original eml only from the configured intake git author', async () => {
+    const commitEml = (name: string, author: string) => {
+      fs.mkdirSync(path.join(upstream, 'discussions/raw'), { recursive: true });
+      fs.writeFileSync(
+        path.join(upstream, 'discussions/raw', name),
+        `From: ${name}\n`,
+      );
+      git(upstream, 'add', '-A');
+      git(upstream, '-c', `user.email=${author}`, 'commit', '-m', name);
+    };
+    commitEml('configured.eml', 'intake@mail.test');
+    commitEml('placeholder.eml', 'email-inbox@example.org');
+
+    vi.stubEnv('INTAKE_GIT_AUTHOR_EMAIL', 'intake@mail.test');
+    vi.resetModules();
+    const fresh = await import('./repo-reader.js');
+    const r = new fresh.RepoReader(mirror);
+    r.init();
+    r.refresh({ force: true });
+    expect(
+      await r.readFileAtCreationAsync('discussions/raw/configured.eml'),
+    ).toBe('From: configured.eml\n');
+    expect(
+      await r.readFileAtCreationAsync('discussions/raw/placeholder.eml'),
+    ).toBeNull();
+    vi.resetModules();
+  });
+
   it('commitExists resolves full and abbreviated SHAs, rejects fabricated ones (G51)', () => {
     const r = new RepoReader(mirror);
     expect(r.init()).toBe(true);
@@ -408,6 +436,51 @@ describe('RepoReader', () => {
       'https://github.com/example-org/program-repo.git?x=1',
       'https://github.com.evil/example-org/program-repo.git',
       'http://github.com/example-org/program-repo.git',
+    ])
+      expect(isExpectedOrigin(url)).toBe(false);
+  });
+
+  it('accepts a GitHub Enterprise origin through PROGRAM_ORIGIN_PATTERN', async () => {
+    const { isExpectedOrigin } = await import('./repo-reader.js');
+    // Without the setting, only the placeholder repo on github.com passes.
+    expect(isExpectedOrigin('git@git.example.edu:team/kb.git')).toBe(false);
+    expect(isExpectedOrigin('https://git.example.edu/team/kb.git')).toBe(false);
+
+    // The two patterns in config/instance.env.example, for another host.
+    vi.stubEnv(
+      'PROGRAM_ORIGIN_PATTERN',
+      '^git@git[.]example[.]edu:team/kb([.]git)?$',
+    );
+    expect(isExpectedOrigin('git@git.example.edu:team/kb.git')).toBe(true);
+    expect(isExpectedOrigin('git@git.example.edu:team/kb')).toBe(true);
+    for (const url of [
+      'git@github.com:team/kb.git',
+      'git@github.com:example-org/program-repo.git',
+      'git@gitxexample.edu:team/kb.git',
+      'git@git.example.edu:team/kb-evil.git',
+      'git@git.example.edu:other/kb.git',
+      'ext::git@git.example.edu:team/kb.git',
+    ])
+      expect(isExpectedOrigin(url)).toBe(false);
+
+    vi.stubEnv(
+      'PROGRAM_ORIGIN_PATTERN',
+      '^https://([^@/?#\\s]+@)?git[.]example[.]edu/team/kb([.]git)?$',
+    );
+    expect(isExpectedOrigin('https://git.example.edu/team/kb.git')).toBe(true);
+    expect(
+      isExpectedOrigin('https://x-token:abc@git.example.edu/team/kb.git'),
+    ).toBe(true);
+    for (const url of [
+      'https://github.com/team/kb.git',
+      'http://git.example.edu/team/kb.git',
+      'https://git.example.edu.evil.test/team/kb.git',
+      // A "credential" that hides another host.
+      'https://attacker.test?@git.example.edu/team/kb.git',
+      'https://attacker.test#@git.example.edu/team/kb.git',
+      'https://attacker.test/@git.example.edu/team/kb.git',
+      'https://git.example.edu/team/kb.git?x=1',
+      '--upload-pack=https://git.example.edu/team/kb.git',
     ])
       expect(isExpectedOrigin(url)).toBe(false);
   });

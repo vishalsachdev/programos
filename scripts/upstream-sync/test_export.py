@@ -30,11 +30,15 @@ class OwnedTest(unittest.TestCase):
     def test_owned_paths(self):
         for p in ('README.md', 'templates/program-repo/CLAUDE.md', 'docs/design/x.md', 'scripts/upstream-sync/export.py',
                   'CONTRIBUTING.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md',
-                  '.github/ISSUE_TEMPLATE/config.yml', '.github/PULL_REQUEST_TEMPLATE.md'):
+                  '.github/ISSUE_TEMPLATE/config.yml', '.github/PULL_REQUEST_TEMPLATE.md',
+                  'docs/data-handling.md', 'docs/illinois/data-handling.md', 'docs/illinois/hosting.md',
+                  'docs/illinois/model-foundry.md',
+                  'inbound/src/index.ts', 'inbound/package.json'):
             self.assertTrue(export.owned(p), p)
 
     def test_exported_paths(self):
-        for p in ('src/index.ts', 'docs/reminder-registry.md', 'scripts/deploy.sh', 'README.md.bak'):
+        for p in ('src/index.ts', 'docs/reminder-registry.md', 'scripts/deploy.sh', 'README.md.bak',
+                  'docs/data-handling.md.bak', 'docs/illinois-notes.md', 'inbound.md'):
             self.assertFalse(export.owned(p), p)
 
 

@@ -17,6 +17,7 @@ The bot answers questions from an allowlisted team by email (and Telegram for th
 | The agent that runs in a container for each message, and its skills | `container/` |
 | The agent's instructions for each channel | `groups/` |
 | Setup wizard and operations script examples | `setup/`, `scripts/` |
+| A mail intake worker for Cloudflare Email Routing. New, and not yet run against live services | [`inbound/`](./inbound/) |
 | Instructions for your coding agent | [`AGENTS.md`](./AGENTS.md) |
 | A skeleton for your knowledge-base repo | [`templates/program-repo/`](./templates/program-repo/) |
 | Settings to fill in | [`config/instance.env.example`](./config/instance.env.example) |
@@ -30,7 +31,7 @@ The code is a close copy of **K-ai**, a coordinator for one online master's prog
 Two things follow from that choice:
 
 - **You get what was tested in real use**, not a cleaned-up rewrite that nobody has run.
-- **Some identity values are still written in the code as placeholders** (the bot's name, the operator, the mail domain). Your coding agent replaces them. [`AGENTS.md`](./AGENTS.md) lists each one and where it lives.
+- **Some identity values are still written in the code as placeholders** (the bot's name, the operator, the channel group names). Your coding agent replaces them. [`AGENTS.md`](./AGENTS.md) lists each one and where it lives.
 
 K-ai stays the source. This repo takes its changes through a repeatable export. See [`UPSTREAM.md`](./UPSTREAM.md).
 
@@ -52,8 +53,9 @@ You need: a host that can run Docker, a mail address for the bot, a git host for
 
 - The agent runs in a container. It sees only the folders you mount and reaches the model through a proxy on the host, which holds your credentials. On Docker Engine on Linux the container's network is restricted by default: it reaches that proxy and no outside host. Web search and web fetch are off by default. The container holds no git credential; the host pushes the agent's commits and tells the operator when a push fails.
 - On email and Telegram, only allowlisted senders get an answer. The allowlist is a file in your knowledge-base repo. Web chat is different: anyone who has its shared secret can ask. Keep web chat off if you need a check per person.
-- The agent's replies and outbound mail pass a delivery gate on the host. A reply that fails the gate is not sent, and the operator is told on Telegram (the operator alerts need the Telegram admin channel).
+- The agent's replies and outbound mail pass a delivery gate on the host. A reply that fails the gate is not sent, and the operator is told. Operator alerts go to Telegram by default; a setting sends them by email to the operator's address, or both ways. [`AGENTS.md`](./AGENTS.md) lists the limits of each route.
 - Accepted inbound messages and replies are written to an audit log in your knowledge-base repo. Some paths are not logged; `SPEC.md` section 6 lists them.
+- Mail, replies and knowledge-base text reach outside services (the model provider, the mail provider, Telegram, your git host) and are stored in your knowledge-base repo, which the code never prunes. [`docs/data-handling.md`](./docs/data-handling.md) lists what goes where and what to decide before real users.
 - These rules do not hold equally on every channel. [`SPEC.md`](./SPEC.md) section 11 lists where each one stops. Read it before you rely on one.
 - Role and access changes are made by the admin only, never because a message asked.
 - Numbered rules cover the rest. [`docs/12-governance.md`](./docs/12-governance.md) gives each rule and the failure it prevents.
@@ -67,9 +69,15 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`SPEC.md`](./SPEC.md) | The contract: components, channels, modes, knowledge-base layout, audit log, governance | Yes (rewritten 2026-11-14) |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How the parts fit and who owns each | Yes (rewritten 2026-11-14) |
 | [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: what to ask, what to replace, safety items, first start | Yes; checked against the code in review |
-| [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; run through the real parsers |
-| [`docs/deployment.md`](./docs/deployment.md) | What kind of host works and what to start with | Yes |
+| [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; `src/program-repo-template.test.ts` runs the real parsers over it |
+| [`docs/deployment.md`](./docs/deployment.md) | What kind of host works, what to start with, and one recipe for a virtual machine | Partly run; each step says what was checked |
+| [`docs/data-handling.md`](./docs/data-handling.md) | What data reaches each outside service and each storage place, who can read it, what is and is not deleted, and what to decide before go-live | Yes; traced from the code 2026-11-19 |
+| [`docs/illinois/data-handling.md`](./docs/illinois/data-handling.md) | One university's open data questions, none verified | Open items only |
+| [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | The same recipe on a university virtual machine: open questions | Stub; not verified |
+| [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
+| [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
+| [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) | Claude on Microsoft Foundry (Azure) as a backup or primary model provider: deployments, hosting option, settings, failover and its limits | Yes for the code; not yet checked against a live Foundry endpoint |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
 | [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |
 | [`site/`](./site/) | The public page and its deploy script | Yes |

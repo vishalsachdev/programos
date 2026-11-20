@@ -45,7 +45,11 @@ export interface DeliveryNoteInput {
  * Send paths whose `sourceGroup` is an attribution label with no agent run
  * behind it; a note there would never be read.
  */
-const NO_AGENT_SOURCE_GROUPS = new Set(['webhook-access-closed']);
+const NO_AGENT_SOURCE_GROUPS = new Set([
+  'webhook-access-closed',
+  // Operator alert mail (ADMIN_ALERT_SOURCE_GROUP in admin-alert.ts).
+  'admin-alert',
+]);
 
 /** Consumed notes are kept this long for inspection, then dropped. */
 export const DELIVERY_NOTE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;

@@ -11,7 +11,7 @@ This skill runs as a scheduled task. It reads audit logs to extract recurring qu
 
 ### Step 1: Read Sources
 1. Read the last 7 days of audit logs from `/workspace/extra/program-repo/discussions/audit-log/`. Files are named `YYYY-MM-DD.md`. Each entry is a markdown section with timestamp, channel, direction (inbound/outbound), sender, and message content, separated by `---` dividers.
-2. Read the current FAQ from `/workspace/extra/program-repo/discussions/FAQ.md` (create if missing)
+2. Read the current FAQ from `/workspace/extra/program-repo/docs/faq.md` (create if missing)
 3. Read the current patterns library from `/workspace/extra/program-repo/discussions/PATTERNS.md` (create if missing)
 4. Read the eval report from `/workspace/ipc/eval_report.md` (if available — may not exist on manual triggers)
 
@@ -24,7 +24,7 @@ Scan inbound/outbound pairs in the audit logs. For each question-and-answer pair
 - Is this a topic likely to recur?
 
 ### Step 3: Update FAQ
-Add new entries to `discussions/FAQ.md` using this format:
+Add new entries to `docs/faq.md` using this format:
 
 ```markdown
 ## [Topic Category]
@@ -61,7 +61,7 @@ Maintain `/workspace/extra/program-repo/discussions/PATTERNS.md` for complex mul
 cd /workspace/extra/program-repo
 git config user.name 'Coordinator'
 git config user.email 'program-bot@example.org'
-git add discussions/FAQ.md discussions/PATTERNS.md
+git add docs/faq.md discussions/PATTERNS.md
 git commit -m "knowledge-builder: update FAQ and patterns"
 git push
 ```

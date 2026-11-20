@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# setup.sh — Bootstrap script for NanoClaw
-# Handles Node.js/npm setup, then hands off to the Node.js setup modules.
+# setup.sh — Bootstrap script for ProgramOS (built on the NanoClaw framework)
+# Checks Node.js and installs npm dependencies. It does nothing else: the order
+# of work for a new install is in AGENTS.md ("Order of work" and "First start").
 # This is the only bash script in the setup flow.
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -137,7 +138,7 @@ elif [ "$NATIVE_OK" = "false" ]; then
 fi
 
 cat <<EOF
-=== NANOCLAW SETUP: BOOTSTRAP ===
+=== PROGRAMOS SETUP: BOOTSTRAP ===
 PLATFORM: $PLATFORM
 IS_WSL: $IS_WSL
 IS_ROOT: $IS_ROOT
@@ -153,6 +154,21 @@ LOG: logs/setup.log
 EOF
 
 log "=== Bootstrap completed: $STATUS ==="
+
+if [ "$STATUS" = "success" ]; then
+  cat <<EOF
+
+Dependencies are installed. Nothing is configured or deployed yet.
+Next, follow AGENTS.md, "Order of work":
+  1. Answer the ASK questions (AI service, approvers, bot address, data location, consent, channels).
+  2. Create the program repo skeleton and the allowlist (templates/program-repo/).
+  3. Copy config/instance.env.example to .env and fill the REQUIRED lines.
+  4. Replace the placeholders; run the tests after each group.
+  5. Adapt the prompts in groups/ and the skills in container/skills/.
+  6. Do the "First start" steps and set up the inbound mail service.
+  7. Review a test exchange before any deploy.
+EOF
+fi
 
 if [ "$NODE_OK" = "false" ]; then
   exit 2

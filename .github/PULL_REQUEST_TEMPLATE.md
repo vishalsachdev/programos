@@ -1,18 +1,32 @@
-<!-- contributing-guide: v1 -->
-## Type of Change
-
-- [ ] **Feature skill** - adds a channel or integration (source code changes + SKILL.md)
-- [ ] **Utility skill** - adds a standalone tool (code files in `.claude/skills/<name>/`, no source changes)
-- [ ] **Operational/container skill** - adds a workflow or agent skill (SKILL.md only, no source changes)
-- [ ] **Fix** - bug fix or security fix to source code
-- [ ] **Simplification** - reduces or simplifies source code
-- [ ] **Documentation** - docs, README, or CONTRIBUTING changes only
-
-## Description
+## What changed and why
 
 
-## For Skills
+## Issue
 
-- [ ] SKILL.md contains instructions, not inline code (code goes in separate files)
-- [ ] SKILL.md is under 500 lines
-- [ ] I tested this skill on a fresh clone
+<!-- "Closes #N" or "Part of #N". Write "none" if there is no issue. -->
+
+## Exported code
+
+<!-- Exported code is everything not listed in OWNED in scripts/upstream-sync/export.py
+     (src/, container/, groups/, setup/, most of scripts/, package.json and others). -->
+
+- [ ] This PR changes no exported code
+- [ ] This PR changes exported code, and the same change is recorded as a `*.patch` file under `scripts/upstream-sync/` that applies to a clean checkout of `main` (`git apply --check`)
+
+## Checks
+
+- [ ] `npm run format:check`
+- [ ] `npx tsc --noEmit`
+- [ ] `npx vitest run` (state the count of passing tests; none skipped, deleted or weakened)
+- [ ] `python3 -B -m unittest discover scripts/upstream-sync`
+
+## Docs
+
+- [ ] Docs that state the changed behaviour are updated, and no doc restates code
+- [ ] A new doc is listed in the README docs table
+- [ ] A fact that is also on the public page (`site/public/index.html`) is changed there in this PR
+- [ ] Not needed for this change
+
+## Privacy
+
+- [ ] No real names, addresses, mail content or secrets in the diff, the tests, the fixtures or this description

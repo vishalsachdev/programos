@@ -598,18 +598,22 @@ function auditPreparedSent(args: SentAuditArgs): AuditWriteResult {
             );
             return 'write-failed' as const;
           }
-          return logOutboundEmailOnce({
-            deliveryId: args.prepared.deliveryId,
-            to: payload.email.to,
-            cc: payload.email.cc,
-            ...(payload.options.ccDroppedNote
-              ? { ccDropped: payload.options.ccDroppedNote }
-              : {}),
-            subject: payload.email.subject,
-            sourceGroup: payload.options.sourceGroup,
-            resendId: args.providerId,
-            body: stripMarkdown(payload.email.body),
-          });
+          return logOutboundEmailOnce(
+            {
+              deliveryId: args.prepared.deliveryId,
+              to: payload.email.to,
+              cc: payload.email.cc,
+              ...(payload.options.ccDroppedNote
+                ? { ccDropped: payload.options.ccDroppedNote }
+                : {}),
+              subject: payload.email.subject,
+              sourceGroup: payload.options.sourceGroup,
+              resendId: args.providerId,
+              body: stripMarkdown(payload.email.body),
+            },
+            // Checked by the reply sensor only when SENSOR_EMAIL_REPLIES is on.
+            { replyText: args.replyText, requestContext: args.inboundText },
+          );
         })();
 
   if (auditResult === 'written') {

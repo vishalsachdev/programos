@@ -114,7 +114,7 @@ Beside git, as a read-only source, SharePoint costs little: sync a library to a 
 
 **Cost.** No prices here. Check current pricing on the vendor's page: [Claude in Foundry](https://platform.claude.com/docs/en/build-with-claude/claude-in-microsoft-foundry) (billed through Azure Marketplace) and Azure's pricing pages for the virtual machine; [Copilot Studio billing](https://learn.microsoft.com/en-us/microsoft-copilot-studio/billing-licensing). Graph mail and a Workflows webhook add no line item in the pages read, beyond the Microsoft 365 licences the institution already holds; the support page says the Teams webhook trigger "does not require a premium license". Whether the unit is charged back for any of it: the unit's business office.
 
-**Ownership.** A service ownership page is being written under issue 22; it is not on `main` today. The Microsoft path changes who holds what:
+**Ownership.** [`../service-ownership.md`](../service-ownership.md) (issue 22) lists each credential, its owner role, where it is stored, and the rotation and handover steps. The Microsoft path changes who holds what:
 
 | Credential or account | Personal-account path | Microsoft-first path |
 |---|---|---|
@@ -124,7 +124,7 @@ Beside git, as a read-only source, SharePoint costs little: sync a library to a 
 | Host | Any machine | A virtual machine in the same Azure subscription |
 | Knowledge base | A git repo | Unchanged: a git repo, ideally in an organization the institution controls |
 
-Every row on the right is held by the unit or the tenant, not by one person, except the Workflows owner. The roles: Azure subscription owner (unit IT lead or the institution's cloud team), app registration owner (tenant administrators, with a unit service account as owner), shared mailbox owner (mail administrators). Issue 22 should record these.
+Every row on the right is held by the unit or the tenant, not by one person, except the Workflows owner. The roles: Azure subscription owner (unit IT lead or the institution's cloud team), app registration owner (tenant administrators, with a unit service account as owner), shared mailbox owner (mail administrators). When a unit takes this path, add these rows to its copy of the inventory in `service-ownership.md`.
 
 ## Recommendation: one Microsoft-first path for a first unit
 
@@ -157,7 +157,7 @@ Until step 4 is approved, a unit can run steps 2 and 3 with the existing `inboun
 
 - Issue 9: Graph sender (existing).
 - Issue 11: Teams alert route through a Workflows webhook (existing); note that connector incoming webhooks are retired.
-- Issue 22: service ownership page (existing); add the rows above.
+- Issue 22: service ownership (page on `main`); a unit on this path adds the rows above to its inventory.
 - Issue 24: Foundry live checks (existing).
 - [Issue 57](https://github.com/vishalsachdev/programos/issues/57): Mail intake from a Microsoft 365 shared mailbox through Graph.
 - [Issue 58](https://github.com/vishalsachdev/programos/issues/58): Microsoft Entra ID authentication for the Foundry provider.

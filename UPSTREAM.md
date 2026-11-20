@@ -18,5 +18,6 @@ The framework underneath K-ai is NanoClaw (MIT). See `NOTICE`.
 Files that belong to ProgramOS and are never overwritten by an export: `README.md`,
 `AGENTS.md`, `CLAUDE.md`, `SPEC.md`, `ARCHITECTURE.md`, `UPSTREAM.md`, `NOTICE`,
 `LICENSE`, `docs/NN-*.md`, `docs/deployment.md`, `docs/design/`, `config/`, `templates/`, `site/`, `plans/`, `scripts/upstream-sync/`,
-`.github/workflows/ci.yml`. The exact list is `OWNED` in
+`.github/workflows/ci.yml`, `.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+`CODE_OF_CONDUCT.md`. The exact list is `OWNED` in
 `scripts/upstream-sync/export.py`; the procedure is in `scripts/upstream-sync/README.md`.

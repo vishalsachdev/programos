@@ -19,14 +19,15 @@ import {
 // webhook channel raises must still be delivered, as one mail to the
 // operator address, and nothing may call the Telegram API.
 
-const TEST_PORT = 39347;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 const OPERATOR = 'avery-ops@example.edu';
 const RAW = 'discussions/raw/2026-10-24-re-admissions-updates.md';
 const SVIX_SECRET_BYTES = Buffer.from('admin-alert-route-test-secret');
 const SVIX_SECRET = `whsec_${SVIX_SECRET_BYTES.toString('base64')}`;
 
 vi.hoisted(() => {
-  process.env.WEBHOOK_PORT = '39347';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
   delete process.env.TELEGRAM_BOT_TOKEN;
   delete process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -118,6 +119,7 @@ vi.mock('../outbound-email.js', async (importOriginal) => {
 });
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { ADMIN_ALERT_MAIL_HEADERS } from '../admin-alert.js';
 import { flushAuditLog } from '../audit-log.js';
 import { _closeDatabase, _initTestDatabase } from '../db.js';
@@ -216,7 +218,7 @@ describe('webhook operator alerts with ADMIN_ALERT_ROUTE=email and no Telegram t
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
   });
 
   beforeEach(() => {

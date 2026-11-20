@@ -75,6 +75,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | The same recipe on a university virtual machine: open questions | Stub; not verified |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
+| [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) | Claude on Microsoft Foundry (Azure) as a backup or primary model provider: deployments, hosting option, settings, failover and its limits | Yes for the code; not yet checked against a live Foundry endpoint |
 | [`docs/design/`](./docs/design/) | Design notes: learning loop, outside content stores, several coordinators at one institution | Not implemented, or guidance only |
 | [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |
 | [`site/`](./site/) | The public page and its deploy script | Yes |

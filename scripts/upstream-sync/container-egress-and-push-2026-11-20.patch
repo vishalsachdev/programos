@@ -1,0 +1,1661 @@
+diff --git a/container/agent-runner/src/allowed-tools.ts b/container/agent-runner/src/allowed-tools.ts
+new file mode 100644
+index 0000000..bef0b77
+--- /dev/null
++++ b/container/agent-runner/src/allowed-tools.ts
+@@ -0,0 +1,52 @@
++/**
++ * The agent's tool list. WebSearch and WebFetch send text chosen by the
++ * agent to outside services, so they are off unless the host sets
++ * AGENT_WEB_TOOLS, which reaches the container as NANOCLAW_WEB_TOOLS=1.
++ *
++ * This is a default, not a boundary: the runner source is writable by the
++ * agent. The boundaries are on the host: the container's network
++ * (CONTAINER_NETWORK) and the credential proxy, which refuses model requests
++ * that carry a web tool while the setting is off.
++ */
++
++export const WEB_TOOLS = ['WebSearch', 'WebFetch'] as const;
++
++const BASE_TOOLS = [
++  'Bash',
++  'Read',
++  'Write',
++  'Edit',
++  'Glob',
++  'Grep',
++  'Task',
++  'TaskOutput',
++  'TaskStop',
++  'TeamCreate',
++  'TeamDelete',
++  'SendMessage',
++  'TodoWrite',
++  'ToolSearch',
++  'Skill',
++  'NotebookEdit',
++  'mcp__nanoclaw__*',
++];
++
++type Env = Record<string, string | undefined>;
++
++export function webToolsEnabled(env: Env): boolean {
++  return env.NANOCLAW_WEB_TOOLS === '1';
++}
++
++/** Tools pre-approved in a normal run. */
++export function normalAllowedTools(env: Env): string[] {
++  return webToolsEnabled(env) ? [...BASE_TOOLS, ...WEB_TOOLS] : [...BASE_TOOLS];
++}
++
++/**
++ * Tools removed from the session. Needed because the run uses
++ * bypassPermissions, under which a tool that is merely absent from the
++ * allowed list still runs.
++ */
++export function disallowedTools(env: Env): string[] {
++  return webToolsEnabled(env) ? [] : [...WEB_TOOLS];
++}
+diff --git a/container/agent-runner/src/index.ts b/container/agent-runner/src/index.ts
+index 3d29372..c88c60f 100644
+--- a/container/agent-runner/src/index.ts
++++ b/container/agent-runner/src/index.ts
+@@ -23,6 +23,7 @@ import {
+   PreCompactHookInput,
+ } from '@anthropic-ai/claude-agent-sdk';
+ import { fileURLToPath } from 'url';
++import { disallowedTools, normalAllowedTools } from './allowed-tools.js';
+ import { createAgentHooks } from './protected-write-guard.js';
+ 
+ interface ContainerInput {
+@@ -101,27 +102,7 @@ const IPC_INPUT_DIR = '/workspace/ipc/input';
+ const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
+ const IPC_POLL_MS = 500;
+ 
+-const NORMAL_ALLOWED_TOOLS = [
+-  'Bash',
+-  'Read',
+-  'Write',
+-  'Edit',
+-  'Glob',
+-  'Grep',
+-  'WebSearch',
+-  'WebFetch',
+-  'Task',
+-  'TaskOutput',
+-  'TaskStop',
+-  'TeamCreate',
+-  'TeamDelete',
+-  'SendMessage',
+-  'TodoWrite',
+-  'ToolSearch',
+-  'Skill',
+-  'NotebookEdit',
+-  'mcp__nanoclaw__*',
+-];
++const NORMAL_ALLOWED_TOOLS = normalAllowedTools(process.env);
+ 
+ /**
+  * Push-based async iterable for streaming user messages to the SDK.
+@@ -586,6 +567,9 @@ async function runQuery(
+           }
+         : undefined,
+       allowedTools: isDeliveryRepair ? [] : NORMAL_ALLOWED_TOOLS,
++      // allowedTools only pre-approves, and bypassPermissions approves
++      // everything else: the web tools are removed here.
++      disallowedTools: disallowedTools(process.env),
+       env: sdkEnv,
+       permissionMode: 'bypassPermissions',
+       allowDangerouslySkipPermissions: true,
+diff --git a/groups/global/CLAUDE.md b/groups/global/CLAUDE.md
+index 21ac568..500011f 100644
+--- a/groups/global/CLAUDE.md
++++ b/groups/global/CLAUDE.md
+@@ -24,6 +24,8 @@ Start every task with a pull, so you work on the current state:
+ cd /workspace/extra/program-repo && git pull
+ ```
+ 
++**The host pulls and pushes for you.** The host pulls before your turn starts and pushes your commits when your turn ends. This container holds no git credential and may have no network route to the git host or to any website, so `git pull`, `git push`, `curl`, `agent-browser`, and web search or fetch can fail here. A failed `git pull` or `git push` is expected: do not retry it and do not treat it as a problem to report. Work on the local state and commit as usual. Say a change is "committed"; say it is "pushed" only if your own `git push` printed a success (G51). If a task needs a web page you cannot reach, say so instead of answering from memory.
++
+ All file reads, edits, and writes must use paths under `/workspace/extra/program-repo/`.
+ 
+ ## Context Recovery
+diff --git a/scripts/check-container-egress.ts b/scripts/check-container-egress.ts
+new file mode 100644
+index 0000000..386abc3
+--- /dev/null
++++ b/scripts/check-container-egress.ts
+@@ -0,0 +1,244 @@
++#!/usr/bin/env tsx
++/**
++ * First-start check for the agent container's network and the push path.
++ *
++ *   npx tsx scripts/check-container-egress.ts
++ *
++ * Run it on the deployment host, as the user that runs the service, with the
++ * same environment (CONTAINER_NETWORK, CONTAINER_IMAGE, PROGRAM_REPO). It
++ * starts containers with the network arguments the host itself uses
++ * (hostGatewayArgs in src/container-runtime.ts) and checks:
++ *
++ *   1. the container reaches the host on the credential proxy's address;
++ *   2. restricted: the container cannot reach an outside host by name or by
++ *      address, and cannot resolve an outside name;
++ *      open: reported, not failed;
++ *   3. a commit made inside the container, in a mounted checkout, ends up on
++ *      the remote after the host's push (a temporary local remote, so the
++ *      real knowledge base is not touched);
++ *   4. if PROGRAM_REPO is a checkout: the host credential can push there
++ *      (`git push --dry-run`, which changes nothing).
++ *
++ * Exit code 0 only if every check passes.
++ */
++import { execFile, execFileSync, spawnSync } from 'child_process';
++import fs from 'fs';
++import http from 'http';
++import type { AddressInfo } from 'net';
++import os from 'os';
++import path from 'path';
++
++import { CONTAINER_IMAGE } from '../src/config.js';
++import {
++  CONTAINER_HOST_GATEWAY,
++  CONTAINER_RUNTIME_BIN,
++  containerNetworkMode,
++  hostGatewayArgs,
++  resolveProxyBindHost,
++} from '../src/container-runtime.js';
++import { pushCheckoutAfterTurn } from '../src/checkout-sync.js';
++import { CHECKOUT_OWNER, checkoutGitOptions } from '../src/program-repo.js';
++
++const OUTSIDE_NAME = process.env.CHECK_OUTSIDE_HOST || 'example.com';
++const OUTSIDE_ADDRESS = process.env.CHECK_OUTSIDE_ADDRESS || '1.1.1.1';
++
++let failed = 0;
++function report(ok: boolean, what: string, detail = ''): void {
++  if (!ok) failed++;
++  console.log(
++    `${ok ? 'PASS' : 'FAIL'}  ${what}${detail ? `\n      ${detail}` : ''}`,
++  );
++}
++
++/** The same --user rule as buildContainerArgs in src/container-runner.ts. */
++function userArgs(): string[] {
++  const uid = process.getuid?.();
++  const gid = process.getgid?.();
++  if (uid != null && uid !== 0 && uid !== 1000)
++    return ['--user', `${uid}:${gid}`, '-e', 'HOME=/home/node'];
++  // An image without a USER line (not the agent image) would run as root.
++  return ['--user', `${CHECKOUT_OWNER.uid}:${CHECKOUT_OWNER.gid}`];
++}
++
++/** Async on purpose: check 1 answers from a listener in this process. */
++function inContainer(
++  script: string,
++  mounts: string[] = [],
++): Promise<{ code: number; out: string }> {
++  return new Promise((resolve) => {
++    execFile(
++      CONTAINER_RUNTIME_BIN,
++      [
++        'run',
++        '--rm',
++        '--entrypoint',
++        'sh',
++        ...hostGatewayArgs(),
++        ...userArgs(),
++        ...mounts,
++        CONTAINER_IMAGE,
++        '-c',
++        script,
++      ],
++      { encoding: 'utf8', timeout: 120_000 },
++      (err, stdout, stderr) =>
++        resolve({
++          code: err ? ((err as { code?: number }).code ?? 1) : 0,
++          out: `${stdout}${stderr}`.trim(),
++        }),
++    );
++  });
++}
++
++async function main(): Promise<void> {
++  const mode = containerNetworkMode();
++  console.log(`CONTAINER_NETWORK: ${mode}   image: ${CONTAINER_IMAGE}\n`);
++
++  // 1. The host address the credential proxy binds to. A stand-in listener
++  //    on a free port: the running service may hold the real port.
++  const bindHost = resolveProxyBindHost();
++  const server = http.createServer((_req, res) => res.end('proxy-address-ok'));
++  await new Promise<void>((resolve, reject) => {
++    server.once('error', reject);
++    server.listen(0, bindHost, resolve);
++  });
++  const port = (server.address() as AddressInfo).port;
++  const proxy = await inContainer(
++    `curl -s -m 10 http://${CONTAINER_HOST_GATEWAY}:${port}/`,
++  );
++  server.close();
++  report(
++    proxy.out.includes('proxy-address-ok'),
++    `container reaches the host at ${bindHost} (credential proxy address)`,
++    proxy.out.includes('proxy-address-ok') ? '' : proxy.out,
++  );
++
++  // 2. The outside.
++  const byName = await inContainer(
++    `curl -s -k -m 10 -o /dev/null https://${OUTSIDE_NAME}/ && echo REACHED`,
++  );
++  const byAddress = await inContainer(
++    `curl -s -k -m 10 -o /dev/null https://${OUTSIDE_ADDRESS}/ && echo REACHED`,
++  );
++  const dns = await inContainer(
++    `getent hosts ${OUTSIDE_NAME} >/dev/null 2>&1 && echo RESOLVED`,
++  );
++  if (mode === 'restricted') {
++    report(
++      !byName.out.includes('REACHED'),
++      `outside host by name is unreachable (${OUTSIDE_NAME})`,
++    );
++    report(
++      !byAddress.out.includes('REACHED'),
++      `outside host by address is unreachable (${OUTSIDE_ADDRESS})`,
++    );
++    report(
++      !dns.out.includes('RESOLVED'),
++      `outside name does not resolve (${OUTSIDE_NAME})`,
++      dns.out.includes('RESOLVED')
++        ? 'DNS answers leave the host: data can be sent out inside lookups. A newer Docker does not answer outside names on an internal network (seen on Docker 29).'
++        : '',
++    );
++  } else {
++    console.log(
++      `NOTE  network is open: outside by name ${byName.out.includes('REACHED') ? 'reachable' : 'not reachable'}, ` +
++        `by address ${byAddress.out.includes('REACHED') ? 'reachable' : 'not reachable'}. ` +
++        'Nothing limits what the agent can send out.',
++    );
++  }
++
++  // 3. A commit made in the container reaches the remote through the host.
++  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'egress-check-'));
++  try {
++    const remote = path.join(tmp, 'remote.git');
++    const checkout = path.join(tmp, 'checkout');
++    const g = (cwd: string, ...args: string[]) =>
++      execFileSync(
++        'git',
++        [
++          '-c',
++          'user.name=check',
++          '-c',
++          'user.email=check@example.org',
++          ...args,
++        ],
++        { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
++      ).trim();
++    g(tmp, 'init', '-q', '--bare', '-b', 'main', remote);
++    g(tmp, 'clone', '-q', remote, checkout);
++    g(checkout, 'checkout', '-q', '-b', 'main');
++    fs.writeFileSync(path.join(checkout, 'README.md'), 'check\n');
++    g(checkout, 'add', 'README.md');
++    g(checkout, 'commit', '-q', '-m', 'start');
++    g(checkout, 'push', '-q', '-u', 'origin', 'main');
++    // The host's git runs as the checkout owner when the host is root.
++    if (process.getuid?.() === 0)
++      execFileSync('chown', [
++        '-R',
++        `${CHECKOUT_OWNER.uid}:${CHECKOUT_OWNER.gid}`,
++        tmp,
++      ]);
++    else fs.chmodSync(tmp, 0o755);
++
++    const commit = await inContainer(
++      'cd /workspace/extra/program-repo && ' +
++        'git config user.name Coordinator && git config user.email bot@example.org && ' +
++        'echo "written in the container" > from-container.md && ' +
++        'git add from-container.md && git commit -q -m "container commit" && git rev-parse HEAD',
++      ['-v', `${checkout}:/workspace/extra/program-repo`],
++    );
++    const sha = commit.out.split('\n').at(-1) || '';
++    report(
++      commit.code === 0 && /^[0-9a-f]{40}$/.test(sha),
++      'the container can commit in the mounted checkout',
++      commit.code === 0 ? '' : commit.out,
++    );
++
++    process.env.PROGRAM_REPO = checkout;
++    const outcome = await pushCheckoutAfterTurn();
++    let onRemote = '';
++    try {
++      onRemote = execFileSync('git', ['rev-parse', 'main'], {
++        ...checkoutGitOptions(),
++        cwd: remote,
++        encoding: 'utf8',
++      }).trim();
++    } catch {
++      // reported below
++    }
++    report(
++      outcome === 'pushed' && onRemote === sha,
++      'the host pushed the container commit to the remote',
++      outcome === 'pushed' ? '' : `push outcome: ${outcome}`,
++    );
++  } finally {
++    delete process.env.PROGRAM_REPO;
++    fs.rmSync(tmp, { recursive: true, force: true });
++  }
++
++  // 4. The real checkout: can the host credential push? Changes nothing.
++  const real = checkoutGitOptions().cwd;
++  if (fs.existsSync(path.join(real, '.git'))) {
++    const r = spawnSync('git', ['push', '--dry-run'], {
++      ...checkoutGitOptions(),
++      encoding: 'utf8',
++    });
++    report(
++      r.status === 0,
++      `the host credential can push from ${real} (dry run)`,
++      r.status === 0 ? '' : `${r.stderr}`.trim().slice(0, 300),
++    );
++  } else {
++    console.log(
++      `SKIP  no checkout at ${real}: set PROGRAM_REPO to check the host credential against the real remote`,
++    );
++  }
++
++  console.log(failed ? `\n${failed} check(s) failed.` : '\nAll checks passed.');
++  process.exit(failed ? 1 : 0);
++}
++
++main().catch((err) => {
++  console.error(err);
++  process.exit(1);
++});
+diff --git a/src/audit-log.ts b/src/audit-log.ts
+index 21d220a..f01d48b 100644
+--- a/src/audit-log.ts
++++ b/src/audit-log.ts
+@@ -749,6 +749,20 @@ function gitAsCheckoutOwner(args: string[]): Promise<void> {
+ 
+ let commitInFlight: Promise<void> = Promise.resolve();
+ 
++/**
++ * Run another git sequence in the checkout after the audit commit that is in
++ * flight, and make later audit commits wait for it: two git processes in one
++ * working tree would fight over the index lock. Used by checkout-sync.ts.
++ */
++export function queueCheckoutGit<T>(fn: () => Promise<T>): Promise<T> {
++  const result = commitInFlight.then(fn);
++  commitInFlight = result.then(
++    () => {},
++    () => {},
++  );
++  return result;
++}
++
+ /**
+  * Returns a promise that settles when this commit (and any already running)
+  * has finished, so shutdown can await it: the git steps are separate child
+diff --git a/src/checkout-sync.test.ts b/src/checkout-sync.test.ts
+new file mode 100644
+index 0000000..ebdefdb
+--- /dev/null
++++ b/src/checkout-sync.test.ts
+@@ -0,0 +1,193 @@
++/**
++ * Host-side pull and push of the program-repo checkout, against a real git
++ * remote: a local bare repository. The "agent" is a plain commit made in the
++ * checkout, as the container would make it.
++ */
++import { execFileSync } from 'child_process';
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++vi.mock('./logger.js', () => ({
++  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
++}));
++
++import {
++  pushCheckoutAfterTurn,
++  runCheckoutPush,
++  setCheckoutPushAlerter,
++  syncCheckoutBeforeTurn,
++} from './checkout-sync.js';
++
++let tmp: string;
++let remote: string;
++let checkout: string;
++let other: string;
++
++const ID = ['-c', 'user.name=Test', '-c', 'user.email=test@example.org'];
++function git(cwd: string, ...args: string[]): string {
++  return execFileSync('git', [...ID, ...args], {
++    cwd,
++    encoding: 'utf8',
++    stdio: ['ignore', 'pipe', 'pipe'],
++  }).trim();
++}
++function commitFile(repo: string, name: string, text: string): string {
++  fs.writeFileSync(path.join(repo, name), text);
++  git(repo, 'add', name);
++  git(repo, 'commit', '-m', `add ${name}`);
++  return git(repo, 'rev-parse', 'HEAD');
++}
++function remoteHas(sha: string): boolean {
++  try {
++    return git(remote, 'branch', '--contains', sha).includes('main');
++  } catch {
++    return false; // the remote does not have the commit at all
++  }
++}
++
++beforeEach(() => {
++  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'checkout-sync-'));
++  remote = path.join(tmp, 'remote.git');
++  checkout = path.join(tmp, 'checkout');
++  other = path.join(tmp, 'other');
++  execFileSync('git', ['init', '--bare', '-b', 'main', remote], {
++    stdio: 'ignore',
++  });
++  git(tmp, 'clone', '-q', remote, checkout);
++  // The agent sets its identity in the checkout (groups/global/CLAUDE.md).
++  git(checkout, 'config', 'user.name', 'Coordinator');
++  git(checkout, 'config', 'user.email', 'program-bot@example.org');
++  git(checkout, 'checkout', '-q', '-b', 'main');
++  commitFile(checkout, 'README.md', 'start\n');
++  git(checkout, 'push', '-q', '-u', 'origin', 'main');
++  git(tmp, 'clone', '-q', remote, other);
++  vi.stubEnv('PROGRAM_REPO', checkout);
++});
++
++afterEach(() => {
++  setCheckoutPushAlerter(null);
++  vi.unstubAllEnvs();
++  fs.rmSync(tmp, { recursive: true, force: true });
++});
++
++describe('pushCheckoutAfterTurn', () => {
++  it('puts a commit made in the checkout on the remote', async () => {
++    const sha = commitFile(checkout, 'decision.md', 'agent wrote this\n');
++    expect(remoteHas(sha)).toBe(false);
++    expect(await pushCheckoutAfterTurn()).toBe('pushed');
++    expect(git(remote, 'rev-parse', 'main')).toBe(sha);
++  });
++
++  it('does nothing, and runs no push, when the checkout has no new commit', async () => {
++    const calls: string[][] = [];
++    const outcome = await pushCheckoutAfterTurn(async (args) => {
++      calls.push(args);
++      return execFileSync('git', args, { cwd: checkout, encoding: 'utf8' });
++    });
++    expect(outcome).toBe('nothing');
++    expect(calls).toEqual([['rev-list', '--count', '@{upstream}..HEAD']]);
++  });
++
++  it('when a person pushed first, rebases the agent commit on top and pushes', async () => {
++    const theirs = commitFile(other, 'human.md', 'a person wrote this\n');
++    git(other, 'push', '-q', 'origin', 'main');
++    commitFile(checkout, 'decision.md', 'agent wrote this\n');
++    // An uncommitted audit-log line, as the host always has.
++    fs.writeFileSync(path.join(checkout, 'audit.md'), 'pending\n');
++
++    expect(await pushCheckoutAfterTurn()).toBe('pushed');
++    const log = git(remote, 'log', '--format=%s', 'main');
++    expect(log.split('\n')).toEqual([
++      'add decision.md',
++      'add human.md',
++      'add README.md',
++    ]);
++    expect(remoteHas(theirs)).toBe(true);
++    expect(fs.readFileSync(path.join(checkout, 'audit.md'), 'utf8')).toBe(
++      'pending\n',
++    );
++  });
++
++  it('reports a failed push to the operator once per unpushed HEAD', async () => {
++    const alerts: string[] = [];
++    setCheckoutPushAlerter(async (text) => {
++      alerts.push(text);
++    });
++    const sha = commitFile(checkout, 'decision.md', 'agent wrote this\n');
++    fs.renameSync(remote, `${remote}.gone`);
++
++    expect(await pushCheckoutAfterTurn()).toBe('failed');
++    expect(alerts).toHaveLength(1);
++    expect(alerts[0]).toContain('Knowledge-base push failed');
++    expect(alerts[0]).toContain(sha.slice(0, 12));
++
++    // Same HEAD, still failing: no second alert.
++    expect(await pushCheckoutAfterTurn()).toBe('failed');
++    expect(alerts).toHaveLength(1);
++
++    // A new commit that also cannot be pushed alerts again.
++    commitFile(checkout, 'second.md', 'more\n');
++    expect(await pushCheckoutAfterTurn()).toBe('failed');
++    expect(alerts).toHaveLength(2);
++
++    // The remote is back: the commits go out and nothing is left behind.
++    fs.renameSync(`${remote}.gone`, remote);
++    expect(await pushCheckoutAfterTurn()).toBe('pushed');
++    expect(remoteHas(sha)).toBe(true);
++    expect(alerts).toHaveLength(2);
++  });
++
++  it('leaves the working tree clean of a half-done rebase when it fails', async () => {
++    const r: string[][] = [];
++    await expect(
++      runCheckoutPush(async (args) => {
++        r.push(args);
++        if (args[0] === 'push' || args[0] === 'pull') throw new Error('no');
++        return '';
++      }),
++    ).rejects.toThrow();
++    expect(r).toEqual([
++      ['push'],
++      ['pull', '--rebase', '--autostash'],
++      ['rebase', '--abort'],
++    ]);
++  });
++
++  it('alerts once, not on every turn, when the branch has no upstream', async () => {
++    const alerts: string[] = [];
++    setCheckoutPushAlerter(async (text) => {
++      alerts.push(text);
++    });
++    git(checkout, 'branch', '--unset-upstream');
++    commitFile(checkout, 'decision.md', 'agent wrote this\n');
++    expect(await pushCheckoutAfterTurn()).toBe('failed');
++    expect(await pushCheckoutAfterTurn()).toBe('failed');
++    expect(alerts).toHaveLength(1);
++  });
++
++  it('is skipped where there is no checkout', async () => {
++    vi.stubEnv('PROGRAM_REPO', path.join(tmp, 'missing'));
++    expect(await pushCheckoutAfterTurn()).toBe('skipped');
++    expect(await syncCheckoutBeforeTurn()).toBe('skipped');
++  });
++});
++
++describe('syncCheckoutBeforeTurn', () => {
++  it('brings in what a person pushed', async () => {
++    const theirs = commitFile(other, 'human.md', 'a person wrote this\n');
++    git(other, 'push', '-q', 'origin', 'main');
++    expect(await syncCheckoutBeforeTurn()).toBe('pulled');
++    expect(git(checkout, 'rev-parse', 'HEAD')).toBe(theirs);
++  });
++
++  it('fails without touching local work when the histories diverged', async () => {
++    commitFile(other, 'human.md', 'a person wrote this\n');
++    git(other, 'push', '-q', 'origin', 'main');
++    const mine = commitFile(checkout, 'decision.md', 'agent wrote this\n');
++    expect(await syncCheckoutBeforeTurn()).toBe('failed');
++    expect(git(checkout, 'rev-parse', 'HEAD')).toBe(mine);
++    expect(git(checkout, 'status', '--porcelain')).toBe('');
++  });
++});
+diff --git a/src/checkout-sync.ts b/src/checkout-sync.ts
+new file mode 100644
+index 0000000..e678c51
+--- /dev/null
++++ b/src/checkout-sync.ts
+@@ -0,0 +1,151 @@
++/**
++ * The host keeps the program-repo checkout in step with its remote.
++ *
++ * The agent container holds no git credential, and with the default
++ * restricted network (CONTAINER_NETWORK) it has no route to the git host:
++ * `git pull` and `git push` inside it fail. So the host does both, with its
++ * own credential:
++ *
++ *   before a turn  pull --ff-only, so the agent reads the current state;
++ *   after a turn   push the commits the agent made, before the reply is
++ *                  handed on. If the remote moved, rebase and push again
++ *                  (the same sequence as the audit-log commit).
++ *
++ * A push that fails is reported to the operator through the alert path
++ * (setCheckoutPushAlerter), once per unpushed HEAD.
++ *
++ * Git runs as the checkout owner, never as root, like every other host git
++ * call here (see program-repo.ts). The checkout's .git/config and hooks are
++ * writable by the agent, and host git obeys them: this is an existing limit
++ * of the design, recorded in SPEC.md section 11, not a new one.
++ */
++import { execFile } from 'child_process';
++import fs from 'fs';
++import path from 'path';
++
++import { queueCheckoutGit } from './audit-log.js';
++import { logger } from './logger.js';
++import { checkoutGitOptions, getProgramRepoPath } from './program-repo.js';
++
++export type GitRunner = (args: string[]) => Promise<string>;
++
++function gitAsCheckoutOwner(args: string[]): Promise<string> {
++  return new Promise<string>((resolve, reject) => {
++    execFile('git', args, checkoutGitOptions(), (err, stdout, stderr) =>
++      err ? reject(Object.assign(err, { stderr })) : resolve(String(stdout)),
++    );
++  });
++}
++
++function hasCheckout(): boolean {
++  return fs.existsSync(path.join(getProgramRepoPath(), '.git'));
++}
++
++function errorText(err: unknown): string {
++  const e = err as { message?: string; stderr?: string };
++  return (e.stderr || e.message || String(err)).trim().slice(0, 500);
++}
++
++let pushAlerter: ((text: string) => Promise<void>) | null = null;
++let lastAlertedHead: string | null = null;
++
++/** Wired at startup to the operator alert channel. */
++export function setCheckoutPushAlerter(
++  fn: ((text: string) => Promise<void>) | null,
++): void {
++  pushAlerter = fn;
++  lastAlertedHead = null;
++}
++
++/**
++ * Fast-forward the checkout before a turn. Best effort: a failure (remote
++ * down, local commits not yet pushed, a file in the way) is logged and the
++ * turn runs on the state it has. Never rebases or stashes here, because
++ * another group's agent may be editing the working tree.
++ */
++export function syncCheckoutBeforeTurn(
++  run: GitRunner = gitAsCheckoutOwner,
++): Promise<'pulled' | 'skipped' | 'failed'> {
++  if (!hasCheckout()) return Promise.resolve('skipped');
++  return queueCheckoutGit(async () => {
++    try {
++      await run(['pull', '--ff-only']);
++      return 'pulled' as const;
++    } catch (err) {
++      logger.warn(
++        { err: errorText(err) },
++        'Checkout sync: pull before the turn failed; the agent reads the local state',
++      );
++      return 'failed' as const;
++    }
++  });
++}
++
++/** The push sequence, with an injectable runner. Throws if nothing got out. */
++export async function runCheckoutPush(run: GitRunner): Promise<void> {
++  try {
++    await run(['push']);
++    return;
++  } catch {
++    // The remote moved (a person pushed): rebase on top and push again.
++  }
++  try {
++    await run(['pull', '--rebase', '--autostash']);
++    await run(['push']);
++  } catch (err) {
++    await run(['rebase', '--abort']).catch(() => {});
++    throw err;
++  }
++}
++
++export type PushOutcome = 'nothing' | 'pushed' | 'failed' | 'skipped';
++
++/**
++ * Push commits that are in the checkout and not on its upstream. Called
++ * after each agent result. Never throws: a failure is logged and alerted,
++ * and the commits stay local for the next attempt (the next turn, or the
++ * next audit-log commit, which pushes the same branch).
++ */
++export function pushCheckoutAfterTurn(
++  run: GitRunner = gitAsCheckoutOwner,
++): Promise<PushOutcome> {
++  if (!hasCheckout()) return Promise.resolve('skipped');
++  return queueCheckoutGit(async () => {
++    let head = '';
++    try {
++      const ahead = parseInt(
++        await run(['rev-list', '--count', '@{upstream}..HEAD']),
++        10,
++      );
++      if (ahead === 0) return 'nothing' as const;
++      head = (await run(['rev-parse', 'HEAD'])).trim();
++      await runCheckoutPush(run);
++      logger.info({ head, commits: ahead }, 'Checkout sync: pushed');
++      lastAlertedHead = null;
++      return 'pushed' as const;
++    } catch (err) {
++      const reason = errorText(err);
++      logger.error(
++        { head, err: reason },
++        'Checkout sync: push failed; commits stay on the host',
++      );
++      // One alert per stuck state: the HEAD, or "unknown" when git could not
++      // even name it (for example a branch with no upstream).
++      const stuck = head || 'unknown';
++      if (pushAlerter && stuck !== lastAlertedHead) {
++        lastAlertedHead = stuck;
++        await pushAlerter(
++          `Knowledge-base push failed. Commits made on this host are not on the remote` +
++            (head ? ` (HEAD ${head.slice(0, 12)})` : '') +
++            `. The host retries after the next turn. Reason: ${reason}`,
++        ).catch((alertErr) =>
++          logger.error(
++            { err: errorText(alertErr) },
++            'Checkout sync: push failure alert was not delivered',
++          ),
++        );
++      }
++      return 'failed' as const;
++    }
++  });
++}
+diff --git a/src/container-network.test.ts b/src/container-network.test.ts
+new file mode 100644
+index 0000000..2c36e09
+--- /dev/null
++++ b/src/container-network.test.ts
+@@ -0,0 +1,281 @@
++/**
++ * The container's network setting (CONTAINER_NETWORK): the arguments the
++ * host passes to `docker run` for both values, and the address the
++ * credential proxy binds to. Real container-runtime.ts and
++ * container-runner.ts; only the docker binary is faked.
++ */
++import { EventEmitter } from 'events';
++import { PassThrough } from 'stream';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++const { dockerCalls, state } = vi.hoisted(() => ({
++  dockerCalls: [] as string[][],
++  state: {
++    network: null as null | { internal: boolean; gateway: string },
++    platform: 'linux',
++    wsl: false,
++  },
++}));
++
++vi.mock('./config.js', () => ({
++  CONTAINER_IMAGE: 'nanoclaw-agent:latest',
++  CONTAINER_MAX_OUTPUT_SIZE: 10485760,
++  CONTAINER_TIMEOUT: 1800000,
++  CREDENTIAL_PROXY_PORT: 3001,
++  DATA_DIR: '/tmp/nanoclaw-test-data',
++  GROUPS_DIR: '/tmp/nanoclaw-test-groups',
++  IDLE_TIMEOUT: 1800000,
++  TIMEZONE: 'America/Los_Angeles',
++}));
++vi.mock('./logger.js', () => ({
++  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
++}));
++vi.mock('./env.js', () => ({ readEnvFile: vi.fn(() => ({})) }));
++vi.mock('os', async () => {
++  const actual = await vi.importActual<typeof import('os')>('os');
++  const mocked = {
++    ...actual,
++    platform: () => state.platform,
++    networkInterfaces: () => ({
++      docker0: [{ family: 'IPv4', address: '172.17.0.1' }],
++    }),
++  };
++  return { ...mocked, default: mocked };
++});
++vi.mock('fs', async () => {
++  const actual = await vi.importActual<typeof import('fs')>('fs');
++  return {
++    ...actual,
++    default: {
++      ...actual,
++      existsSync: vi.fn((p: unknown) =>
++        String(p).includes('WSLInterop') ? state.wsl : false,
++      ),
++      mkdirSync: vi.fn(),
++      writeFileSync: vi.fn(),
++      readFileSync: vi.fn(() => ''),
++      readdirSync: vi.fn(() => []),
++      statSync: vi.fn(() => ({ isDirectory: () => false })),
++      copyFileSync: vi.fn(),
++    },
++  };
++});
++vi.mock('./host-fs-safety.js', () => ({
++  chownTreeNoFollow: vi.fn(),
++  copyDirInTree: vi.fn(),
++  ensureDirInTree: vi.fn((root: string) => root),
++  writeFileInTree: vi.fn(),
++}));
++vi.mock('./mount-security.js', () => ({
++  validateAdditionalMounts: vi.fn(() => []),
++}));
++vi.mock('./credential-proxy.js', () => ({
++  detectAuthMode: vi.fn(() => 'api-key'),
++  registerProxyCaller: vi.fn(),
++  revokeProxyCaller: vi.fn(),
++}));
++
++function fakeProcess() {
++  const proc = new EventEmitter() as EventEmitter & {
++    stdin: PassThrough;
++    stdout: PassThrough;
++    stderr: PassThrough;
++    kill: ReturnType<typeof vi.fn>;
++  };
++  proc.stdin = new PassThrough();
++  proc.stdout = new PassThrough();
++  proc.stderr = new PassThrough();
++  proc.kill = vi.fn();
++  return proc;
++}
++let proc: ReturnType<typeof fakeProcess>;
++
++vi.mock('child_process', async () => {
++  const actual =
++    await vi.importActual<typeof import('child_process')>('child_process');
++  return {
++    ...actual,
++    spawn: vi.fn(() => proc),
++    // A fake docker: `network inspect` and `network create` only.
++    execFileSync: vi.fn((bin: string, args: string[]) => {
++      if (bin !== 'docker') throw new Error(`unexpected command ${bin}`);
++      dockerCalls.push(args);
++      if (args[0] === 'network' && args[1] === 'inspect') {
++        if (!state.network) throw new Error('No such network');
++        return `${state.network.internal} ${state.network.gateway}\n`;
++      }
++      if (args[0] === 'network' && args[1] === 'create') {
++        state.network = {
++          internal: args.includes('--internal'),
++          gateway: '172.20.0.1',
++        };
++        return 'id\n';
++      }
++      throw new Error(`unexpected docker ${args.join(' ')}`);
++    }),
++  };
++});
++
++import { spawn } from 'child_process';
++
++import { runContainerAgent } from './container-runner.js';
++import {
++  _resetRestrictedNetworkForTests,
++  hostGatewayArgs,
++  PROXY_BIND_HOST,
++  resolveContainerNetworkMode,
++  resolveProxyBindHost,
++} from './container-runtime.js';
++import { logger } from './logger.js';
++import type { RegisteredGroup } from './types.js';
++
++const group: RegisteredGroup = {
++  name: 'Test Group',
++  folder: 'test-group',
++  trigger: '@Andy',
++  added_at: new Date().toISOString(),
++};
++const input = {
++  prompt: 'Hello',
++  groupFolder: 'test-group',
++  chatJid: 'test@g.us',
++  isMain: false,
++};
++
++/** The argv the host would pass to `docker run` for one agent turn. */
++async function runArgs(): Promise<string[]> {
++  const result = runContainerAgent(group, input, () => {});
++  const args = vi.mocked(spawn).mock.calls.at(-1)?.[1] as string[];
++  proc.emit('close', 0);
++  await result;
++  return args;
++}
++
++beforeEach(() => {
++  vi.clearAllMocks();
++  dockerCalls.length = 0;
++  state.network = null;
++  state.platform = 'linux';
++  state.wsl = false;
++  proc = fakeProcess();
++  _resetRestrictedNetworkForTests();
++  delete process.env.CONTAINER_NETWORK;
++  delete process.env.AGENT_WEB_TOOLS;
++  delete process.env.CREDENTIAL_PROXY_HOST;
++});
++afterEach(() => {
++  delete process.env.CONTAINER_NETWORK;
++  delete process.env.AGENT_WEB_TOOLS;
++});
++
++describe('CONTAINER_NETWORK value', () => {
++  it('defaults to restricted on Linux and to open on Docker Desktop', () => {
++    expect(resolveContainerNetworkMode(undefined, false)).toBe('restricted');
++    expect(resolveContainerNetworkMode('', false)).toBe('restricted');
++    expect(resolveContainerNetworkMode(undefined, true)).toBe('open');
++  });
++
++  it('accepts the two values on any platform', () => {
++    expect(resolveContainerNetworkMode('open', false)).toBe('open');
++    expect(resolveContainerNetworkMode(' Restricted ', true)).toBe(
++      'restricted',
++    );
++  });
++
++  it('refuses any other value instead of guessing', () => {
++    expect(() => resolveContainerNetworkMode('none', false)).toThrow(
++      /restricted.*open/,
++    );
++  });
++});
++
++describe('docker run arguments', () => {
++  it('restricted (the default): joins the internal network and names its gateway', async () => {
++    const args = await runArgs();
++    const at = args.indexOf('--network');
++    expect(args[at + 1]).toBe('nanoclaw-agents');
++    expect(args).toContain('--add-host=host.docker.internal:172.20.0.1');
++    expect(args).not.toContain('--add-host=host.docker.internal:host-gateway');
++    // The model endpoint is still the host credential proxy.
++    expect(args).toContain(
++      'ANTHROPIC_BASE_URL=http://host.docker.internal:3001',
++    );
++    // The network was created internal, with container-to-container traffic off.
++    expect(dockerCalls).toContainEqual([
++      'network',
++      'create',
++      '--internal',
++      '-o',
++      'com.docker.network.bridge.enable_icc=false',
++      'nanoclaw-agents',
++    ]);
++  });
++
++  it('open: no --network argument, the default bridge and host-gateway', async () => {
++    process.env.CONTAINER_NETWORK = 'open';
++    const args = await runArgs();
++    expect(args).not.toContain('--network');
++    expect(args).toContain('--add-host=host.docker.internal:host-gateway');
++    expect(dockerCalls).toEqual([]);
++  });
++
++  it('restricted reuses an existing internal network without creating one', () => {
++    state.network = { internal: true, gateway: '10.99.0.1' };
++    expect(hostGatewayArgs()).toEqual([
++      '--network',
++      'nanoclaw-agents',
++      '--add-host=host.docker.internal:10.99.0.1',
++    ]);
++    expect(dockerCalls.some((c) => c[1] === 'create')).toBe(false);
++  });
++
++  it('restricted refuses a network of that name that is not internal', () => {
++    state.network = { internal: false, gateway: '10.99.0.1' };
++    expect(() => hostGatewayArgs()).toThrow(/not internal/);
++  });
++
++  it('restricted on Docker Desktop leaves host.docker.internal to the runtime', () => {
++    state.platform = 'darwin';
++    process.env.CONTAINER_NETWORK = 'restricted';
++    expect(hostGatewayArgs()).toEqual(['--network', 'nanoclaw-agents']);
++  });
++
++  it('open on Docker Desktop passes no network arguments', () => {
++    state.platform = 'darwin';
++    expect(hostGatewayArgs()).toEqual([]);
++  });
++
++  it('web tools: NANOCLAW_WEB_TOOLS reaches the container only when AGENT_WEB_TOOLS is on', async () => {
++    expect(await runArgs()).not.toContain('NANOCLAW_WEB_TOOLS=1');
++    proc = fakeProcess();
++    process.env.AGENT_WEB_TOOLS = '1';
++    expect(await runArgs()).toContain('NANOCLAW_WEB_TOOLS=1');
++  });
++});
++
++describe('credential proxy bind address', () => {
++  it('restricted: the internal network gateway, so those containers reach it', () => {
++    expect(resolveProxyBindHost()).toBe('172.20.0.1');
++    expect(logger.warn).not.toHaveBeenCalled();
++  });
++
++  it('open: the address used before this setting existed, with a loud warning', () => {
++    process.env.CONTAINER_NETWORK = 'open';
++    // docker0's address, or CREDENTIAL_PROXY_HOST when the runner sets it.
++    expect(resolveProxyBindHost()).toBe(PROXY_BIND_HOST);
++    expect(vi.mocked(logger.warn).mock.calls[0][0]).toMatch(
++      /CONTAINER_NETWORK is open/,
++    );
++    expect(dockerCalls).toEqual([]);
++  });
++
++  it('restricted ignores a CREDENTIAL_PROXY_HOST the containers could not reach, and says so', () => {
++    process.env.CREDENTIAL_PROXY_HOST = '127.0.0.1';
++    expect(resolveProxyBindHost()).toBe('172.20.0.1');
++    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).toMatch(
++      /CREDENTIAL_PROXY_HOST is ignored/,
++    );
++    process.env.CREDENTIAL_PROXY_HOST = '0.0.0.0';
++    expect(resolveProxyBindHost()).toBe('0.0.0.0');
++  });
++});
+diff --git a/src/container-runner.test.ts b/src/container-runner.test.ts
+index f6907ab..c55d201 100644
+--- a/src/container-runner.test.ts
++++ b/src/container-runner.test.ts
+@@ -323,7 +323,17 @@ describe('container agent mode contract', () => {
+     expect(source).toContain(
+       'mcpServers: isDeliveryRepair ? {} : normalMcpServers',
+     );
+-    expect(source).toContain("'mcp__nanoclaw__*'");
++    // The list itself lives in allowed-tools.ts (web tools are a setting).
++    expect(source).toContain(
++      'const NORMAL_ALLOWED_TOOLS = normalAllowedTools(process.env);',
++    );
++    expect(source).toContain('disallowedTools: disallowedTools(process.env)');
++    expect(
++      actualFs.readFileSync(
++        'container/agent-runner/src/allowed-tools.ts',
++        'utf8',
++      ),
++    ).toContain("'mcp__nanoclaw__*'");
+     expect(source).toContain('nanoclaw: {');
+ 
+     const hostSource = actualFs.readFileSync('src/container-runner.ts', 'utf8');
+diff --git a/src/container-runner.ts b/src/container-runner.ts
+index 3bb1fb8..f261b86 100644
+--- a/src/container-runner.ts
++++ b/src/container-runner.ts
+@@ -51,6 +51,7 @@ import {
+   selectProvider,
+ } from './model-provider.js';
+ import { validateAdditionalMounts } from './mount-security.js';
++import { webToolsEnabled } from './web-tools.js';
+ import {
+   CONTAINER_WORKING_CONTEXT_DIR,
+   getWorkingContextDir,
+@@ -440,7 +441,10 @@ function buildContainerArgs(
+     }
+   }
+ 
+-  // Runtime-specific args for host gateway resolution
++  // Web tools are off unless the host turns them on (AGENT_WEB_TOOLS).
++  if (webToolsEnabled()) args.push('-e', 'NANOCLAW_WEB_TOOLS=1');
++
++  // The container's network (CONTAINER_NETWORK) and host gateway resolution
+   args.push(...hostGatewayArgs());
+ 
+   // Run as host user so bind-mounted files are accessible.
+diff --git a/src/container-runtime.ts b/src/container-runtime.ts
+index 2dd01c1..0712cd5 100644
+--- a/src/container-runtime.ts
++++ b/src/container-runtime.ts
+@@ -6,6 +6,7 @@ import { execFileSync, execSync } from 'child_process';
+ import fs from 'fs';
+ import os from 'os';
+ 
++import { readEnvFile } from './env.js';
+ import { logger } from './logger.js';
+ 
+ /** The container runtime binary name. */
+@@ -28,12 +29,19 @@ export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
+ export const PROXY_BIND_HOST =
+   process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
+ 
+-export function detectProxyBindHost(): string {
+-  if (os.platform() === 'darwin') return '127.0.0.1';
+-
+-  // WSL uses Docker Desktop (same VM routing as macOS) — loopback is correct.
++/**
++ * True where Docker runs in a VM (Docker Desktop on macOS or WSL) and
++ * host.docker.internal is routed to the host's loopback.
++ */
++function usesDockerDesktop(): boolean {
++  if (os.platform() === 'darwin') return true;
+   // Check /proc filesystem, not env vars — WSL_DISTRO_NAME isn't set under systemd.
+-  if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) return '127.0.0.1';
++  return fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop');
++}
++
++export function detectProxyBindHost(): string {
++  // Docker Desktop (same VM routing on macOS and WSL) — loopback is correct.
++  if (usesDockerDesktop()) return '127.0.0.1';
+ 
+   // Bare-metal Linux: bind to the docker0 bridge IP instead of 0.0.0.0
+   const ifaces = os.networkInterfaces();
+@@ -64,8 +72,184 @@ export function detectProxyBindHost(): string {
+   throw new Error('Cannot determine docker0 IPv4 address for credential proxy');
+ }
+ 
+-/** CLI args needed for the container to resolve the host gateway. */
++/**
++ * What the agent container can reach on the network (CONTAINER_NETWORK).
++ *
++ * restricted: the container joins a Docker network created with --internal.
++ *   It has no route beyond the host: no outside host, no git host, and no
++ *   DNS answers for outside names. It reaches the credential proxy on that
++ *   network's gateway address, and any other host service that listens on
++ *   all interfaces (so keep host listeners on loopback).
++ * open: the runtime's default network. The container can open a connection
++ *   to any host.
++ *
++ * Verified with real containers on Docker Engine on Linux, where restricted
++ * is the default. On Docker Desktop (macOS, WSL) the mechanism is not
++ * verified, so the default there is open; `restricted` can be set by hand.
++ */
++export type ContainerNetworkMode = 'restricted' | 'open';
++
++export function resolveContainerNetworkMode(
++  value: string | undefined,
++  dockerDesktop: boolean,
++): ContainerNetworkMode {
++  const v = (value || '').trim().toLowerCase();
++  if (v === 'restricted' || v === 'open') return v;
++  if (v)
++    throw new Error(
++      `CONTAINER_NETWORK must be "restricted" or "open", got "${value}"`,
++    );
++  return dockerDesktop ? 'open' : 'restricted';
++}
++
++/** Process environment first, then `.env`. Read on each call (tests stub it). */
++export function containerNetworkMode(): ContainerNetworkMode {
++  return resolveContainerNetworkMode(
++    process.env.CONTAINER_NETWORK ||
++      readEnvFile(['CONTAINER_NETWORK']).CONTAINER_NETWORK,
++    usesDockerDesktop(),
++  );
++}
++
++/** Name of the internal Docker network used when the network is restricted. */
++export const RESTRICTED_NETWORK_NAME =
++  process.env.CONTAINER_NETWORK_NAME || 'nanoclaw-agents';
++
++let restrictedGateway: string | undefined;
++
++function inspectRestrictedNetwork(): string | null {
++  let out: string;
++  try {
++    out = execFileSync(
++      CONTAINER_RUNTIME_BIN,
++      [
++        'network',
++        'inspect',
++        '-f',
++        '{{.Internal}} {{(index .IPAM.Config 0).Gateway}}',
++        RESTRICTED_NETWORK_NAME,
++      ],
++      { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] },
++    );
++  } catch {
++    return null; // no such network
++  }
++  const [internal, gateway] = out.trim().split(/\s+/);
++  // Never run "restricted" on a network that someone created without
++  // --internal: it would be open under a restricted name.
++  if (internal !== 'true')
++    throw new Error(
++      `Docker network ${RESTRICTED_NETWORK_NAME} exists but is not internal. ` +
++        `Remove it (docker network rm ${RESTRICTED_NETWORK_NAME}) or set CONTAINER_NETWORK_NAME.`,
++    );
++  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(gateway || ''))
++    throw new Error(
++      `Docker network ${RESTRICTED_NETWORK_NAME} has no IPv4 gateway address`,
++    );
++  return gateway;
++}
++
++/**
++ * Create the internal network if it is missing and return its gateway
++ * address (the host's address on that network). Inter-container traffic is
++ * off, so agent containers cannot reach each other either.
++ */
++export function ensureRestrictedNetwork(): string {
++  if (restrictedGateway) return restrictedGateway;
++  let gateway = inspectRestrictedNetwork();
++  if (!gateway) {
++    execFileSync(
++      CONTAINER_RUNTIME_BIN,
++      [
++        'network',
++        'create',
++        '--internal',
++        '-o',
++        'com.docker.network.bridge.enable_icc=false',
++        RESTRICTED_NETWORK_NAME,
++      ],
++      { timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] },
++    );
++    gateway = inspectRestrictedNetwork();
++    if (!gateway)
++      throw new Error(
++        `Could not create Docker network ${RESTRICTED_NETWORK_NAME}`,
++      );
++    logger.info(
++      { network: RESTRICTED_NETWORK_NAME, gateway },
++      'Created the internal network for agent containers',
++    );
++  }
++  restrictedGateway = gateway;
++  return gateway;
++}
++
++/** Test hook: forget the cached gateway address. */
++export function _resetRestrictedNetworkForTests(): void {
++  restrictedGateway = undefined;
++}
++
++/**
++ * Address the credential proxy must bind to for the current network mode.
++ * Restricted on Linux: the internal network's gateway address, the only host
++ * address those containers can route to. Otherwise PROXY_BIND_HOST.
++ * CREDENTIAL_PROXY_HOST applies to the open network only (0.0.0.0 excepted).
++ */
++export function resolveProxyBindHost(): string {
++  const mode = containerNetworkMode();
++  if (mode === 'open') {
++    logger.warn(
++      'CONTAINER_NETWORK is open: the agent container can reach any host. ' +
++        'What it reads (mail, the knowledge base) can leave without passing ' +
++        'the delivery gate or the audit log. Set CONTAINER_NETWORK=restricted ' +
++        'unless you need the agent to use the network.',
++    );
++    return PROXY_BIND_HOST;
++  }
++  if (usesDockerDesktop()) {
++    ensureRestrictedNetwork();
++    logger.warn(
++      'CONTAINER_NETWORK=restricted is not verified on Docker Desktop. ' +
++        'Run scripts/check-container-egress.sh before you rely on it.',
++    );
++    return PROXY_BIND_HOST;
++  }
++  const gateway = ensureRestrictedNetwork();
++  logger.info(
++    { network: RESTRICTED_NETWORK_NAME, gateway },
++    'Agent container network is restricted',
++  );
++  // The gateway is the only host address these containers can route to. An
++  // override that names another address (docker0, loopback) would leave
++  // every agent turn without a model, so it is not used here.
++  const override = process.env.CREDENTIAL_PROXY_HOST;
++  if (override === '0.0.0.0') return override;
++  if (override && override !== gateway) {
++    logger.warn(
++      { override, gateway },
++      'CREDENTIAL_PROXY_HOST is ignored while CONTAINER_NETWORK is restricted: the credential proxy binds to the restricted network gateway',
++    );
++  }
++  return gateway;
++}
++
++/**
++ * CLI args that set the container's network and how it resolves the host
++ * gateway name.
++ */
+ export function hostGatewayArgs(): string[] {
++  if (containerNetworkMode() === 'restricted') {
++    const gateway = ensureRestrictedNetwork();
++    // Docker Desktop resolves host.docker.internal itself.
++    if (usesDockerDesktop()) return ['--network', RESTRICTED_NETWORK_NAME];
++    // `host-gateway` would give the docker0 address, which an internal
++    // network cannot route to. Name this network's own gateway instead.
++    return [
++      '--network',
++      RESTRICTED_NETWORK_NAME,
++      `--add-host=${CONTAINER_HOST_GATEWAY}:${gateway}`,
++    ];
++  }
+   // On Linux, host.docker.internal isn't built-in — add it explicitly
+   if (os.platform() === 'linux') {
+     return ['--add-host=host.docker.internal:host-gateway'];
+diff --git a/src/credential-proxy.test.ts b/src/credential-proxy.test.ts
+index b46bbd8..0c91bcf 100644
+--- a/src/credential-proxy.test.ts
++++ b/src/credential-proxy.test.ts
+@@ -91,6 +91,38 @@ describe('credential-proxy', () => {
+     return (proxyServer.address() as AddressInfo).port;
+   }
+ 
++  it('refuses a web tool request while AGENT_WEB_TOOLS is off, and forwards it when on', async () => {
++    const webSearch = JSON.stringify({
++      messages: [],
++      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
++    });
++    const post = (port: number) =>
++      makeRequest(
++        port,
++        {
++          method: 'POST',
++          path: '/v1/messages',
++          headers: { 'content-type': 'application/json' },
++        },
++        webSearch,
++      );
++
++    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
++    const refused = await post(proxyPort);
++    expect(refused.statusCode).toBe(403);
++    expect(refused.body).toContain('turned off');
++    expect(lastUpstreamHeaders).toEqual({});
++
++    await new Promise<void>((r) => proxyServer.close(() => r()));
++    proxyPort = await startProxy({
++      ANTHROPIC_API_KEY: 'sk-ant-real-key',
++      AGENT_WEB_TOOLS: '1',
++    });
++    const allowed = await post(proxyPort);
++    expect(allowed.statusCode).toBe(200);
++    expect(lastUpstreamHeaders['x-api-key']).toBe('sk-ant-real-key');
++  });
++
+   it('API-key mode injects x-api-key and strips placeholder', async () => {
+     proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+ 
+diff --git a/src/credential-proxy.ts b/src/credential-proxy.ts
+index f611825..db345b6 100644
+--- a/src/credential-proxy.ts
++++ b/src/credential-proxy.ts
+@@ -27,6 +27,7 @@ import {
+   ModelProvider,
+   recordProviderResult,
+ } from './model-provider.js';
++import { declaresWebTool, webToolsEnabled } from './web-tools.js';
+ 
+ export type AuthMode = 'api-key' | 'oauth';
+ 
+@@ -112,6 +113,8 @@ export function startCredentialProxy(
+   const anthropicPrefix = basePath(upstreamUrl);
+   // Throws on a listed provider with missing settings: a startup error.
+   const foundry = getModelProviderConfig().foundry;
++  // Read once at start: changing AGENT_WEB_TOOLS needs a restart.
++  const webTools = webToolsEnabled();
+ 
+   return new Promise((resolve, reject) => {
+     const server = createServer((req, res) => {
+@@ -165,6 +168,26 @@ export function startCredentialProxy(
+       req.on('end', () => {
+         if (tooLarge) return;
+         const body = Buffer.concat(chunks);
++        // Web tools off (AGENT_WEB_TOOLS): refuse a model request that asks
++        // the provider to search or fetch the web. See src/web-tools.ts.
++        if (!webTools && declaresWebTool(body)) {
++          logger.warn(
++            { url: req.url },
++            'Credential proxy refused a web tool request (AGENT_WEB_TOOLS is off)',
++          );
++          res.writeHead(403, { 'content-type': 'application/json' });
++          res.end(
++            JSON.stringify({
++              type: 'error',
++              error: {
++                type: 'permission_error',
++                message:
++                  'Web search and web fetch are turned off on this deployment.',
++              },
++            }),
++          );
++          return;
++        }
+         const headers: Record<string, string | number | string[] | undefined> =
+           {
+             ...(req.headers as Record<string, string>),
+diff --git a/src/index.ts b/src/index.ts
+index e3d2c2a..ffa6752 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -13,6 +13,11 @@ import {
+   TIMEZONE,
+   DATA_DIR,
+ } from './config.js';
++import {
++  pushCheckoutAfterTurn,
++  setCheckoutPushAlerter,
++  syncCheckoutBeforeTurn,
++} from './checkout-sync.js';
+ import { startCredentialProxy } from './credential-proxy.js';
+ import './channels/index.js';
+ import {
+@@ -28,7 +33,7 @@ import {
+ import {
+   cleanupOrphans,
+   ensureContainerRuntimeRunning,
+-  PROXY_BIND_HOST,
++  resolveProxyBindHost,
+ } from './container-runtime.js';
+ import {
+   getAllChats,
+@@ -654,6 +659,9 @@ async function runAgent(
+     if (output.result !== null && output.result !== undefined) {
+       sawUsableResult = true;
+     }
++    // Push what the agent committed before the reply is handed on (the
++    // container has no git credential; see checkout-sync.ts).
++    if (output.status === 'success') await pushCheckoutAfterTurn();
+     if (onOutput) await onOutput(output);
+   };
+ 
+@@ -696,6 +704,7 @@ async function runAgent(
+     .join('\n\n');
+ 
+   try {
++    await syncCheckoutBeforeTurn();
+     const imageAttachments =
+       agentMode === 'normal' ? parseImageReferences(prompt) : [];
+ 
+@@ -882,7 +891,7 @@ async function main(): Promise<void> {
+   // Start credential proxy (containers route API calls through this)
+   const proxyServer = await startCredentialProxy(
+     CREDENTIAL_PROXY_PORT,
+-    PROXY_BIND_HOST,
++    resolveProxyBindHost(),
+   );
+ 
+   // Graceful shutdown handlers
+@@ -1064,6 +1073,9 @@ async function main(): Promise<void> {
+     adminShortfallAlerter((text, opts) => sendDeadLetterAlert(text, opts)),
+   );
+ 
++  // A failed knowledge-base push goes to the same operator channel.
++  setCheckoutPushAlerter((text) => sendDeadLetterAlert(text));
++
+   // Start the durable email outbox queue only AFTER the owner alert channel is
+   // wired, so replayed terminal outcomes and retained shortfalls alert the owner.
+   startOutboundEmailQueue();
+diff --git a/src/task-scheduler.ts b/src/task-scheduler.ts
+index 48915fa..d921c38 100644
+--- a/src/task-scheduler.ts
++++ b/src/task-scheduler.ts
+@@ -24,6 +24,10 @@ import {
+   updateTaskAfterRun,
+ } from './db.js';
+ import { parseActionItemSections } from './behaviour-sensor.js';
++import {
++  pushCheckoutAfterTurn,
++  syncCheckoutBeforeTurn,
++} from './checkout-sync.js';
+ import { buildOutreachRecipientRoster } from './outreach-recipient-roster.js';
+ import { buildExceptionsReport } from './exceptions-report.js';
+ import { getRepoReader } from './repo-reader.js';
+@@ -522,6 +526,7 @@ async function runTask(
+   };
+ 
+   try {
++    await syncCheckoutBeforeTurn();
+     const output = await runContainerAgent(
+       group,
+       {
+@@ -543,6 +548,8 @@ async function runTask(
+       (proc, containerName) =>
+         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+       async (streamedOutput: ContainerOutput) => {
++        // Push what the task committed before its result is forwarded.
++        if (streamedOutput.status === 'success') await pushCheckoutAfterTurn();
+         if (streamedOutput.result) {
+           result = streamedOutput.result;
+           // Forward result to user (sendMessage handles formatting). The
+diff --git a/src/web-tools.test.ts b/src/web-tools.test.ts
+new file mode 100644
+index 0000000..9299901
+--- /dev/null
++++ b/src/web-tools.test.ts
+@@ -0,0 +1,106 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++
++const mockEnv: Record<string, string> = {};
++vi.mock('./env.js', () => ({
++  readEnvFile: vi.fn(() => ({ ...mockEnv })),
++}));
++
++import { declaresWebTool, webToolsEnabled } from './web-tools.js';
++
++const runnerTools = (await import(
++  new URL('../container/agent-runner/src/allowed-tools.ts', import.meta.url)
++    .href
++)) as {
++  normalAllowedTools: (env: Record<string, string | undefined>) => string[];
++  disallowedTools: (env: Record<string, string | undefined>) => string[];
++};
++
++afterEach(() => {
++  delete process.env.AGENT_WEB_TOOLS;
++  delete mockEnv.AGENT_WEB_TOOLS;
++});
++
++describe('AGENT_WEB_TOOLS on the host', () => {
++  it('is off when unset', () => {
++    expect(webToolsEnabled()).toBe(false);
++  });
++
++  it('is on for 1, true and on, from the process environment or .env', () => {
++    for (const v of ['1', 'true', 'ON']) {
++      process.env.AGENT_WEB_TOOLS = v;
++      expect(webToolsEnabled()).toBe(true);
++    }
++    delete process.env.AGENT_WEB_TOOLS;
++    mockEnv.AGENT_WEB_TOOLS = '1';
++    expect(webToolsEnabled()).toBe(true);
++  });
++
++  it('stays off for any other value', () => {
++    for (const v of ['0', 'false', 'off', 'yes please']) {
++      process.env.AGENT_WEB_TOOLS = v;
++      expect(webToolsEnabled()).toBe(false);
++    }
++  });
++});
++
++describe('the tool list in the container', () => {
++  it('leaves the web tools out, and removes them, by default', () => {
++    const allowed = runnerTools.normalAllowedTools({});
++    expect(allowed).not.toContain('WebSearch');
++    expect(allowed).not.toContain('WebFetch');
++    expect(allowed).toContain('Bash');
++    expect(allowed).toContain('mcp__nanoclaw__*');
++    expect(runnerTools.disallowedTools({})).toEqual(['WebSearch', 'WebFetch']);
++  });
++
++  it('includes them only when NANOCLAW_WEB_TOOLS is exactly 1', () => {
++    const on = { NANOCLAW_WEB_TOOLS: '1' };
++    expect(runnerTools.normalAllowedTools(on)).toEqual(
++      expect.arrayContaining(['WebSearch', 'WebFetch', 'Bash']),
++    );
++    expect(runnerTools.disallowedTools(on)).toEqual([]);
++    expect(
++      runnerTools.normalAllowedTools({ NANOCLAW_WEB_TOOLS: 'true' }),
++    ).not.toContain('WebSearch');
++  });
++
++  it('does not change the other tools', () => {
++    const off = runnerTools.normalAllowedTools({});
++    const on = runnerTools.normalAllowedTools({ NANOCLAW_WEB_TOOLS: '1' });
++    expect(on.filter((t) => !t.startsWith('Web'))).toEqual(off);
++  });
++});
++
++describe('declaresWebTool', () => {
++  const body = (o: unknown) => Buffer.from(JSON.stringify(o));
++
++  it('finds a provider-side web search or web fetch tool', () => {
++    expect(
++      declaresWebTool(
++        body({ tools: [{ type: 'web_search_20250305', name: 'web_search' }] }),
++      ),
++    ).toBe(true);
++    expect(
++      declaresWebTool(
++        body({ tools: [{ name: 'Bash' }, { type: 'web_fetch_20250910' }] }),
++      ),
++    ).toBe(true);
++  });
++
++  it('ignores the words in message text and in client tool names', () => {
++    expect(
++      declaresWebTool(
++        body({
++          messages: [{ role: 'user', content: 'what is web_search?' }],
++          tools: [{ name: 'web_search_notes', input_schema: {} }],
++        }),
++      ),
++    ).toBe(false);
++  });
++
++  it('is false for bodies with no tools or that are not JSON', () => {
++    expect(declaresWebTool(body({ messages: [] }))).toBe(false);
++    expect(declaresWebTool(Buffer.from('web_search not json'))).toBe(false);
++    expect(declaresWebTool(Buffer.alloc(0))).toBe(false);
++  });
++});
+diff --git a/src/web-tools.ts b/src/web-tools.ts
+new file mode 100644
+index 0000000..54cab8b
+--- /dev/null
++++ b/src/web-tools.ts
+@@ -0,0 +1,48 @@
++/**
++ * The web tools setting (AGENT_WEB_TOOLS), off by default.
++ *
++ * WebSearch runs at the model provider: the agent's query leaves through the
++ * credential proxy even when the container's network is restricted. WebFetch
++ * needs the container's own network. Both carry text the agent chose, and
++ * neither passes the delivery gate or the audit log.
++ *
++ * Off means two things: the container is not told to offer the tools
++ * (container/agent-runner/src/allowed-tools.ts), and the credential proxy
++ * refuses a model request that declares a web search or web fetch tool. The
++ * second check holds even if the agent rewrites its own runner.
++ */
++import { readEnvFile } from './env.js';
++
++/** Process environment first, then `.env`. Read on each call. */
++export function webToolsEnabled(): boolean {
++  const value = (
++    process.env.AGENT_WEB_TOOLS ||
++    readEnvFile(['AGENT_WEB_TOOLS']).AGENT_WEB_TOOLS ||
++    ''
++  )
++    .trim()
++    .toLowerCase();
++  return value === '1' || value === 'true' || value === 'on';
++}
++
++/**
++ * True if a Messages API request body declares a provider-side web tool
++ * (tool `type` starting with web_search or web_fetch). Bodies that are not
++ * JSON, or have no tools, are not web tool requests.
++ */
++export function declaresWebTool(body: Buffer): boolean {
++  // Cheap pre-check: most requests carry no such tool.
++  if (!body.includes('web_search') && !body.includes('web_fetch')) return false;
++  let parsed: unknown;
++  try {
++    parsed = JSON.parse(body.toString('utf8'));
++  } catch {
++    return false;
++  }
++  const tools = (parsed as { tools?: unknown })?.tools;
++  if (!Array.isArray(tools)) return false;
++  return tools.some((t) => {
++    const type = (t as { type?: unknown })?.type;
++    return typeof type === 'string' && /^web_(search|fetch)/.test(type);
++  });
++}

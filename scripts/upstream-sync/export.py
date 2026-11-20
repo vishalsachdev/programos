@@ -39,6 +39,7 @@ OWNED = [
     'UPSTREAM.md', 'NOTICE', 'LICENSE', '.gitignore', '.git',
     'docs/09-illinois-quickstart.md', 'docs/12-governance.md',
     'docs/deployment.md', 'docs/data-handling.md', 'docs/model-providers.md',
+    'docs/dependency-audit.md',
     'docs/service-ownership.md',
     'docs/illinois', 'docs/start-here.md', 'docs/setup-reference.md',
     'docs/design', 'config', 'templates', 'plans',

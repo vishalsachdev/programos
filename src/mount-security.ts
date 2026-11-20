@@ -9,7 +9,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { MOUNT_ALLOWLIST_PATH } from './config.js';
+import { HOST_CONFIG_DIR, MOUNT_ALLOWLIST_PATH } from './config.js';
 import { logger } from './logger.js';
 import { AdditionalMount, AllowedRoot, MountAllowlist } from './types.js';
 
@@ -191,6 +191,20 @@ function findAllowedRoot(
   return null;
 }
 
+/** True when `realPath` is the host's settings folder, inside it, or above it. */
+function reachesHostConfigDir(realPath: string): boolean {
+  const configDir =
+    getRealPath(HOST_CONFIG_DIR) ?? path.resolve(HOST_CONFIG_DIR);
+  const inside = (child: string, parent: string) => {
+    const relative = path.relative(parent, child);
+    return (
+      relative === '' ||
+      (!relative.startsWith('..') && !path.isAbsolute(relative))
+    );
+  };
+  return inside(realPath, configDir) || inside(configDir, realPath);
+}
+
 /**
  * Validate the container path to prevent escaping /workspace/extra/
  */
@@ -263,6 +277,16 @@ export function validateMount(
     return {
       allowed: false,
       reason: `Host path does not exist: "${mount.hostPath}" (expanded: "${expandedPath}")`,
+    };
+  }
+
+  // The host's own folder (the allowlists, the delivery-state key) is never
+  // mounted, whatever the allowlist says: not the folder, nothing in it, and
+  // no folder above it.
+  if (reachesHostConfigDir(realPath)) {
+    return {
+      allowed: false,
+      reason: `Path "${realPath}" would expose the host's own settings folder ${HOST_CONFIG_DIR}`,
     };
   }
 

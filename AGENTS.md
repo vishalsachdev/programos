@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,550 passing tests (1,761 from the source, 789 added here). One timing test
+   is 2,617 passing tests (1,761 from the source, 856 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -749,14 +749,22 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   setup steps that write `.env` create it that way and keep an existing file's
   mode. At each start the host logs one error, with the file and the command to
   fix it, when anyone else can read the file.
-  - *Options:* warn only, or refuse to start (`REQUIRE_PRIVATE_ENV_FILE=true`).
+  - *Options:* warn only, or refuse to start (`REQUIRE_PRIVATE_ENV_FILE=true`;
+    `1` and `on` mean the same, `false`, `0`, `off` or nothing mean warn only).
+    Any other word stops the bot at start with a message that names the
+    setting, so a typing mistake is not read as "off".
   - *Code default:* warn only, so an upgrade never stops a bot that was running.
   - *First pilot:* set `REQUIRE_PRIVATE_ENV_FILE=true` on a new machine. On a
     machine that already runs the bot, fix the file's mode first, then set it.
 - *(b) The state-signing key.* While a reply is being delivered the host saves
   its progress and signs it, so a changed copy is refused.
   - *Options:* a key of its own (`DELIVERY_STATE_SIGNING_KEY`, a long random
-    value: `openssl rand -hex 32`), or nothing.
+    value: `openssl rand -hex 32`), or nothing. With nothing set and none of
+    the three secrets below in `.env` (a bot that only has web chat, for
+    example), the host makes a key by itself at the first start and keeps it in
+    `~/.config/nanoclaw/delivery-state.key`, a file only the host's user can
+    read and no container can see. Saved progress is signed in every case. Tell
+    the person to keep that file when they move or restore the host.
   - *Code default:* nothing set. The host then signs with a secret that exists
     for another purpose, the first one set of `WEBHOOK_SECRET`,
     `TELEGRAM_BOT_TOKEN` and `RESEND_API_KEY`, and logs a warning at each start.

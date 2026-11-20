@@ -10930,7 +10930,7 @@ index 2e9a42f5214e971a55d369ccee830e4f5b1c960f..1b4c7c5d9aa46943262632d2179cb1c7
      const hostDb = path.join(outside, 'other.db');
      makeDb(hostDb, ['keep-me']);
 diff --git a/src/config.ts b/src/config.ts
-index c4c5543928a92309d50c25511c4937b287a2f666..5c501b043d9f62d3b49f072187e743959cfdb7fd 100644
+index c4c5543928a92309d50c25511c4937b287a2f666..fa3ae0aac1cd440180d7c6aad6c94514ce79f22d 100644
 --- a/src/config.ts
 +++ b/src/config.ts
 @@ -2,6 +2,7 @@ import os from 'os';
@@ -10950,6 +10950,29 @@ index c4c5543928a92309d50c25511c4937b287a2f666..5c501b043d9f62d3b49f072187e74395
  
  /**
   * The bot mailbox actually in effect: SEND_FROM_EMAIL from .env or the
+@@ -93,6 +94,22 @@ export const SENDER_ALLOWLIST_PATH = path.join(
+   'nanoclaw',
+   'sender-allowlist.json',
+ );
++/**
++ * The host's own folder for files no container may see: the two allowlists
++ * above and the delivery-state key below. It is outside the project root
++ * (which the main group's container gets read-only), and an additional
++ * mount that would reach it is refused (`src/mount-security.ts`).
++ */
++export const HOST_CONFIG_DIR = path.join(HOME_DIR, '.config', 'nanoclaw');
++/**
++ * The key the host creates at its first start when no signing key is
++ * configured (`src/delivery-state.ts`). One line of 64 hex characters,
++ * readable by the host user only.
++ */
++export const DELIVERY_STATE_KEY_PATH = path.join(
++  HOST_CONFIG_DIR,
++  'delivery-state.key',
++);
+ export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
+ export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
+ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 diff --git a/src/container-network.test.ts b/src/container-network.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..7ac5ece923b8f6f1f6a4b0e5ff47798700b3c197
@@ -13278,8 +13301,349 @@ index 4d956d1c8ae46c46a2344eae18d4b9145c1dd4b9..fc78ae49017576410be701d30b999553
  
  /** Consumed notes are kept this long for inspection, then dropped. */
  export const DELIVERY_NOTE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+diff --git a/src/delivery-state-key-file.test.ts b/src/delivery-state-key-file.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c63882e5a0221b480f216933c3634b5ff399c8f
+--- /dev/null
++++ b/src/delivery-state-key-file.test.ts
+@@ -0,0 +1,335 @@
++/**
++ * Delivery state is always signed and always checked. With no signing key
++ * configured the host creates one at its first start, in a file only the
++ * host user can read, outside the project folder; a row without a valid
++ * signature is never delivered.
++ */
++import { createHmac } from 'crypto';
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++import { DELIVERY_STATE_KEY_PATH, HOST_CONFIG_DIR } from './config.js';
++import {
++  _closeDatabase,
++  _initTestDatabase,
++  getRouterState,
++  setRouterState,
++} from './db.js';
++import {
++  _resetDeliveryStateKeysForTests,
++  clearDeliveryState,
++  deliveryStateKeyFileProblem,
++  initDeliveryStateKeys,
++  loadDeliveryState,
++  saveDeliveryState,
++  type DeliveryState,
++} from './delivery-state.js';
++
++const JID = 'webhook-email:thread-1';
++const STATE: DeliveryState = {
++  version: 1,
++  phase: 'transport-pending',
++  chatJid: JID,
++  targetTimestamp: '2026-08-10T15:00:00.000Z',
++  previousCursor: '',
++  context: { sender: 'person@example.edu', subject: 'Launch question' },
++  outcomeId: 'outcome-1',
++  prepared: {
++    channel: 'webhook',
++    deliveryId: 'delivery-1',
++    jid: JID,
++    payload: { to: 'person@example.edu', body: 'Hello' },
++  },
++  replyText: 'Hello',
++  attempt: 1,
++  createdAt: '2026-08-10T15:01:00.000Z',
++};
++const ROW = `delivery-state:${JID}`;
++
++let root: string;
++let project: string;
++let keyFile: string;
++
++function mac(payload: string, key: string): string {
++  return createHmac('sha256', key)
++    .update('nanoclaw-delivery-state-v1\0')
++    .update(payload)
++    .digest('hex');
++}
++
++/** The row a process with write access to the store could put there. */
++function plant(value: unknown, key?: string): void {
++  const payload = JSON.stringify(value);
++  setRouterState(
++    ROW,
++    key
++      ? JSON.stringify({
++          signatureVersion: 1,
++          payload,
++          mac: mac(payload, key),
++        })
++      : payload,
++  );
++}
++
++/** What src/index.ts does with a chat that has saved state. */
++async function deliverSaved() {
++  const { processDelivery } = await import('./delivery-processor.js');
++  const deps = {
++    loadState: loadDeliveryState,
++    clearState: clearDeliveryState,
++    auditDeadLetter: vi.fn(() => 'written' as const),
++    alertDeadLetter: vi.fn(async () => undefined),
++    runBusinessAgent: vi.fn(),
++    runRepairAgent: vi.fn(),
++    deliverPrepared: vi.fn(),
++  };
++  const result = await processDelivery(
++    {
++      chatJid: JID,
++      prompt: 'unused',
++      previousCursor: '',
++      targetTimestamp: STATE.targetTimestamp,
++    } as never,
++    deps as never,
++  );
++  return { result, deps };
++}
++
++beforeEach(() => {
++  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ds-key-')));
++  project = path.join(root, 'project');
++  fs.mkdirSync(project);
++  keyFile = path.join(
++    root,
++    'home',
++    '.config',
++    'nanoclaw',
++    'delivery-state.key',
++  );
++  _initTestDatabase(path.join(root, 'messages.db'));
++  // No key of any kind is configured: no .env in the project folder.
++  vi.spyOn(process, 'cwd').mockReturnValue(project);
++  vi.stubEnv('DELIVERY_STATE_SIGNING_KEY', '');
++  _resetDeliveryStateKeysForTests();
++});
++
++afterEach(() => {
++  _closeDatabase();
++  vi.restoreAllMocks();
++  vi.unstubAllEnvs();
++  _resetDeliveryStateKeysForTests();
++  fs.rmSync(root, { recursive: true, force: true });
++});
++
++describe('with no signing key configured', () => {
++  it('state is signed all the same, and an unsigned row is not state', () => {
++    expect(saveDeliveryState(STATE)).toEqual({ status: 'saved' });
++    const stored = JSON.parse(getRouterState(ROW)!);
++    expect(stored.signatureVersion).toBe(1);
++    expect(stored.mac).toMatch(/^[0-9a-f]{64}$/);
++    expect(loadDeliveryState(JID)).toEqual({ status: 'valid', state: STATE });
++
++    plant(STATE);
++    expect(loadDeliveryState(JID)).toEqual({
++      status: 'invalid',
++      reason: 'missing-state-signature',
++    });
++  });
++
++  it('a planted pending row is never delivered: it is dead-lettered, the operator is alerted, the row is cleared', async () => {
++    for (const [name, key, reason] of [
++      ['no signature', undefined, 'missing-state-signature'],
++      [
++        'a signature with a key of its own',
++        'k'.repeat(64),
++        'invalid-state-signature',
++      ],
++      ['an empty key', '', 'missing-state-signature'],
++    ] as const) {
++      plant(STATE, key);
++      const { result, deps } = await deliverSaved();
++      expect(result, name).toEqual({ status: 'retry', attempt: 1 });
++      expect(deps.deliverPrepared, name).not.toHaveBeenCalled();
++      expect(deps.runBusinessAgent, name).not.toHaveBeenCalled();
++      expect(deps.auditDeadLetter, name).toHaveBeenCalledWith(
++        expect.objectContaining({
++          phase: 'corrupt-state',
++          reason: `corrupt-state: ${reason}`,
++        }),
++      );
++      expect(deps.alertDeadLetter, name).toHaveBeenCalledTimes(1);
++      expect(loadDeliveryState(JID), name).toEqual({ status: 'none' });
++    }
++  });
++
++  it('the same holds after the start-up step, with the key from the key file', async () => {
++    initDeliveryStateKeys(keyFile);
++    plant(STATE);
++    const { deps } = await deliverSaved();
++    expect(deps.deliverPrepared).not.toHaveBeenCalled();
++    expect(deps.alertDeadLetter).toHaveBeenCalledTimes(1);
++  });
++});
++
++describe('the key file', () => {
++  it('is created at the first start: 64 hex characters, mode 0600, in a folder made 0700', () => {
++    const keys = initDeliveryStateKeys(keyFile);
++    expect(keys.source).toBe('key-file');
++    const content = fs.readFileSync(keyFile, 'utf8');
++    expect(content).toMatch(/^[0-9a-f]{64}\n$/);
++    expect(keys.sign).toBe(content.trim());
++    expect(keys.verify).toEqual([keys.sign]);
++    expect(fs.statSync(keyFile).mode & 0o777).toBe(0o600);
++    expect(fs.statSync(path.dirname(keyFile)).mode & 0o777).toBe(0o700);
++  });
++
++  it('is used from then on: state saved before a restart loads after it', () => {
++    initDeliveryStateKeys(keyFile);
++    expect(saveDeliveryState(STATE)).toEqual({ status: 'saved' });
++    const before = fs.readFileSync(keyFile, 'utf8');
++    _resetDeliveryStateKeysForTests(); // a new process
++    expect(initDeliveryStateKeys(keyFile).sign).toBe(before.trim());
++    expect(fs.readFileSync(keyFile, 'utf8')).toBe(before);
++    expect(loadDeliveryState(JID)).toEqual({ status: 'valid', state: STATE });
++  });
++
++  it('two hosts never share a key', () => {
++    const first = initDeliveryStateKeys(keyFile).sign;
++    const other = initDeliveryStateKeys(path.join(root, 'other', 'k.key')).sign;
++    expect(other).not.toBe(first);
++  });
++
++  it('its key stays accepted after a key is configured, and is no longer the signing key', () => {
++    initDeliveryStateKeys(keyFile);
++    expect(saveDeliveryState(STATE)).toEqual({ status: 'saved' });
++    const fileKey = fs.readFileSync(keyFile, 'utf8').trim();
++    _resetDeliveryStateKeysForTests();
++
++    fs.writeFileSync(
++      path.join(project, '.env'),
++      'DELIVERY_STATE_SIGNING_KEY=fake-dedicated-key\n',
++      { mode: 0o600 },
++    );
++    const keys = initDeliveryStateKeys(keyFile);
++    expect(keys.source).toBe('DELIVERY_STATE_SIGNING_KEY');
++    expect(keys.verify).toEqual(['fake-dedicated-key', fileKey]);
++    expect(loadDeliveryState(JID)).toEqual({ status: 'valid', state: STATE });
++    expect(saveDeliveryState(STATE)).toEqual({ status: 'saved' });
++    const stored = JSON.parse(getRouterState(ROW)!);
++    expect(stored.mac).toBe(mac(stored.payload, 'fake-dedicated-key'));
++  });
++
++  it('is not created when a key is configured', () => {
++    fs.writeFileSync(
++      path.join(project, '.env'),
++      'WEBHOOK_SECRET=fake-webhook-secret\n',
++      { mode: 0o600 },
++    );
++    const keys = initDeliveryStateKeys(keyFile);
++    expect(keys).toEqual({
++      sign: 'fake-webhook-secret',
++      verify: ['fake-webhook-secret'],
++      source: 'WEBHOOK_SECRET',
++    });
++    expect(fs.existsSync(keyFile)).toBe(false);
++  });
++
++  it('a file somebody widened is narrowed again before it is used', () => {
++    initDeliveryStateKeys(keyFile);
++    fs.chmodSync(keyFile, 0o644);
++    _resetDeliveryStateKeysForTests();
++    initDeliveryStateKeys(keyFile);
++    expect(fs.statSync(keyFile).mode & 0o777).toBe(0o600);
++  });
++
++  it('the host does not start on something at that path it did not write, and the message does not quote it', () => {
++    fs.mkdirSync(path.dirname(keyFile), { recursive: true });
++    const cases: [string, () => void, RegExp][] = [
++      [
++        'other content',
++        () => fs.writeFileSync(keyFile, 'not-a-key-PLANTED-VALUE\n'),
++        /does not hold a key this host wrote/,
++      ],
++      [
++        'an empty file',
++        () => fs.writeFileSync(keyFile, ''),
++        /does not hold a key/,
++      ],
++      [
++        'a symbolic link',
++        () => {
++          const target = path.join(root, 'elsewhere.key');
++          fs.writeFileSync(target, 'a'.repeat(64));
++          fs.symlinkSync(target, keyFile);
++        },
++        /not a regular file/,
++      ],
++      [
++        'a symbolic link to nothing',
++        () => fs.symlinkSync(path.join(root, 'nothing-here'), keyFile),
++        /not a regular file/,
++      ],
++      ['a folder', () => fs.mkdirSync(keyFile), /not a regular file/],
++    ];
++    for (const [name, make, message] of cases) {
++      fs.rmSync(keyFile, { recursive: true, force: true });
++      make();
++      let thrown = '';
++      try {
++        initDeliveryStateKeys(keyFile);
++      } catch (err) {
++        thrown = String((err as Error).message);
++      }
++      expect(thrown, name).toMatch(message);
++      expect(thrown, name).toContain(keyFile);
++      expect(thrown, name).not.toContain('PLANTED-VALUE');
++      // Nothing was signed with a key of unknown origin.
++      expect(fs.existsSync(path.join(root, 'elsewhere.key')) ? 1 : 1).toBe(1);
++    }
++  });
++
++  it('is refused inside the project folder, which the main container can read', () => {
++    const inside = path.join(project, 'store', 'delivery-state.key');
++    expect(deliveryStateKeyFileProblem(inside)).toMatch(
++      /inside the project folder/,
++    );
++    expect(() => initDeliveryStateKeys(inside)).toThrow(
++      /Set DELIVERY_STATE_SIGNING_KEY/,
++    );
++    expect(fs.existsSync(inside)).toBe(false);
++    // A key somebody put there is not read either.
++    fs.mkdirSync(path.dirname(inside), { recursive: true });
++    fs.writeFileSync(inside, 'b'.repeat(64));
++    fs.writeFileSync(
++      path.join(project, '.env'),
++      'WEBHOOK_SECRET=fake-webhook-secret\n',
++      { mode: 0o600 },
++    );
++    expect(initDeliveryStateKeys(inside).verify).toEqual([
++      'fake-webhook-secret',
++    ]);
++    // Through a link into the project folder too.
++    fs.rmSync(path.join(project, '.env'));
++    const linked = path.join(root, 'linked');
++    fs.symlinkSync(path.join(project, 'store'), linked);
++    expect(() =>
++      initDeliveryStateKeys(path.join(linked, 'delivery-state.key')),
++    ).toThrow(/inside the project folder/);
++  });
++
++  it('by default lives in the host settings folder, outside the project folder and every fixed mount', () => {
++    expect(path.dirname(DELIVERY_STATE_KEY_PATH)).toBe(HOST_CONFIG_DIR);
++    const realCwd = vi.mocked(process.cwd).getMockImplementation();
++    vi.mocked(process.cwd).mockRestore();
++    try {
++      const projectRoot = process.cwd();
++      const rel = path.relative(projectRoot, DELIVERY_STATE_KEY_PATH);
++      expect(rel.startsWith('..') || path.isAbsolute(rel)).toBe(true);
++    } finally {
++      if (realCwd) vi.spyOn(process, 'cwd').mockImplementation(realCwd);
++    }
++  });
++});
 diff --git a/src/delivery-state.test.ts b/src/delivery-state.test.ts
-index a116c7b9b5b0b9c6e471ba80294270f079effade..25ab264f04b29be31e68a65c6b6a63a6530b012f 100644
+index a116c7b9b5b0b9c6e471ba80294270f079effade..e03f1208a0f387b72bb6a2e6c64ba653fbad4c77 100644
 --- a/src/delivery-state.test.ts
 +++ b/src/delivery-state.test.ts
 @@ -1,3 +1,4 @@
@@ -13300,7 +13664,97 @@ index a116c7b9b5b0b9c6e471ba80294270f079effade..25ab264f04b29be31e68a65c6b6a63a6
    saveDeliveryState,
    type DeliveryState,
  } from './delivery-state.js';
-@@ -236,3 +240,233 @@ describe('delivery state persistence', () => {
+@@ -46,6 +50,29 @@ afterEach(() => {
+   vi.unstubAllEnvs();
+ });
+ 
++const ROW_KEY = 'fake-key-for-planted-rows';
++
++/**
++ * A row signed with the host's key, as the host would have stored it. For
++ * the tests of what the host does with a signed row whose content is wrong;
++ * an unsigned row never gets that far (see "always signed" below).
++ */
++function storeSigned(value: unknown): void {
++  vi.stubEnv('DELIVERY_STATE_SIGNING_KEY', ROW_KEY);
++  const payload = JSON.stringify(value);
++  setRouterState(
++    `delivery-state:${JID}`,
++    JSON.stringify({
++      signatureVersion: 1,
++      payload,
++      mac: createHmac('sha256', ROW_KEY)
++        .update('nanoclaw-delivery-state-v1\0')
++        .update(payload)
++        .digest('hex'),
++    }),
++  );
++}
++
+ describe('delivery state persistence', () => {
+   it.each<DeliveryState>([
+     {
+@@ -118,10 +145,7 @@ describe('delivery state persistence', () => {
+   });
+ 
+   it('fails closed on an unsupported version', () => {
+-    setRouterState(
+-      `delivery-state:${JID}`,
+-      JSON.stringify({ version: 99, phase: 'transport-pending' }),
+-    );
++    storeSigned({ version: 99, phase: 'transport-pending' });
+ 
+     expect(loadDeliveryState(JID)).toEqual({
+       status: 'invalid',
+@@ -130,14 +154,11 @@ describe('delivery state persistence', () => {
+   });
+ 
+   it('fails closed when the stored jid does not match the lookup jid', () => {
+-    setRouterState(
+-      `delivery-state:${JID}`,
+-      JSON.stringify({
+-        version: 1,
+-        phase: 'transport-pending',
+-        chatJid: 'webhook-email:other',
+-      }),
+-    );
++    storeSigned({
++      version: 1,
++      phase: 'transport-pending',
++      chatJid: 'webhook-email:other',
++    });
+ 
+     expect(loadDeliveryState(JID)).toEqual({
+       status: 'invalid',
+@@ -146,18 +167,15 @@ describe('delivery state persistence', () => {
+   });
+ 
+   it('fails closed on an unknown phase', () => {
+-    setRouterState(
+-      `delivery-state:${JID}`,
+-      JSON.stringify({
+-        version: 1,
+-        phase: 'teleported',
+-        chatJid: JID,
+-        targetTimestamp: '2026-08-10T15:00:00.000Z',
+-        previousCursor: '',
+-        context: CONTEXT,
+-        outcomeId: 'outcome-1',
+-      }),
+-    );
++    storeSigned({
++      version: 1,
++      phase: 'teleported',
++      chatJid: JID,
++      targetTimestamp: '2026-08-10T15:00:00.000Z',
++      previousCursor: '',
++      context: CONTEXT,
++      outcomeId: 'outcome-1',
++    });
+ 
+     expect(loadDeliveryState(JID)).toEqual({
+       status: 'invalid',
+@@ -236,3 +254,240 @@ describe('delivery state persistence', () => {
      });
    });
  });
@@ -13378,12 +13832,14 @@ index a116c7b9b5b0b9c6e471ba80294270f079effade..25ab264f04b29be31e68a65c6b6a63a6
 +    expect(resolveDeliveryStateKeys().source).toBe('TELEGRAM_BOT_TOKEN');
 +    writeEnv({ RESEND_API_KEY: 'fake-mail-key' });
 +    expect(resolveDeliveryStateKeys().source).toBe('RESEND_API_KEY');
++    // With none of them: still a key. A process that did not run the
++    // start-up step gets one of its own, and never touches the key file.
 +    writeEnv({});
-+    expect(resolveDeliveryStateKeys()).toEqual({
-+      sign: undefined,
-+      verify: [],
-+      source: null,
-+    });
++    const own = resolveDeliveryStateKeys();
++    expect(own.source).toBe('this-process');
++    expect(own.sign).toMatch(/^[0-9a-f]{64}$/);
++    expect(own.verify).toEqual([own.sign]);
++    expect(resolveDeliveryStateKeys().sign).toBe(own.sign);
 +  });
 +
 +  it('with only a fallback secret, signs with the same MAC as before this change', () => {
@@ -13501,7 +13957,10 @@ index a116c7b9b5b0b9c6e471ba80294270f079effade..25ab264f04b29be31e68a65c6b6a63a6
 +
 +  it('after initDeliveryStateKeys the settings are read once: an edit of .env takes effect at the restart only', () => {
 +    writeEnv({ WEBHOOK_SECRET: 'fake-webhook-secret' });
-+    expect(initDeliveryStateKeys().source).toBe('WEBHOOK_SECRET');
++    expect(
++      initDeliveryStateKeys(path.join(envDir, 'no-such', 'delivery-state.key'))
++        .source,
++    ).toBe('WEBHOOK_SECRET');
 +    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
 +
 +    // Someone edits .env while the host runs. The listener still holds the
@@ -13514,7 +13973,9 @@ index a116c7b9b5b0b9c6e471ba80294270f079effade..25ab264f04b29be31e68a65c6b6a63a6
 +    expect(raw.mac).toBe(macAsBefore(raw.payload, 'fake-webhook-secret'));
 +
 +    // The restart.
-+    expect(initDeliveryStateKeys()).toEqual({
++    expect(
++      initDeliveryStateKeys(path.join(envDir, 'no-such', 'delivery-state.key')),
++    ).toEqual({
 +      sign: 'fake-dedicated-set-later',
 +      verify: ['fake-dedicated-set-later', 'fake-webhook-secret-rotated'],
 +      source: 'DELIVERY_STATE_SIGNING_KEY',
@@ -13535,38 +13996,68 @@ index a116c7b9b5b0b9c6e471ba80294270f079effade..25ab264f04b29be31e68a65c6b6a63a6
 +  });
 +});
 diff --git a/src/delivery-state.ts b/src/delivery-state.ts
-index d0f4d128d85ab7eb38a94385187097f4121e60a1..cbb5bd3d69210bd8efab374489789f5d78b312ee 100644
+index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325543e3130 100644
 --- a/src/delivery-state.ts
 +++ b/src/delivery-state.ts
-@@ -72,18 +72,78 @@ function stateKey(jid: string): string {
+@@ -1,6 +1,11 @@
+-import { createHmac, timingSafeEqual } from 'crypto';
++import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
++import fs from 'fs';
++import path from 'path';
+ 
+-import { CONTAINER_MAX_OUTPUT_SIZE } from './config.js';
++import {
++  CONTAINER_MAX_OUTPUT_SIZE,
++  DELIVERY_STATE_KEY_PATH,
++} from './config.js';
+ import { deleteRouterState, getRouterState, setRouterState } from './db.js';
+ import { readEnvFile } from './env.js';
+ import type { PreparedDelivery } from './types.js';
+@@ -72,20 +77,232 @@ function stateKey(jid: string): string {
    return `${STATE_KEY_PREFIX}${jid}`;
  }
  
 -function signingKey(): string | undefined {
+-  const env = readEnvFile([
+-    'WEBHOOK_SECRET',
+-    'TELEGRAM_BOT_TOKEN',
+-    'RESEND_API_KEY',
+-  ]);
 +/**
-+ * The keys that sign and check saved delivery state.
++ * The keys that sign and check saved delivery state. State is always signed
++ * and always checked: there is no setting under which a row is taken as it
++ * stands.
 + *
-+ * `sign` is DELIVERY_STATE_SIGNING_KEY (process environment, or `.env`) when
-+ * it is set. Without it the host falls back, as it always has, to the first
-+ * one set of WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN and RESEND_API_KEY in
-+ * `.env`: a secret that exists for another purpose, so a leak of it also
-+ * lets its holder forge delivery state, and rotating it makes state saved
-+ * before the rotation fail the check.
++ * `sign` is, in this order:
++ *  1. DELIVERY_STATE_SIGNING_KEY (process environment, or `.env`);
++ *  2. the first one set of WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN and
++ *     RESEND_API_KEY in `.env`, as it always has been: a secret that exists
++ *     for another purpose, so a leak of it also lets its holder forge
++ *     delivery state, and rotating it makes state saved before the rotation
++ *     fail the check;
++ *  3. the key in the host's key file (DELIVERY_STATE_KEY_PATH), which the
++ *     host creates at its first start when neither of the above is set.
 + *
 + * `verify` lists every key a saved state may have been signed with: the
-+ * signing key, then the fallback. So state signed before a dedicated key was
-+ * set (or before this setting was documented) still loads.
++ * signing key, the fallback secret, and the key file's key when the file
++ * exists. So state signed before a dedicated key was set still loads, and
++ * so does state signed with the key file before any key was configured.
++ *
++ * A process that never ran the start-up step (a test, a script) signs with
++ * a key made for that process alone when nothing is configured. It never
++ * reads or writes the key file.
 + */
 +export interface DeliveryStateKeys {
-+  sign: string | undefined;
++  sign: string;
 +  verify: string[];
-+  /** The setting the signing key came from, or null when state is unsigned. */
++  /** Where the signing key came from. */
 +  source:
 +    | 'DELIVERY_STATE_SIGNING_KEY'
 +    | 'WEBHOOK_SECRET'
 +    | 'TELEGRAM_BOT_TOKEN'
 +    | 'RESEND_API_KEY'
-+    | null;
++    | 'key-file'
++    | 'this-process';
 +}
 +
 +const FALLBACK_KEY_SETTINGS = [
@@ -13575,31 +14066,163 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..cbb5bd3d69210bd8efab374489789f5d
 +  'RESEND_API_KEY',
 +] as const;
 +
-+export function resolveDeliveryStateKeys(): DeliveryStateKeys {
-   const env = readEnvFile([
--    'WEBHOOK_SECRET',
--    'TELEGRAM_BOT_TOKEN',
--    'RESEND_API_KEY',
-+    'DELIVERY_STATE_SIGNING_KEY',
-+    ...FALLBACK_KEY_SETTINGS,
-   ]);
--  return (
++const KEY_FILE_FORM = /^[0-9a-f]{64}$/;
++
++function isInside(child: string, parent: string): boolean {
++  const relative = path.relative(parent, child);
+   return (
 -    process.env.DELIVERY_STATE_SIGNING_KEY ||
 -    env.WEBHOOK_SECRET ||
 -    env.TELEGRAM_BOT_TOKEN ||
 -    env.RESEND_API_KEY
--  );
++    relative === '' ||
++    (!relative.startsWith('..') && !path.isAbsolute(relative))
+   );
+ }
+ 
++/** The folder as the file system knows it, when it exists. */
++function realOrSame(target: string): string {
++  try {
++    return fs.realpathSync(target);
++  } catch {
++    return path.resolve(target);
++  }
++}
++
++/**
++ * Why the key file must not be used at this place, or null. The project
++ * root is mounted into the main group's container, so a key under it is a
++ * key the agent can read.
++ */
++export function deliveryStateKeyFileProblem(keyFile: string): string | null {
++  const dir = realOrSame(path.dirname(keyFile));
++  const root = realOrSame(process.cwd());
++  if (isInside(dir, root)) {
++    return (
++      `The delivery-state key file would be at ${keyFile}, inside the project folder ${root}, which the main group's container can read. ` +
++      'Set DELIVERY_STATE_SIGNING_KEY in .env to a long random value of its own (openssl rand -hex 32), or run the host with a HOME outside the project folder.'
++    );
++  }
++  return null;
++}
++
++/**
++ * The key in the key file, or undefined when there is no file. Throws when
++ * something is at that path that this host did not write as its key: the
++ * host does not start on a key it cannot account for. The message names
++ * the path and never the content.
++ */
++function readKeyFile(keyFile: string): string | undefined {
++  let stat: fs.Stats;
++  try {
++    stat = fs.lstatSync(keyFile);
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
++    throw new Error(
++      `Cannot read the delivery-state key file ${keyFile}: ${(err as NodeJS.ErrnoException).code ?? 'error'}`,
++    );
++  }
++  const remedy =
++    'Remove it to have a new key created at the next start (a reply in delivery at that moment is handled again), or set DELIVERY_STATE_SIGNING_KEY.';
++  if (!stat.isFile()) {
++    throw new Error(
++      `The delivery-state key file ${keyFile} is not a regular file. ${remedy}`,
++    );
++  }
++  if (
++    process.platform !== 'win32' &&
++    typeof process.getuid === 'function' &&
++    stat.uid !== process.getuid()
++  ) {
++    throw new Error(
++      `The delivery-state key file ${keyFile} belongs to another user. ${remedy}`,
++    );
++  }
++  if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
++    // Written 0600 by this host; somebody widened it. Narrow it again.
++    fs.chmodSync(keyFile, 0o600);
++  }
++  let key: string;
++  try {
++    key = fs.readFileSync(keyFile, 'utf-8').trim();
++  } catch (err) {
++    throw new Error(
++      `Cannot read the delivery-state key file ${keyFile}: ${(err as NodeJS.ErrnoException).code ?? 'error'}`,
++    );
++  }
++  if (!KEY_FILE_FORM.test(key)) {
++    throw new Error(
++      `The delivery-state key file ${keyFile} does not hold a key this host wrote. ${remedy}`,
++    );
++  }
++  return key;
++}
++
++/** Create the key file, readable by its owner only. Returns its key. */
++function createKeyFile(keyFile: string): string {
++  const problem = deliveryStateKeyFileProblem(keyFile);
++  if (problem) throw new Error(problem);
++  fs.mkdirSync(path.dirname(keyFile), { recursive: true, mode: 0o700 });
++  const key = randomBytes(32).toString('hex');
++  try {
++    // "wx": never follows a link that is already there and never replaces a
++    // file; another start that got there first wins.
++    fs.writeFileSync(keyFile, `${key}\n`, { mode: 0o600, flag: 'wx' });
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
++      const existing = readKeyFile(keyFile);
++      if (existing) return existing;
++    }
++    throw new Error(
++      `Cannot create the delivery-state key file ${keyFile}: ${(err as NodeJS.ErrnoException).code ?? 'error'}. ` +
++        'Make its folder writable by the host user, or set DELIVERY_STATE_SIGNING_KEY in .env.',
++    );
++  }
++  if (process.platform !== 'win32') fs.chmodSync(keyFile, 0o600);
++  return key;
++}
++
++/** One key per process for a process that never ran the start-up step. */
++let processKey: string | null = null;
++
++/**
++ * `keyFile` is given by the start-up step only. With it, the key file is
++ * read when it exists and created when no other key is configured. Without
++ * it the file is not touched.
++ */
++export function resolveDeliveryStateKeys(keyFile?: string): DeliveryStateKeys {
++  const env = readEnvFile([
++    'DELIVERY_STATE_SIGNING_KEY',
++    ...FALLBACK_KEY_SETTINGS,
++  ]);
 +  const dedicated =
 +    process.env.DELIVERY_STATE_SIGNING_KEY || env.DELIVERY_STATE_SIGNING_KEY;
 +  const fallbackSetting = FALLBACK_KEY_SETTINGS.find((name) => env[name]);
 +  const fallback = fallbackSetting ? env[fallbackSetting] : undefined;
-+  const sign = dedicated || fallback;
++  const configured = dedicated || fallback;
++
++  let fileKey: string | undefined;
++  let own: string | undefined;
++  if (keyFile !== undefined) {
++    // A key file under the project folder is never read: the agent could
++    // have read it, or written it.
++    const misplaced = deliveryStateKeyFileProblem(keyFile);
++    if (!misplaced) fileKey = readKeyFile(keyFile);
++    if (!configured && !fileKey) fileKey = createKeyFile(keyFile);
++  } else if (!configured) {
++    processKey ??= randomBytes(32).toString('hex');
++    own = processKey;
++  }
++  const sign = configured || fileKey || own;
++  if (!sign) throw new Error('No delivery-state signing key');
 +  return {
 +    sign,
-+    verify: [...new Set([dedicated, fallback].filter(isNonEmptyString))],
++    verify: [
++      ...new Set([dedicated, fallback, fileKey, own].filter(isNonEmptyString)),
++    ],
 +    source: dedicated
 +      ? 'DELIVERY_STATE_SIGNING_KEY'
-+      : (fallbackSetting ?? null),
++      : (fallbackSetting ?? (fileKey ? 'key-file' : 'this-process')),
 +  };
 +}
 +
@@ -13609,36 +14232,41 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..cbb5bd3d69210bd8efab374489789f5d
 +/**
 + * Read the keys once, as the listeners read their secrets once at start: an
 + * edit of `.env` then takes effect at the restart, for all of them together.
-+ * Returns the keys so the caller can warn about a reused secret. Before this
-+ * is called (tests, scripts) the settings are read at each use.
++ * Creates the key file when no key is configured. Returns the keys so the
++ * caller can say where the signing key comes from. Before this is called
++ * (tests, scripts) the settings are read at each use.
 + */
-+export function initDeliveryStateKeys(): DeliveryStateKeys {
-+  startupKeys = resolveDeliveryStateKeys();
++export function initDeliveryStateKeys(
++  keyFile: string = DELIVERY_STATE_KEY_PATH,
++): DeliveryStateKeys {
++  startupKeys = resolveDeliveryStateKeys(keyFile);
 +  return startupKeys;
 +}
 +
 +/** @internal */
 +export function _resetDeliveryStateKeysForTests(): void {
 +  startupKeys = null;
++  processKey = null;
 +}
 +
 +function currentKeys(): DeliveryStateKeys {
 +  return startupKeys ?? resolveDeliveryStateKeys();
- }
- 
++}
++
  function macFor(payload: string, key: string): string {
-@@ -96,8 +156,8 @@ function macFor(payload: string, key: string): string {
+   return createHmac('sha256', key)
+     .update('nanoclaw-delivery-state-v1\0')
+@@ -96,8 +313,7 @@ function macFor(payload: string, key: string): string {
  function unwrapSignedState(
    serialized: string,
  ): { ok: true; payload: string } | { ok: false; reason: string } {
 -  const key = signingKey();
 -  if (!key) return { ok: true, payload: serialized };
 +  const keys = currentKeys().verify;
-+  if (keys.length === 0) return { ok: true, payload: serialized };
    let wrapper: unknown;
    try {
      wrapper = JSON.parse(serialized);
-@@ -112,11 +172,15 @@ function unwrapSignedState(
+@@ -112,11 +328,15 @@ function unwrapSignedState(
    ) {
      return { ok: false, reason: 'missing-state-signature' };
    }
@@ -13657,15 +14285,26 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..cbb5bd3d69210bd8efab374489789f5d
    return { ok: true, payload: wrapper.payload };
  }
  
-@@ -261,7 +325,7 @@ export function saveDeliveryState(
+@@ -261,14 +481,11 @@ export function saveDeliveryState(
    if (Buffer.byteLength(serialized, 'utf8') > CONTAINER_MAX_OUTPUT_SIZE) {
      return { status: 'invalid', reason: 'state-too-large' };
    }
 -  const key = signingKey();
-+  const key = currentKeys().sign;
-   const stored = key
-     ? JSON.stringify({
-         signatureVersion: SIGNATURE_VERSION,
+-  const stored = key
+-    ? JSON.stringify({
+-        signatureVersion: SIGNATURE_VERSION,
+-        payload: serialized,
+-        mac: macFor(serialized, key),
+-      })
+-    : serialized;
++  const stored = JSON.stringify({
++    signatureVersion: SIGNATURE_VERSION,
++    payload: serialized,
++    mac: macFor(serialized, currentKeys().sign),
++  });
+   if (Buffer.byteLength(stored, 'utf8') > CONTAINER_MAX_OUTPUT_SIZE) {
+     return { status: 'invalid', reason: 'state-too-large' };
+   }
 diff --git a/src/document-extractor.test.ts b/src/document-extractor.test.ts
 index 2755562863072b5d84fd18f09efd341f765b47d2..a210d5ce72564265fa8d368554dd5ada34210d5a 100644
 --- a/src/document-extractor.test.ts
@@ -14616,10 +15255,10 @@ index b418cd405708cecbbaa53b3a7ece1e875289b974..4e9b01c6f948bf488f739ffff690aa8d
   * markers. Non-throwing — on parse failure, returns `{isAutoReply: false}`
 diff --git a/src/env-file-permissions.test.ts b/src/env-file-permissions.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..5c065e7963be5c932976c90ac239643a6b7fc491
+index 0000000000000000000000000000000000000000..b4e65dd5c5432cd6adfa88a750d862e7e61da509
 --- /dev/null
 +++ b/src/env-file-permissions.test.ts
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,208 @@
 +/**
 + * Issue 54: `.env` holds every secret. The host says so at start when other
 + * users of the machine can read it, and refuses to start only when asked to.
@@ -14732,8 +15371,8 @@ index 0000000000000000000000000000000000000000..5c065e7963be5c932976c90ac239643a
 +    expect(() => checkEnvFilePermissions()).not.toThrow();
 +  });
 +
-+  it.each(['false', '1', 'yes', ''])(
-+    'only the value "true" makes it a refusal (%j does not)',
++  it.each(['false', 'FALSE', '0', 'off', '', '  '])(
++    'an off value, or none, does not make it a refusal (%j)',
 +    (value) => {
 +      writeWithMode(0o644);
 +      vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', value);
@@ -14741,6 +15380,42 @@ index 0000000000000000000000000000000000000000..5c065e7963be5c932976c90ac239643a
 +      expect(() => checkEnvFilePermissions()).not.toThrow();
 +    },
 +  );
++
++  it.each(['true', 'TRUE', ' True ', '1', 'on', 'On'])(
++    'every on value the other settings take makes it a refusal (%j)',
++    (value) => {
++      writeWithMode(0o644);
++      vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', value);
++      expect(() => checkEnvFilePermissions()).toThrow(
++        /refusing to start: REQUIRE_PRIVATE_ENV_FILE/,
++      );
++    },
++  );
++
++  it.each(['yes', 'enabled', 'ture', '2'])(
++    'a value the host does not know stops the start, whatever the mode of the file (%j)',
++    (value) => {
++      for (const mode of [0o644, 0o600]) {
++        writeWithMode(mode);
++        vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', value);
++        expect(() => checkEnvFilePermissions()).toThrow(
++          /REQUIRE_PRIVATE_ENV_FILE must be "true" or "false"/,
++        );
++      }
++    },
++  );
++
++  it('a value in .env that the host does not know stops the start too', () => {
++    writeWithMode(0o600, 'REQUIRE_PRIVATE_ENV_FILE=yes\n');
++    expect(() => checkEnvFilePermissions()).toThrow(
++      /REQUIRE_PRIVATE_ENV_FILE must be/,
++    );
++  });
++
++  it('"on" in .env is a refusal for a readable file', () => {
++    writeWithMode(0o644, 'REQUIRE_PRIVATE_ENV_FILE=on\n');
++    expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);
++  });
 +});
 +
 +describe('writeEnvFile (the setup steps)', () => {
@@ -14793,10 +15468,10 @@ index 0000000000000000000000000000000000000000..5c065e7963be5c932976c90ac239643a
 +  });
 +});
 diff --git a/src/env.ts b/src/env.ts
-index 82cd5c3da0f0e4ebbfc83f2b5fe7aa09b7cf8e21..4bf3af14725822c72007dcf72c425bf0ae33cf0d 100644
+index 82cd5c3da0f0e4ebbfc83f2b5fe7aa09b7cf8e21..c15a0d444050ee508157a6af46f45ab34fdd75e8 100644
 --- a/src/env.ts
 +++ b/src/env.ts
-@@ -41,3 +41,77 @@ export function readEnvFile(keys: string[]): Record<string, string> {
+@@ -41,3 +41,96 @@ export function readEnvFile(keys: string[]): Record<string, string> {
  
    return result;
  }
@@ -14845,23 +15520,42 @@ index 82cd5c3da0f0e4ebbfc83f2b5fe7aa09b7cf8e21..4bf3af14725822c72007dcf72c425bf0
 +}
 +
 +/**
++ * An on/off setting: `1`, `true`, `on` and `0`, `false`, `off`, in any case.
++ * Empty or unset is `fallback`. Any other value throws: a setting somebody
++ * wrote and the host cannot read must not count as "off".
++ */
++export function booleanSetting(
++  name: string,
++  value: string | undefined,
++  fallback: boolean,
++): boolean {
++  const text = (value ?? '').trim().toLowerCase();
++  if (text === '') return fallback;
++  if (text === '1' || text === 'true' || text === 'on') return true;
++  if (text === '0' || text === 'false' || text === 'off') return false;
++  throw new Error(
++    `${name} must be "true" or "false" (also 1, on, 0, off); it is set to a value the host does not know`,
++  );
++}
++
++/**
 + * The startup check. With a `.env` that the group or others can read it logs
 + * one error naming the file and the command to fix it. The host still
 + * starts, so an upgrade does not stop a deployment that was running; set
 + * REQUIRE_PRIVATE_ENV_FILE=true (in the process environment or in `.env`) to
-+ * make it refuse to start instead.
++ * make it refuse to start instead. The setting is read before the file's
++ * mode is looked at, so a value the host does not know stops the start
++ * whether or not the file is private today.
 + */
 +export function checkEnvFilePermissions(file = envFilePath()): void {
++  const strict = booleanSetting(
++    'REQUIRE_PRIVATE_ENV_FILE',
++    process.env.REQUIRE_PRIVATE_ENV_FILE ||
++      readEnvFile(['REQUIRE_PRIVATE_ENV_FILE']).REQUIRE_PRIVATE_ENV_FILE,
++    false,
++  );
 +  const problem = envFilePermissionProblem(file);
 +  if (!problem) return;
-+  const strict =
-+    (
-+      process.env.REQUIRE_PRIVATE_ENV_FILE ||
-+      readEnvFile(['REQUIRE_PRIVATE_ENV_FILE']).REQUIRE_PRIVATE_ENV_FILE ||
-+      ''
-+    )
-+      .trim()
-+      .toLowerCase() === 'true';
 +  const text =
 +    `${problem.file} holds every secret of this host and is readable by other users of this machine ` +
 +    `(mode ${problem.mode}). Fix it with: ${problem.fix}`;
@@ -16191,6 +16885,141 @@ index 0000000000000000000000000000000000000000..cae89b45bb422eea68dd456a0b8a1e4d
 +    expect(storedConfig()).toContain(`url = ${kb.origin}`);
 +  });
 +});
+diff --git a/src/host-repo-symlink.test.ts b/src/host-repo-symlink.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..bbd80e04b15bdd2eb99e3d5a8cadbee4938d7485
+--- /dev/null
++++ b/src/host-repo-symlink.test.ts
+@@ -0,0 +1,129 @@
++/**
++ * A PROGRAM_HOST_REPO that is a symbolic link. The host works in the folder
++ * the link leads to, so that folder is the one made private; a link that
++ * leads into a folder a container can reach, or to a folder of another
++ * user, stops the host.
++ */
++import fs from 'fs';
++import path from 'path';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++import {
++  _resetHostRepoStateForTests,
++  ensureHostRepo,
++  hostRepoPlacementProblem,
++} from './host-repo.js';
++import { logger } from './logger.js';
++import { makeKbFixture, type KbFixture } from './test-support/kb-fixture.js';
++
++let kb: KbFixture;
++let logged: string[];
++let link: string;
++
++const mode = (target: string) => fs.statSync(target).mode & 0o777;
++
++beforeEach(() => {
++  _resetHostRepoStateForTests();
++  kb = makeKbFixture();
++  logged = [];
++  for (const level of ['debug', 'info', 'warn', 'error', 'fatal'] as const)
++    vi.spyOn(logger, level).mockImplementation((...args: unknown[]) => {
++      logged.push(JSON.stringify(args));
++    });
++  link = path.join(kb.root, 'host-link');
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  kb.cleanup();
++});
++
++/** A host repo as an earlier version left it, then reached through a link. */
++function oldRepoBehindLink(): void {
++  vi.stubEnv('PROGRAM_ORIGIN_URL', kb.origin);
++  ensureHostRepo();
++  fs.chmodSync(kb.host, 0o755);
++  fs.chmodSync(path.join(kb.host, '.git', 'config'), 0o644);
++  fs.symlinkSync(kb.host, link);
++  vi.stubEnv('PROGRAM_HOST_REPO', link);
++  _resetHostRepoStateForTests(); // a new process
++}
++
++describe('PROGRAM_HOST_REPO is a symbolic link', () => {
++  it('to a folder of the host user outside every mount: accepted, and the folder it leads to is made private', () => {
++    oldRepoBehindLink();
++    expect(hostRepoPlacementProblem()).toBeNull();
++    ensureHostRepo();
++    expect(mode(kb.host)).toBe(0o700);
++    expect(mode(path.join(kb.host, '.git', 'config'))).toBe(0o600);
++    expect(logged.join('\n')).toMatch(/now private to its owner/);
++    // The link itself is still a link.
++    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
++  });
++
++  it('below a linked folder: the same', () => {
++    oldRepoBehindLink();
++    const parentLink = path.join(kb.root, 'parent-link');
++    fs.symlinkSync(kb.root, parentLink);
++    vi.stubEnv('PROGRAM_HOST_REPO', path.join(parentLink, 'host'));
++    _resetHostRepoStateForTests();
++    expect(hostRepoPlacementProblem()).toBeNull();
++    ensureHostRepo();
++    expect(mode(kb.host)).toBe(0o700);
++  });
++
++  it('into the agent checkout: refused', () => {
++    const inside = path.join(kb.checkout, 'hidden-host');
++    fs.mkdirSync(inside);
++    fs.symlinkSync(inside, link);
++    vi.stubEnv('PROGRAM_HOST_REPO', link);
++    expect(hostRepoPlacementProblem()).toMatch(/inside PROGRAM_REPO/);
++    expect(() => ensureHostRepo()).toThrow(/host repo refused/);
++    // To the checkout itself, and to a folder that contains it.
++    fs.rmSync(link);
++    fs.symlinkSync(kb.checkout, link);
++    expect(hostRepoPlacementProblem()).toMatch(/inside PROGRAM_REPO/);
++    fs.rmSync(link);
++    fs.symlinkSync(kb.root, link);
++    expect(hostRepoPlacementProblem()).toMatch(/or contains it/);
++  });
++
++  it('into the project folder, which the main container can read: refused', () => {
++    const project = path.join(kb.root, 'project');
++    fs.mkdirSync(path.join(project, 'store', 'host'), { recursive: true });
++    vi.spyOn(process, 'cwd').mockReturnValue(project);
++    fs.symlinkSync(path.join(project, 'store', 'host'), link);
++    vi.stubEnv('PROGRAM_HOST_REPO', link);
++    expect(hostRepoPlacementProblem()).toMatch(/inside the project folder/);
++  });
++
++  it('to something that is not a folder: refused', () => {
++    const file = path.join(kb.root, 'a-file');
++    fs.writeFileSync(file, 'x');
++    fs.symlinkSync(file, link);
++    vi.stubEnv('PROGRAM_HOST_REPO', link);
++    expect(hostRepoPlacementProblem()).toMatch(/not a folder/);
++  });
++
++  it('to a folder of another user: refused, and nothing there is changed', () => {
++    oldRepoBehindLink();
++    const owner = fs.statSync(kb.host).uid;
++    vi.spyOn(process, 'getuid').mockReturnValue(owner + 4321);
++    expect(hostRepoPlacementProblem()).toMatch(/belongs to another user/);
++    expect(() => ensureHostRepo()).toThrow(/host repo refused/);
++    expect(mode(kb.host)).toBe(0o755);
++  });
++
++  it('a path with no link in it is judged as before', () => {
++    expect(hostRepoPlacementProblem()).toBeNull();
++    // Another user's folder that is NOT reached through a link: unchanged
++    // behaviour, the ownership rule is for links only.
++    vi.stubEnv('PROGRAM_ORIGIN_URL', kb.origin);
++    ensureHostRepo();
++    vi.stubEnv('PROGRAM_HOST_REPO', fs.realpathSync(kb.host));
++    vi.spyOn(process, 'getuid').mockReturnValue(
++      fs.statSync(kb.host).uid + 4321,
++    );
++    expect(hostRepoPlacementProblem()).toBeNull();
++  });
++});
 diff --git a/src/host-repo.test.ts b/src/host-repo.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..bd514b7fedddef7d62dbbecedef86e54edd1e82c
@@ -16616,10 +17445,10 @@ index 0000000000000000000000000000000000000000..bd514b7fedddef7d62dbbecedef86e54
 +});
 diff --git a/src/host-repo.ts b/src/host-repo.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..8b5085a50c451c1b835fa27fd8198c7b24d5d3a4
+index 0000000000000000000000000000000000000000..f264ee156fc0583e286ac04006bca89cc46fda2e
 --- /dev/null
 +++ b/src/host-repo.ts
-@@ -0,0 +1,1417 @@
+@@ -0,0 +1,1469 @@
 +/**
 + * The host-owned copy of the program repo, and the only place where the host
 + * runs git with a working tree or a credential.
@@ -16665,6 +17494,7 @@ index 0000000000000000000000000000000000000000..8b5085a50c451c1b835fa27fd8198c7b
 +import {
 +  hasOriginCredential,
 +  originCredentialEnv,
++  originCredentialProblem,
 +  redactOriginCredential,
 +  splitOriginCredential,
 +} from './origin-credential.js';
@@ -16773,6 +17603,8 @@ index 0000000000000000000000000000000000000000..8b5085a50c451c1b835fa27fd8198c7b
 +  if (!url) return { url: null };
 +  if (!isPlainGitUrl(url))
 +    return { url: null, problem: `the origin from ${source} is not a git URL` };
++  const credentialProblem = originCredentialProblem(url);
++  if (credentialProblem) return { url: null, problem: credentialProblem };
 +  if (process.env.PROGRAM_ORIGIN_PATTERN && !isExpectedOrigin(url))
 +    return {
 +      url: null,
@@ -17007,6 +17839,42 @@ index 0000000000000000000000000000000000000000..8b5085a50c451c1b835fa27fd8198c7b
 +  if (!path.isAbsolute(host)) return 'PROGRAM_HOST_REPO must be absolute';
 +  if (inside(checkout, host) || inside(host, checkout))
 +    return 'PROGRAM_HOST_REPO and PROGRAM_REPO must not contain each other';
++  return hostRepoLinkProblem(host, checkout);
++}
++
++/**
++ * A PROGRAM_HOST_REPO that is a symbolic link (or sits below one). The host
++ * works in the folder the link leads to, so that folder is the one that has
++ * to be safe: outside the agent's checkout and outside the project folder
++ * (both are mounted into a container), a folder, and owned by the user the
++ * host runs as (or, for a host that runs as root, by the user it hands the
++ * repositories to). Null when the path holds no link, or the link leads to
++ * such a folder.
++ */
++function hostRepoLinkProblem(host: string, checkout: string): string | null {
++  const real = realOrResolved(host);
++  if (real === path.resolve(host)) return null;
++  const realCheckout = realOrResolved(checkout);
++  if (inside(realCheckout, real) || inside(real, realCheckout))
++    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, which is inside PROGRAM_REPO or contains it. The agent can write there`;
++  if (inside(realOrResolved(process.cwd()), real))
++    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, inside the project folder, which the main group's container can read`;
++  let st: fs.Stats;
++  try {
++    st = fs.statSync(real);
++  } catch {
++    // Nothing there yet: the host creates it, as its own.
++    return null;
++  }
++  if (!st.isDirectory())
++    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, which is not a folder`;
++  const uid = process.getuid?.();
++  if (
++    uid !== undefined &&
++    st.uid !== uid &&
++    !(uid === 0 && st.uid === CHECKOUT_OWNER.uid)
++  )
++    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, which belongs to another user. Point the setting at a folder the host's user owns`;
 +  return null;
 +}
 +
@@ -17054,14 +17922,27 @@ index 0000000000000000000000000000000000000000..8b5085a50c451c1b835fa27fd8198c7b
 +function secureHostRepo(): void {
 +  const host = getHostRepoPath();
 +  if (securedHostRepos.has(host)) return;
++  // The folder the path leads to: a PROGRAM_HOST_REPO that is a symbolic
++  // link is repaired at its target, which the placement check
++  // (hostRepoLinkProblem) has accepted as the host's own.
++  const real = realOrResolved(host);
 +  const targets: Array<[string, number]> = [
-+    [host, 0o700],
-+    [path.join(host, '.git', 'config'), 0o600],
++    [real, 0o700],
++    [path.join(real, '.git', 'config'), 0o600],
 +  ];
 +  try {
 +    for (const [target, mode] of targets) {
 +      const st = fs.lstatSync(target);
-+      if (st.isSymbolicLink() || (st.mode & 0o077) === 0) continue;
++      if (st.isSymbolicLink()) {
++        // Only `.git/config` can be one here. Its mode is the mode of
++        // whatever it points at, which is not this host's to change.
++        logger.error(
++          { path: target },
++          'Host repo: this path is a symbolic link, so its permissions were not checked. Replace it with a regular file',
++        );
++        continue;
++      }
++      if ((st.mode & 0o077) === 0) continue;
 +      fs.chmodSync(target, mode);
 +      logger.warn(
 +        { path: target, was: (st.mode & 0o777).toString(8) },
@@ -18512,12 +19393,14 @@ index 0000000000000000000000000000000000000000..8d5ed4ff95e4e60490caee25e48a6e1e
 +  );
 +}
 diff --git a/src/index.ts b/src/index.ts
-index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff4f594fa7 100644
+index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..b44b25842a346465e0d3f978f98b69aa3085e9f5 100644
 --- a/src/index.ts
 +++ b/src/index.ts
-@@ -13,6 +13,13 @@ import {
+@@ -12,7 +12,15 @@ import {
+   TELEGRAM_OWNER_JID,
    TIMEZONE,
    DATA_DIR,
++  DELIVERY_STATE_KEY_PATH,
  } from './config.js';
 +import { assertIdentitySettingsConfigured } from './identity-settings-check.js';
 +import { assertOutboundMailConfigured } from './outbound-email-smtp.js';
@@ -18529,7 +19412,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
  import { startCredentialProxy } from './credential-proxy.js';
  import './channels/index.js';
  import {
-@@ -28,7 +35,7 @@ import {
+@@ -28,7 +36,7 @@ import {
  import {
    cleanupOrphans,
    ensureContainerRuntimeRunning,
@@ -18538,7 +19421,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
  } from './container-runtime.js';
  import {
    getAllChats,
-@@ -36,6 +43,7 @@ import {
+@@ -36,6 +44,7 @@ import {
    getAllSessions,
    deleteSession,
    getAllTasks,
@@ -18546,7 +19429,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    getLastBotMessageTimestamp,
    getMessagesSince,
    getNewMessages,
-@@ -47,7 +55,8 @@ import {
+@@ -47,7 +56,8 @@ import {
    storeChatMetadata,
    storeMessage,
  } from './db.js';
@@ -18556,7 +19439,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
  import { GroupQueue } from './group-queue.js';
  import {
    readGroupTemplate,
-@@ -61,7 +70,6 @@ import {
+@@ -61,7 +71,6 @@ import {
    trustedBodyAddressesFromContext,
    formatGateRefusal,
    type DeliveryGateContext,
@@ -18564,7 +19447,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    setDeliveryShortfallAlerter,
    warnIfShortReply,
  } from './delivery-gate.js';
-@@ -76,6 +84,7 @@ import {
+@@ -76,6 +85,7 @@ import {
    loadSenderAllowlist,
    shouldDropMessage,
  } from './sender-allowlist.js';
@@ -18572,7 +19455,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
  import { startSessionCleanup } from './session-cleanup.js';
  import { startDeliveryCheck } from './email-delivery-check.js';
  import { startSchedulerLoop } from './task-scheduler.js';
-@@ -90,6 +99,7 @@ import { prepareWorkingContext } from './working-context.js';
+@@ -90,6 +100,7 @@ import { prepareWorkingContext } from './working-context.js';
  import { logger } from './logger.js';
  import {
    flushAuditLog,
@@ -18580,7 +19463,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    logCcContextSuppressionOnce,
    logDeadLetterOnce,
    logDeliveryProblem,
-@@ -111,6 +121,7 @@ import { resolveEmailGateContext } from './email-gate-context.js';
+@@ -111,6 +122,7 @@ import { resolveEmailGateContext } from './email-gate-context.js';
  import { buildRecentWorkSection } from './recent-work.js';
  import {
    clearDeliveryState,
@@ -18588,7 +19471,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    loadDeliveryState,
    saveDeliveryState,
  } from './delivery-state.js';
-@@ -121,10 +132,18 @@ import {
+@@ -121,10 +133,19 @@ import {
    type SentAuditArgs,
  } from './delivery-processor.js';
  import { stripMarkdown } from './email-format.js';
@@ -18604,10 +19487,11 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    startOutboundEmailQueue,
  } from './outbound-email.js';
 +import { assertEmailAuthConfigured } from './email-auth.js';
++import { originCredentialProblem } from './origin-credential.js';
  
  let lastTimestamp = '';
  let sessions: Record<string, string> = {};
-@@ -134,7 +153,7 @@ let messageLoopRunning = false;
+@@ -134,7 +155,7 @@ let messageLoopRunning = false;
  
  const channels: Channel[] = [];
  const queue = new GroupQueue();
@@ -18616,7 +19500,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    logger.error({ text }, 'Alert channel is not initialized');
    // Never resolve silently: an unsent alert must not look delivered to the
    // shortfall-replay layer, which deletes an alert only on confirmation.
-@@ -583,18 +602,22 @@ function auditPreparedSent(args: SentAuditArgs): AuditWriteResult {
+@@ -583,18 +604,22 @@ function auditPreparedSent(args: SentAuditArgs): AuditWriteResult {
              );
              return 'write-failed' as const;
            }
@@ -18651,7 +19535,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
          })();
  
    if (auditResult === 'written') {
-@@ -647,6 +670,9 @@ async function runAgent(
+@@ -647,6 +672,9 @@ async function runAgent(
      if (output.result !== null && output.result !== undefined) {
        sawUsableResult = true;
      }
@@ -18661,7 +19545,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
      if (onOutput) await onOutput(output);
    };
  
-@@ -689,6 +715,9 @@ async function runAgent(
+@@ -689,6 +717,9 @@ async function runAgent(
      .join('\n\n');
  
    try {
@@ -18671,7 +19555,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
      const imageAttachments =
        agentMode === 'normal' ? parseImageReferences(prompt) : [];
  
-@@ -866,16 +895,55 @@ function ensureContainerSystemRunning(): void {
+@@ -866,16 +897,63 @@ function ensureContainerSystemRunning(): void {
  }
  
  async function main(): Promise<void> {
@@ -18688,6 +19572,11 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
 +
 +  // EMAIL_AUTH_MODE=enforce needs a trusted mail server to be named.
 +  assertEmailAuthConfigured();
++
++  // A credential in an origin URL is handled for https:// only. The message
++  // names the scheme, never the URL.
++  const originProblem = originCredentialProblem(process.env.PROGRAM_ORIGIN_URL);
++  if (originProblem) throw new Error(`PROGRAM_ORIGIN_URL: ${originProblem}`);
 +
 +  // The host-owned repository must not sit inside the agent's checkout.
 +  const hostRepoProblem = hostRepoPlacementProblem();
@@ -18707,10 +19596,13 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    logger.info('Database initialized');
 +  // Read the delivery-state signing key once, with the other secrets.
 +  const deliveryKeys = initDeliveryStateKeys();
-+  if (
-+    deliveryKeys.source &&
-+    deliveryKeys.source !== 'DELIVERY_STATE_SIGNING_KEY'
-+  )
++  if (deliveryKeys.source === 'key-file')
++    logger.info(
++      { keyFile: DELIVERY_STATE_KEY_PATH },
++      `Delivery state is signed with the key in ${DELIVERY_STATE_KEY_PATH}, which this host created because no signing key is configured. ` +
++        'Keep that file with the host; without it a reply in delivery at that moment is handled again.',
++    );
++  else if (deliveryKeys.source !== 'DELIVERY_STATE_SIGNING_KEY')
 +    logger.warn(
 +      { reused: deliveryKeys.source },
 +      `Delivery state is signed with ${deliveryKeys.source}, a secret that exists for another purpose. ` +
@@ -18728,7 +19620,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    );
  
    // Graceful shutdown handlers
-@@ -1028,7 +1096,10 @@ async function main(): Promise<void> {
+@@ -1028,7 +1106,10 @@ async function main(): Promise<void> {
    // fire-and-forget catch it themselves; the shortfall-alert replay layer needs
    // the rejection, because a swallowed failure there reads as a confirmed
    // delivery and drops the alert permanently (round-3 review P1).
@@ -18740,7 +19632,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
      const alertJid = resolveDeadLetterJid();
      const alertChannel = findChannel(channels, alertJid);
      if (!alertChannel) {
-@@ -1044,18 +1115,36 @@ async function main(): Promise<void> {
+@@ -1044,18 +1125,36 @@ async function main(): Promise<void> {
        throw new Error(`Alert delivery failed: ${outcome.reason}`);
      }
    };
@@ -18780,7 +19672,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff
    /**
     * G46-gated send for non-streaming paths (scheduler forwards, IPC
     * messages): validates against the owning channel's declared profile.
-@@ -1143,12 +1232,21 @@ async function main(): Promise<void> {
+@@ -1143,12 +1242,21 @@ async function main(): Promise<void> {
      },
    });
    startSessionCleanup();
@@ -19840,12 +20732,150 @@ index 0000000000000000000000000000000000000000..f444c7f697e6b4d57d0fd6dc1f18141d
 +  }
 +  return chosen;
 +}
+diff --git a/src/mount-security-host-config.test.ts b/src/mount-security-host-config.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7a3f0e82241c415d31d38b10c22908f89b46c4a3
+--- /dev/null
++++ b/src/mount-security-host-config.test.ts
+@@ -0,0 +1,81 @@
++/**
++ * The host's own settings folder (the allowlists, the delivery-state key)
++ * is never handed to a container as an additional mount, whatever the mount
++ * allowlist says.
++ */
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++let home: string;
++
++async function load() {
++  vi.resetModules();
++  vi.stubEnv('HOME', home);
++  const config = await import('./config.js');
++  const security = await import('./mount-security.js');
++  return { config, security };
++}
++
++beforeEach(() => {
++  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mount-home-')));
++  fs.mkdirSync(path.join(home, '.config', 'nanoclaw'), { recursive: true });
++  fs.mkdirSync(path.join(home, 'projects', 'notes'), { recursive: true });
++  // An allowlist as permissive as an operator could write it.
++  fs.writeFileSync(
++    path.join(home, '.config', 'nanoclaw', 'mount-allowlist.json'),
++    JSON.stringify({
++      allowedRoots: [{ path: home, allowReadWrite: true }, { path: '/' }],
++      blockedPatterns: [],
++      nonMainReadOnly: false,
++    }),
++  );
++  fs.writeFileSync(
++    path.join(home, '.config', 'nanoclaw', 'delivery-state.key'),
++    'c'.repeat(64),
++  );
++});
++
++afterEach(() => {
++  vi.unstubAllEnvs();
++  vi.resetModules();
++  fs.rmSync(home, { recursive: true, force: true });
++});
++
++describe('additional mounts and the host settings folder', () => {
++  it('refuses the folder, a file in it, and every folder above it', async () => {
++    const { config, security } = await load();
++    expect(config.DELIVERY_STATE_KEY_PATH).toBe(
++      path.join(home, '.config', 'nanoclaw', 'delivery-state.key'),
++    );
++    for (const hostPath of [
++      path.join(home, '.config', 'nanoclaw'),
++      config.DELIVERY_STATE_KEY_PATH,
++      path.join(home, '.config'),
++      home,
++    ]) {
++      const result = security.validateMount({ hostPath }, true);
++      expect(result.allowed, hostPath).toBe(false);
++      expect(result.reason, hostPath).toMatch(/settings folder/);
++    }
++  });
++
++  it('refuses a link that leads there', async () => {
++    const { security } = await load();
++    const link = path.join(home, 'projects', 'settings');
++    fs.symlinkSync(path.join(home, '.config', 'nanoclaw'), link);
++    expect(security.validateMount({ hostPath: link }, true).allowed).toBe(
++      false,
++    );
++  });
++
++  it('still allows a folder beside it', async () => {
++    const { security } = await load();
++    const result = security.validateMount(
++      { hostPath: path.join(home, 'projects', 'notes') },
++      true,
++    );
++    expect(result.allowed).toBe(true);
++  });
++});
+diff --git a/src/mount-security.ts b/src/mount-security.ts
+index 4a9eb1212816dc5d5ecba1b75f31e5e695ce292f..57ee4522efdfd956fc78967ec7a6cfd87d7fe706 100644
+--- a/src/mount-security.ts
++++ b/src/mount-security.ts
+@@ -9,7 +9,7 @@
+ import fs from 'fs';
+ import os from 'os';
+ import path from 'path';
+-import { MOUNT_ALLOWLIST_PATH } from './config.js';
++import { HOST_CONFIG_DIR, MOUNT_ALLOWLIST_PATH } from './config.js';
+ import { logger } from './logger.js';
+ import { AdditionalMount, AllowedRoot, MountAllowlist } from './types.js';
+ 
+@@ -191,6 +191,20 @@ function findAllowedRoot(
+   return null;
+ }
+ 
++/** True when `realPath` is the host's settings folder, inside it, or above it. */
++function reachesHostConfigDir(realPath: string): boolean {
++  const configDir =
++    getRealPath(HOST_CONFIG_DIR) ?? path.resolve(HOST_CONFIG_DIR);
++  const inside = (child: string, parent: string) => {
++    const relative = path.relative(parent, child);
++    return (
++      relative === '' ||
++      (!relative.startsWith('..') && !path.isAbsolute(relative))
++    );
++  };
++  return inside(realPath, configDir) || inside(configDir, realPath);
++}
++
+ /**
+  * Validate the container path to prevent escaping /workspace/extra/
+  */
+@@ -266,6 +280,16 @@ export function validateMount(
+     };
+   }
+ 
++  // The host's own folder (the allowlists, the delivery-state key) is never
++  // mounted, whatever the allowlist says: not the folder, nothing in it, and
++  // no folder above it.
++  if (reachesHostConfigDir(realPath)) {
++    return {
++      allowed: false,
++      reason: `Path "${realPath}" would expose the host's own settings folder ${HOST_CONFIG_DIR}`,
++    };
++  }
++
+   // Check against blocked patterns
+   const blockedMatch = matchesBlockedPattern(
+     realPath,
 diff --git a/src/origin-credential.test.ts b/src/origin-credential.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..3aeecf5b04c4f3fbd350852a2edfe1859769c848
+index 0000000000000000000000000000000000000000..d68c61ab1f88eb0fd798f0c46c4745505222f93a
 --- /dev/null
 +++ b/src/origin-credential.test.ts
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,305 @@
 +import { execFileSync } from 'child_process';
 +import fs from 'fs';
 +import os from 'os';
@@ -19856,6 +20886,7 @@ index 0000000000000000000000000000000000000000..3aeecf5b04c4f3fbd350852a2edfe185
 +import {
 +  hasOriginCredential,
 +  originCredentialEnv,
++  originCredentialProblem,
 +  redactOriginCredential,
 +  splitOriginCredential,
 +} from './origin-credential.js';
@@ -20015,12 +21046,147 @@ index 0000000000000000000000000000000000000000..3aeecf5b04c4f3fbd350852a2edfe185
 +    expect(redactOriginCredential(text, [BARE, null, undefined])).toBe(text);
 +  });
 +});
++
++describe('redaction of a user name or a token with "@", ":" or "/" in it', () => {
++  // Obviously fake, and assembled so that no line holds a URL with a password.
++  const SECRET = ['fake', 'tok', '9912'].join('-');
++  const HOST = 'git.example.edu';
++  const at = String.fromCharCode(64);
++  const cases: [string, string, string][] = [
++    ['"@" in the user name, as written', `bot${at}corp.example`, SECRET],
++    ['"@" in the user name, encoded', 'bot%40corp.example', SECRET],
++    ['"@" in the token, as written', 'kb-bot', `${SECRET}${at}v2`],
++    ['"@" in the token, encoded', 'kb-bot', `${SECRET}%40v2`],
++    ['":" in the token, as written', 'kb-bot', `${SECRET}:part2`],
++    ['":" in the token, encoded', 'kb-bot', `${SECRET}%3Apart2`],
++    ['":" in the user name, encoded', 'kb%3Abot', SECRET],
++    ['"/" in the token, as written', 'kb-bot', `${SECRET}/part2`],
++    ['"/" in the token, encoded', 'kb-bot', `${SECRET}%2Fpart2`],
++    ['"/" in the user name, as written', 'team/kb-bot', SECRET],
++    ['"/" in the user name, encoded', 'team%2Fkb-bot', SECRET],
++    ['all three in both', `a${at}b:c/d`, `${SECRET}${at}x:y/z`],
++  ];
++
++  it.each(cases)('%s: with the URL known', (_name, user, token) => {
++    const url = `https://${user}:${token}${at}${HOST}/team/repo.git`;
++    const decodedUser = decodeURIComponent(user);
++    const decodedToken = decodeURIComponent(token);
++    const said = [
++      `Command failed: git clone --mirror -- ${url} /srv/x`,
++      `fatal: could not read Password for 'https://${user}${at}${HOST}'`,
++      `fatal: Authentication failed for 'https://${decodedUser}:${decodedToken}${at}${HOST}/team/repo.git/'`,
++      `remote: token ${decodedToken} is not valid for ${decodedUser}`,
++    ].join('\n');
++    const out = redactOriginCredential(said, [url]);
++    expect(out).not.toContain(SECRET);
++    expect(out).not.toContain(token);
++    expect(out).not.toContain(decodedToken);
++    expect(out).not.toContain(user);
++    expect(out).not.toContain(decodedUser);
++    expect(out).toContain(`${HOST}`);
++  });
++
++  it.each(cases)('%s: with no URL given', (_name, user, token) => {
++    const url = `https://${user}:${token}${at}${HOST}/team/repo.git`;
++    const out = redactOriginCredential(`unable to access '${url}/'`);
++    expect(out).not.toContain(SECRET);
++    expect(out).toContain(`***${at}${HOST}/team/repo.git`);
++  });
++
++  it('a token written as the user name, with "@" in it and no password', () => {
++    const url = `https://${SECRET}${at}v2${at}${HOST}/team/repo.git`;
++    expect(redactOriginCredential(`unable to access '${url}/'`)).toBe(
++      `unable to access 'https://***${at}${HOST}/team/repo.git/'`,
++    );
++    expect(redactOriginCredential(`said ${SECRET}${at}v2 again`, [url])).toBe(
++      'said *** again',
++    );
++  });
++
++  it('a URL on a scheme this host refuses is redacted like any other', () => {
++    const url = `http://kb-bot:${SECRET}${at}${HOST}/team/repo.git`;
++    const out = redactOriginCredential(
++      `clone of ${url} failed; token ${SECRET}`,
++      [url],
++    );
++    expect(out).not.toContain(SECRET);
++  });
++
++  it('leaves a URL with a port and no credential alone', () => {
++    const text = `fatal: unable to access 'https://${HOST}:8443/team/repo.git/'`;
++    expect(
++      redactOriginCredential(text, [`https://${HOST}:8443/team/repo.git`]),
++    ).toBe(text);
++  });
++});
++
++describe('originCredentialProblem', () => {
++  const SECRET = ['fake', 'tok', '9913'].join('-');
++  const at = String.fromCharCode(64);
++
++  it('refuses a credential on a scheme that is not encrypted, and never quotes it', () => {
++    for (const url of [
++      `http://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
++      `http://${SECRET}${at}git.example.edu/team/repo.git`,
++      `HTTP://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
++      `git://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
++      `ftp://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
++      `ssh://git:${SECRET}${at}git.example.edu/team/repo.git`,
++      `http://kb-bot:${SECRET}/x${at}git.example.edu/team/repo.git`,
++    ]) {
++      const problem = originCredentialProblem(url);
++      expect(problem, url.replace(SECRET, '…')).toBeTruthy();
++      expect(problem).not.toContain(SECRET);
++      expect(problem).not.toContain('kb-bot');
++      expect(problem).not.toContain('git.example.edu');
++    }
++    expect(
++      originCredentialProblem(
++        `http://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
++      ),
++    ).toMatch(/http:\/\/.*not encrypted.*https:\/\//);
++  });
++
++  it('has nothing to say about the forms the host handles', () => {
++    for (const url of [
++      '',
++      undefined,
++      null,
++      'https://git.example.edu/team/repo.git',
++      `https://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
++      'http://git.example.edu/team/repo.git',
++      'ssh://git@git.example.edu/team/repo.git',
++      'git@git.example.edu:team/repo.git',
++      '/srv/repos/origin.git',
++      'file:///srv/repos/origin.git',
++    ]) {
++      expect(originCredentialProblem(url), String(url)).toBeNull();
++    }
++  });
++});
++
++describe('the start-up step', () => {
++  it('main() refuses such an origin before anything talks to git, with a message built from the scheme only', () => {
++    const text = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8');
++    const main = text.slice(text.indexOf('async function main()'));
++    const check = main.indexOf(
++      'originCredentialProblem(process.env.PROGRAM_ORIGIN_URL)',
++    );
++    expect(check).toBeGreaterThan(0);
++    expect(main).toMatch(
++      /if \(originProblem\) throw new Error\(`PROGRAM_ORIGIN_URL: \$\{originProblem\}`\);/,
++    );
++    // Before the host repo is created, the mirror is read, or a channel starts.
++    for (const later of ['ensureHostRepo()', 'initDatabase()'])
++      expect(check).toBeLessThan(main.indexOf(later));
++  });
++});
 diff --git a/src/origin-credential.ts b/src/origin-credential.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..a67dcd9436659c32354fcb7a920681746fde3fba
+index 0000000000000000000000000000000000000000..c9c6a3b6ad020ddd5b842d15d4df1f6a5ccd5858
 --- /dev/null
 +++ b/src/origin-credential.ts
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,169 @@
 +/**
 + * A credential written inside the origin URL ("https://user:token@host/...").
 + *
@@ -20069,6 +21235,32 @@ index 0000000000000000000000000000000000000000..a67dcd9436659c32354fcb7a92068174
 +  };
 +}
 +
++/**
++ * Why this origin URL must not be used, or null. A credential in a URL is
++ * handled safely for `https://` only (above): there it leaves the URL before
++ * git sees a command line. On any other scheme the whole URL is what git is
++ * given, and on `http://`, `git://` and `ftp://` the credential would also
++ * cross the network unencrypted. `ssh://user@host` is a user name and is
++ * fine; `ssh://user:password@host` is a secret on a command line.
++ *
++ * The text names the scheme and never the URL: the URL is the secret.
++ */
++export function originCredentialProblem(
++  url: string | null | undefined,
++): string | null {
++  const m = /^([a-z][a-z0-9+.-]*):\/\/([^\s]*)$/i.exec((url ?? '').trim());
++  if (!m) return null;
++  const scheme = m[1].toLowerCase();
++  if (scheme === 'https' || scheme === 'file') return null;
++  const at = m[2].lastIndexOf('@');
++  if (at < 0) return null;
++  const userinfo = m[2].slice(0, at);
++  if (scheme === 'ssh' && !userinfo.includes(':')) return null;
++  return scheme === 'ssh'
++    ? 'the origin URL is an ssh:// address with a password in it. SSH takes no password from a URL, and git would be given it on its command line. Remove the password and use an SSH key.'
++    : `the origin URL uses ${scheme}:// and carries a user name, password or token. That scheme is not encrypted, and the credential would reach git's command line and the log. Use an https:// URL for an origin that needs a credential.`;
++}
++
 +/** True when the URL carries a user name, a password or a token. */
 +export function hasOriginCredential(url: string): boolean {
 +  return splitOriginCredential(url).userinfo !== '';
@@ -20104,10 +21296,33 @@ index 0000000000000000000000000000000000000000..a67dcd9436659c32354fcb7a92068174
 +}
 +
 +/**
++ * Every reading of the user-info of `url`, for redaction only. Two readings
++ * are needed because the characters "@" and "/" may stand unencoded in a
++ * user name or a token somebody pasted:
++ *  - up to the last "@" before the first "/" (how git and this file split
++ *    a well-formed URL);
++ *  - up to the last "@" of the whole URL, for a token with a "/" in it.
++ * Any scheme, so a URL this host refuses to use is still taken out of text
++ * that quotes it.
++ */
++function userinfoReadings(url: string): string[] {
++  const m = /^[a-z][a-z0-9+.-]*:\/\/([^\s]*)$/i.exec(url.trim());
++  if (!m) return [];
++  const rest = m[1];
++  const out = new Set<string>();
++  const authority = rest.split(/[/?#]/)[0];
++  if (authority.includes('@'))
++    out.add(authority.slice(0, authority.lastIndexOf('@')));
++  if (rest.includes('@')) out.add(rest.slice(0, rest.lastIndexOf('@')));
++  return [...out].filter(Boolean);
++}
++
++/**
 + * `text` with every form of the credentials of `urls` replaced by "***": the
 + * whole user-info, the user name and the password each, as written and
-+ * percent-decoded. Also any other "//user-info@" in the text. For log lines
-+ * and error messages that quote git or a URL.
++ * percent-decoded. Also any other "//user-info@" in the text, up to the last
++ * "@" before the path. For log lines and error messages that quote git or a
++ * URL.
 + */
 +export function redactOriginCredential(
 +  text: string,
@@ -20116,23 +21331,30 @@ index 0000000000000000000000000000000000000000..a67dcd9436659c32354fcb7a92068174
 +  const secrets = new Set<string>();
 +  for (const url of urls) {
 +    if (!url) continue;
-+    const { userinfo } = splitOriginCredential(url);
-+    if (!userinfo) continue;
-+    const colon = userinfo.indexOf(':');
-+    const parts =
-+      colon < 0
-+        ? [userinfo]
-+        : [userinfo, userinfo.slice(0, colon), userinfo.slice(colon + 1)];
-+    for (const part of parts) {
-+      // A very short piece ("x", "git") would blank ordinary words.
-+      if (part.length >= 4) secrets.add(part);
-+      if (decoded(part).length >= 4) secrets.add(decoded(part));
++    for (const userinfo of userinfoReadings(url)) {
++      // Every split at a ":": a user name ends at the first one, but a
++      // name or a token pasted with a ":" in it makes any of them the
++      // boundary, and git may print either side alone.
++      const parts = [userinfo];
++      for (let colon = userinfo.indexOf(':'); colon >= 0; ) {
++        parts.push(userinfo.slice(0, colon), userinfo.slice(colon + 1));
++        colon = userinfo.indexOf(':', colon + 1);
++      }
++      for (const part of parts) {
++        // A very short piece ("x", "git") would blank ordinary words.
++        if (part.length >= 4) secrets.add(part);
++        if (decoded(part).length >= 4) secrets.add(decoded(part));
++      }
 +    }
 +  }
 +  let out = text;
 +  for (const secret of [...secrets].sort((a, b) => b.length - a.length))
 +    out = out.split(secret).join('***');
-+  return out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]+@/gi, '$1***@');
++  // Any "scheme://...@" left in the text: everything up to the last "@" of
++  // the word goes. A user name or a token may hold "@", ":" and "/" as
++  // written, so no shorter match is safe. The cost: a URL with no
++  // credential and an "@" in its path loses its host in the log line.
++  return out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s'"]*@/gi, '$1***@');
 +}
 diff --git a/src/outbound-email-attempt-budget.test.ts b/src/outbound-email-attempt-budget.test.ts
 new file mode 100644
@@ -25469,10 +26691,10 @@ index 0000000000000000000000000000000000000000..56bf3bea45fe411efe98be4823a82844
 +});
 diff --git a/src/repo-reader-origin-credential.test.ts b/src/repo-reader-origin-credential.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..e5136dd2153c2edf7ca4802acfb20bf0aa78648f
+index 0000000000000000000000000000000000000000..dc8095bfed4dafeb0ea30495c0a4273517ea58fb
 --- /dev/null
 +++ b/src/repo-reader-origin-credential.test.ts
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,246 @@
 +/**
 + * Issue 53, the read mirror: the token of PROGRAM_ORIGIN_URL is not on the
 + * clone or fetch command line, not in the mirror's config and not in a log
@@ -25545,6 +26767,25 @@ index 0000000000000000000000000000000000000000..e5136dd2153c2edf7ca4802acfb20bf0
 +});
 +
 +describe('read mirror and a token in PROGRAM_ORIGIN_URL', () => {
++  it('a token on an http:// origin: no clone is started, and the refusal names the scheme and not the URL', () => {
++    const plain = `http://${USER}:${TOKEN}@${ADDRESS}`;
++    vi.stubEnv('PROGRAM_ORIGIN_URL', plain);
++    vi.stubEnv(
++      'PROGRAM_ORIGIN_PATTERN',
++      '^https?://([A-Za-z0-9_.~:-]+@)?127[.]0[.]0[.]1:9/team/',
++    );
++    const recorder = recordGitProcesses(kb.root);
++    const reader = new RepoReader(kb.mirror);
++
++    expect(reader.init()).toBe(false);
++
++    expect(recorder.argv().some((a) => a.startsWith('clone'))).toBe(false);
++    expect(recorder.argvText()).not.toContain(TOKEN);
++    expect(logged.join('\n')).not.toContain(TOKEN);
++    expect(logged.join('\n')).not.toContain(USER);
++    expect(logged.join('\n')).toMatch(/mirror bootstrap refused.*http:\/\//);
++  });
++
 +  it('the bootstrap clone has the token in its environment only: not in its arguments, not in a log line', () => {
 +    const recorder = recordGitProcesses(kb.root);
 +    const reader = new RepoReader(kb.mirror);
@@ -25869,10 +27110,10 @@ index 6fdeb411c5695287431951c4b37115fc2c4f6a0d..4fa5cb610d7ee1fbcf84f371e2cf51ed
      // No live checkout either — bootstrap has no origin URL to clone from.
      vi.stubEnv('PROGRAM_REPO', path.join(dir, 'no-live-checkout'));
 diff --git a/src/repo-reader.ts b/src/repo-reader.ts
-index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13fdb356ff 100644
+index 131b719890aaef78b21a5c5c97d4776e22b64adf..c4a052f1cb43bf43149f1d1917fdb337f0282f38 100644
 --- a/src/repo-reader.ts
 +++ b/src/repo-reader.ts
-@@ -1,10 +1,26 @@
+@@ -1,10 +1,27 @@
  import { execFile, execFileSync } from 'child_process';
 +import fs from 'fs';
  import { promisify } from 'util';
@@ -25883,6 +27124,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
 +import {
 +  hasOriginCredential,
 +  originCredentialEnv,
++  originCredentialProblem,
 +  redactOriginCredential,
 +  splitOriginCredential,
 +} from './origin-credential.js';
@@ -25900,7 +27142,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
  
  const execFileAsync = promisify(execFile);
  
-@@ -18,7 +34,34 @@ const execFileAsync = promisify(execFile);
+@@ -18,7 +35,34 @@ const execFileAsync = promisify(execFile);
   * fail stale after that (fetch failure keeps the last-good SHA — stale beats
   * half-pulled). Both paths log loudly.
   */
@@ -25935,7 +27177,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
  const BENIGN_MISSING_RE =
    /does not exist in|Not a valid object name|bad revision|path .* does not exist/i;
  
-@@ -39,35 +82,41 @@ interface PathCommitAuthor {
+@@ -39,35 +83,41 @@ interface PathCommitAuthor {
  }
  
  /**
@@ -26004,7 +27246,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
  }
  
  export class RepoReader {
-@@ -92,6 +141,7 @@ export class RepoReader {
+@@ -92,6 +142,7 @@ export class RepoReader {
      if (!this.sha && this.bootstrapMirror()) {
        this.sha = this.resolveSha();
      }
@@ -26012,7 +27254,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
      if (this.sha) {
        this.reconcileAllowlistSha(this.sha);
      }
-@@ -99,7 +149,7 @@ export class RepoReader {
+@@ -99,7 +150,7 @@ export class RepoReader {
        logger.error(
          { mirror: this.mirrorPath },
          'RepoReader: no readable SHA at init — repo reads will fail closed. ' +
@@ -26021,7 +27263,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
            this.mirrorPath,
        );
      }
-@@ -107,59 +157,151 @@ export class RepoReader {
+@@ -107,59 +158,161 @@ export class RepoReader {
    }
  
    /**
@@ -26063,6 +27305,16 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
          { mirror: this.mirrorPath },
 -        'RepoReader: mirror bootstrap refused — unexpected origin URL in the live checkout',
 +        'RepoReader: mirror bootstrap refused — PROGRAM_ORIGIN_URL is not the expected origin',
++      );
++      return false;
++    }
++    // The start-up check refuses this too; a process that skipped it (a
++    // script, a test) must not hand such a URL to git either.
++    const credentialProblem = originCredentialProblem(originUrl);
++    if (credentialProblem) {
++      logger.error(
++        { mirror: this.mirrorPath },
++        `RepoReader: mirror bootstrap refused — ${credentialProblem}`,
        );
        return false;
      }
@@ -26195,7 +27447,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
    get currentSha(): string | null {
      return this.sha;
    }
-@@ -208,11 +350,20 @@ export class RepoReader {
+@@ -208,11 +361,20 @@ export class RepoReader {
            'origin',
            '+refs/heads/main:refs/heads/main',
          ],
@@ -26218,7 +27470,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
          'RepoReader: fetch failed; serving last-good SHA',
        );
        return { advanced: false, sha: this.sha };
-@@ -246,11 +397,15 @@ export class RepoReader {
+@@ -246,11 +408,15 @@ export class RepoReader {
            'origin',
            '+refs/heads/main:refs/heads/main',
          ],
@@ -26236,7 +27488,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
          'RepoReader: async fetch failed; serving last-good SHA',
        );
        return { advanced: false, sha: this.sha };
-@@ -333,7 +488,11 @@ export class RepoReader {
+@@ -333,7 +499,11 @@ export class RepoReader {
        );
        const [sha, author] = history.trim().split('\n')[0].split('\0');
        // A delayed webhook must never select a later agent-authored version.
@@ -26249,7 +27501,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..5aa58694da566d1f1a97873f055f1e13
          return null;
        const { stdout } = await execFileAsync(
          'git',
-@@ -613,9 +772,7 @@ let singleton: RepoReader | null = null;
+@@ -613,9 +783,7 @@ let singleton: RepoReader | null = null;
  /** Process-wide reader over the program-repo read mirror. */
  export function getRepoReader(): RepoReader {
    if (!singleton) {

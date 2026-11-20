@@ -7,6 +7,7 @@ import { logger } from './logger.js';
 import {
   hasOriginCredential,
   originCredentialEnv,
+  originCredentialProblem,
   redactOriginCredential,
   splitOriginCredential,
 } from './origin-credential.js';
@@ -177,6 +178,16 @@ export class RepoReader {
       logger.warn(
         { mirror: this.mirrorPath },
         'RepoReader: mirror bootstrap refused — PROGRAM_ORIGIN_URL is not the expected origin',
+      );
+      return false;
+    }
+    // The start-up check refuses this too; a process that skipped it (a
+    // script, a test) must not hand such a URL to git either.
+    const credentialProblem = originCredentialProblem(originUrl);
+    if (credentialProblem) {
+      logger.error(
+        { mirror: this.mirrorPath },
+        `RepoReader: mirror bootstrap refused — ${credentialProblem}`,
       );
       return false;
     }

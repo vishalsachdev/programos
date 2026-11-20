@@ -86,23 +86,42 @@ export function envFilePermissionProblem(
 }
 
 /**
+ * An on/off setting: `1`, `true`, `on` and `0`, `false`, `off`, in any case.
+ * Empty or unset is `fallback`. Any other value throws: a setting somebody
+ * wrote and the host cannot read must not count as "off".
+ */
+export function booleanSetting(
+  name: string,
+  value: string | undefined,
+  fallback: boolean,
+): boolean {
+  const text = (value ?? '').trim().toLowerCase();
+  if (text === '') return fallback;
+  if (text === '1' || text === 'true' || text === 'on') return true;
+  if (text === '0' || text === 'false' || text === 'off') return false;
+  throw new Error(
+    `${name} must be "true" or "false" (also 1, on, 0, off); it is set to a value the host does not know`,
+  );
+}
+
+/**
  * The startup check. With a `.env` that the group or others can read it logs
  * one error naming the file and the command to fix it. The host still
  * starts, so an upgrade does not stop a deployment that was running; set
  * REQUIRE_PRIVATE_ENV_FILE=true (in the process environment or in `.env`) to
- * make it refuse to start instead.
+ * make it refuse to start instead. The setting is read before the file's
+ * mode is looked at, so a value the host does not know stops the start
+ * whether or not the file is private today.
  */
 export function checkEnvFilePermissions(file = envFilePath()): void {
+  const strict = booleanSetting(
+    'REQUIRE_PRIVATE_ENV_FILE',
+    process.env.REQUIRE_PRIVATE_ENV_FILE ||
+      readEnvFile(['REQUIRE_PRIVATE_ENV_FILE']).REQUIRE_PRIVATE_ENV_FILE,
+    false,
+  );
   const problem = envFilePermissionProblem(file);
   if (!problem) return;
-  const strict =
-    (
-      process.env.REQUIRE_PRIVATE_ENV_FILE ||
-      readEnvFile(['REQUIRE_PRIVATE_ENV_FILE']).REQUIRE_PRIVATE_ENV_FILE ||
-      ''
-    )
-      .trim()
-      .toLowerCase() === 'true';
   const text =
     `${problem.file} holds every secret of this host and is readable by other users of this machine ` +
     `(mode ${problem.mode}). Fix it with: ${problem.fix}`;

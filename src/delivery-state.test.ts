@@ -50,6 +50,29 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+const ROW_KEY = 'fake-key-for-planted-rows';
+
+/**
+ * A row signed with the host's key, as the host would have stored it. For
+ * the tests of what the host does with a signed row whose content is wrong;
+ * an unsigned row never gets that far (see "always signed" below).
+ */
+function storeSigned(value: unknown): void {
+  vi.stubEnv('DELIVERY_STATE_SIGNING_KEY', ROW_KEY);
+  const payload = JSON.stringify(value);
+  setRouterState(
+    `delivery-state:${JID}`,
+    JSON.stringify({
+      signatureVersion: 1,
+      payload,
+      mac: createHmac('sha256', ROW_KEY)
+        .update('nanoclaw-delivery-state-v1\0')
+        .update(payload)
+        .digest('hex'),
+    }),
+  );
+}
+
 describe('delivery state persistence', () => {
   it.each<DeliveryState>([
     {
@@ -122,10 +145,7 @@ describe('delivery state persistence', () => {
   });
 
   it('fails closed on an unsupported version', () => {
-    setRouterState(
-      `delivery-state:${JID}`,
-      JSON.stringify({ version: 99, phase: 'transport-pending' }),
-    );
+    storeSigned({ version: 99, phase: 'transport-pending' });
 
     expect(loadDeliveryState(JID)).toEqual({
       status: 'invalid',
@@ -134,14 +154,11 @@ describe('delivery state persistence', () => {
   });
 
   it('fails closed when the stored jid does not match the lookup jid', () => {
-    setRouterState(
-      `delivery-state:${JID}`,
-      JSON.stringify({
-        version: 1,
-        phase: 'transport-pending',
-        chatJid: 'webhook-email:other',
-      }),
-    );
+    storeSigned({
+      version: 1,
+      phase: 'transport-pending',
+      chatJid: 'webhook-email:other',
+    });
 
     expect(loadDeliveryState(JID)).toEqual({
       status: 'invalid',
@@ -150,18 +167,15 @@ describe('delivery state persistence', () => {
   });
 
   it('fails closed on an unknown phase', () => {
-    setRouterState(
-      `delivery-state:${JID}`,
-      JSON.stringify({
-        version: 1,
-        phase: 'teleported',
-        chatJid: JID,
-        targetTimestamp: '2026-08-10T15:00:00.000Z',
-        previousCursor: '',
-        context: CONTEXT,
-        outcomeId: 'outcome-1',
-      }),
-    );
+    storeSigned({
+      version: 1,
+      phase: 'teleported',
+      chatJid: JID,
+      targetTimestamp: '2026-08-10T15:00:00.000Z',
+      previousCursor: '',
+      context: CONTEXT,
+      outcomeId: 'outcome-1',
+    });
 
     expect(loadDeliveryState(JID)).toEqual({
       status: 'invalid',
@@ -314,12 +328,14 @@ describe('delivery-state signing keys', () => {
     expect(resolveDeliveryStateKeys().source).toBe('TELEGRAM_BOT_TOKEN');
     writeEnv({ RESEND_API_KEY: 'fake-mail-key' });
     expect(resolveDeliveryStateKeys().source).toBe('RESEND_API_KEY');
+    // With none of them: still a key. A process that did not run the
+    // start-up step gets one of its own, and never touches the key file.
     writeEnv({});
-    expect(resolveDeliveryStateKeys()).toEqual({
-      sign: undefined,
-      verify: [],
-      source: null,
-    });
+    const own = resolveDeliveryStateKeys();
+    expect(own.source).toBe('this-process');
+    expect(own.sign).toMatch(/^[0-9a-f]{64}$/);
+    expect(own.verify).toEqual([own.sign]);
+    expect(resolveDeliveryStateKeys().sign).toBe(own.sign);
   });
 
   it('with only a fallback secret, signs with the same MAC as before this change', () => {
@@ -437,7 +453,10 @@ describe('delivery-state signing keys', () => {
 
   it('after initDeliveryStateKeys the settings are read once: an edit of .env takes effect at the restart only', () => {
     writeEnv({ WEBHOOK_SECRET: 'fake-webhook-secret' });
-    expect(initDeliveryStateKeys().source).toBe('WEBHOOK_SECRET');
+    expect(
+      initDeliveryStateKeys(path.join(envDir, 'no-such', 'delivery-state.key'))
+        .source,
+    ).toBe('WEBHOOK_SECRET');
     expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
 
     // Someone edits .env while the host runs. The listener still holds the
@@ -450,7 +469,9 @@ describe('delivery-state signing keys', () => {
     expect(raw.mac).toBe(macAsBefore(raw.payload, 'fake-webhook-secret'));
 
     // The restart.
-    expect(initDeliveryStateKeys()).toEqual({
+    expect(
+      initDeliveryStateKeys(path.join(envDir, 'no-such', 'delivery-state.key')),
+    ).toEqual({
       sign: 'fake-dedicated-set-later',
       verify: ['fake-dedicated-set-later', 'fake-webhook-secret-rotated'],
       source: 'DELIVERY_STATE_SIGNING_KEY',

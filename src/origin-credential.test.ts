@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   hasOriginCredential,
   originCredentialEnv,
+  originCredentialProblem,
   redactOriginCredential,
   splitOriginCredential,
 } from './origin-credential.js';
@@ -165,5 +166,140 @@ describe('redactOriginCredential', () => {
   it('leaves text without a credential alone', () => {
     const text = `fatal: unable to access '${BARE}/': Could not resolve host`;
     expect(redactOriginCredential(text, [BARE, null, undefined])).toBe(text);
+  });
+});
+
+describe('redaction of a user name or a token with "@", ":" or "/" in it', () => {
+  // Obviously fake, and assembled so that no line holds a URL with a password.
+  const SECRET = ['fake', 'tok', '9912'].join('-');
+  const HOST = 'git.example.edu';
+  const at = String.fromCharCode(64);
+  const cases: [string, string, string][] = [
+    ['"@" in the user name, as written', `bot${at}corp.example`, SECRET],
+    ['"@" in the user name, encoded', 'bot%40corp.example', SECRET],
+    ['"@" in the token, as written', 'kb-bot', `${SECRET}${at}v2`],
+    ['"@" in the token, encoded', 'kb-bot', `${SECRET}%40v2`],
+    ['":" in the token, as written', 'kb-bot', `${SECRET}:part2`],
+    ['":" in the token, encoded', 'kb-bot', `${SECRET}%3Apart2`],
+    ['":" in the user name, encoded', 'kb%3Abot', SECRET],
+    ['"/" in the token, as written', 'kb-bot', `${SECRET}/part2`],
+    ['"/" in the token, encoded', 'kb-bot', `${SECRET}%2Fpart2`],
+    ['"/" in the user name, as written', 'team/kb-bot', SECRET],
+    ['"/" in the user name, encoded', 'team%2Fkb-bot', SECRET],
+    ['all three in both', `a${at}b:c/d`, `${SECRET}${at}x:y/z`],
+  ];
+
+  it.each(cases)('%s: with the URL known', (_name, user, token) => {
+    const url = `https://${user}:${token}${at}${HOST}/team/repo.git`;
+    const decodedUser = decodeURIComponent(user);
+    const decodedToken = decodeURIComponent(token);
+    const said = [
+      `Command failed: git clone --mirror -- ${url} /srv/x`,
+      `fatal: could not read Password for 'https://${user}${at}${HOST}'`,
+      `fatal: Authentication failed for 'https://${decodedUser}:${decodedToken}${at}${HOST}/team/repo.git/'`,
+      `remote: token ${decodedToken} is not valid for ${decodedUser}`,
+    ].join('\n');
+    const out = redactOriginCredential(said, [url]);
+    expect(out).not.toContain(SECRET);
+    expect(out).not.toContain(token);
+    expect(out).not.toContain(decodedToken);
+    expect(out).not.toContain(user);
+    expect(out).not.toContain(decodedUser);
+    expect(out).toContain(`${HOST}`);
+  });
+
+  it.each(cases)('%s: with no URL given', (_name, user, token) => {
+    const url = `https://${user}:${token}${at}${HOST}/team/repo.git`;
+    const out = redactOriginCredential(`unable to access '${url}/'`);
+    expect(out).not.toContain(SECRET);
+    expect(out).toContain(`***${at}${HOST}/team/repo.git`);
+  });
+
+  it('a token written as the user name, with "@" in it and no password', () => {
+    const url = `https://${SECRET}${at}v2${at}${HOST}/team/repo.git`;
+    expect(redactOriginCredential(`unable to access '${url}/'`)).toBe(
+      `unable to access 'https://***${at}${HOST}/team/repo.git/'`,
+    );
+    expect(redactOriginCredential(`said ${SECRET}${at}v2 again`, [url])).toBe(
+      'said *** again',
+    );
+  });
+
+  it('a URL on a scheme this host refuses is redacted like any other', () => {
+    const url = `http://kb-bot:${SECRET}${at}${HOST}/team/repo.git`;
+    const out = redactOriginCredential(
+      `clone of ${url} failed; token ${SECRET}`,
+      [url],
+    );
+    expect(out).not.toContain(SECRET);
+  });
+
+  it('leaves a URL with a port and no credential alone', () => {
+    const text = `fatal: unable to access 'https://${HOST}:8443/team/repo.git/'`;
+    expect(
+      redactOriginCredential(text, [`https://${HOST}:8443/team/repo.git`]),
+    ).toBe(text);
+  });
+});
+
+describe('originCredentialProblem', () => {
+  const SECRET = ['fake', 'tok', '9913'].join('-');
+  const at = String.fromCharCode(64);
+
+  it('refuses a credential on a scheme that is not encrypted, and never quotes it', () => {
+    for (const url of [
+      `http://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
+      `http://${SECRET}${at}git.example.edu/team/repo.git`,
+      `HTTP://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
+      `git://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
+      `ftp://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
+      `ssh://git:${SECRET}${at}git.example.edu/team/repo.git`,
+      `http://kb-bot:${SECRET}/x${at}git.example.edu/team/repo.git`,
+    ]) {
+      const problem = originCredentialProblem(url);
+      expect(problem, url.replace(SECRET, '…')).toBeTruthy();
+      expect(problem).not.toContain(SECRET);
+      expect(problem).not.toContain('kb-bot');
+      expect(problem).not.toContain('git.example.edu');
+    }
+    expect(
+      originCredentialProblem(
+        `http://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
+      ),
+    ).toMatch(/http:\/\/.*not encrypted.*https:\/\//);
+  });
+
+  it('has nothing to say about the forms the host handles', () => {
+    for (const url of [
+      '',
+      undefined,
+      null,
+      'https://git.example.edu/team/repo.git',
+      `https://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
+      'http://git.example.edu/team/repo.git',
+      'ssh://git@git.example.edu/team/repo.git',
+      'git@git.example.edu:team/repo.git',
+      '/srv/repos/origin.git',
+      'file:///srv/repos/origin.git',
+    ]) {
+      expect(originCredentialProblem(url), String(url)).toBeNull();
+    }
+  });
+});
+
+describe('the start-up step', () => {
+  it('main() refuses such an origin before anything talks to git, with a message built from the scheme only', () => {
+    const text = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8');
+    const main = text.slice(text.indexOf('async function main()'));
+    const check = main.indexOf(
+      'originCredentialProblem(process.env.PROGRAM_ORIGIN_URL)',
+    );
+    expect(check).toBeGreaterThan(0);
+    expect(main).toMatch(
+      /if \(originProblem\) throw new Error\(`PROGRAM_ORIGIN_URL: \$\{originProblem\}`\);/,
+    );
+    // Before the host repo is created, the mirror is read, or a channel starts.
+    for (const later of ['ensureHostRepo()', 'initDatabase()'])
+      expect(check).toBeLessThan(main.indexOf(later));
   });
 });

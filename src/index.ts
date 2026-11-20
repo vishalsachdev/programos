@@ -12,6 +12,7 @@ import {
   TELEGRAM_OWNER_JID,
   TIMEZONE,
   DATA_DIR,
+  DELIVERY_STATE_KEY_PATH,
 } from './config.js';
 import { assertIdentitySettingsConfigured } from './identity-settings-check.js';
 import { assertOutboundMailConfigured } from './outbound-email-smtp.js';
@@ -144,6 +145,7 @@ import {
   startOutboundEmailQueue,
 } from './outbound-email.js';
 import { assertEmailAuthConfigured } from './email-auth.js';
+import { originCredentialProblem } from './origin-credential.js';
 
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
@@ -909,6 +911,11 @@ async function main(): Promise<void> {
   // EMAIL_AUTH_MODE=enforce needs a trusted mail server to be named.
   assertEmailAuthConfigured();
 
+  // A credential in an origin URL is handled for https:// only. The message
+  // names the scheme, never the URL.
+  const originProblem = originCredentialProblem(process.env.PROGRAM_ORIGIN_URL);
+  if (originProblem) throw new Error(`PROGRAM_ORIGIN_URL: ${originProblem}`);
+
   // The host-owned repository must not sit inside the agent's checkout.
   const hostRepoProblem = hostRepoPlacementProblem();
   if (hostRepoProblem) throw new Error(hostRepoProblem);
@@ -927,10 +934,13 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   // Read the delivery-state signing key once, with the other secrets.
   const deliveryKeys = initDeliveryStateKeys();
-  if (
-    deliveryKeys.source &&
-    deliveryKeys.source !== 'DELIVERY_STATE_SIGNING_KEY'
-  )
+  if (deliveryKeys.source === 'key-file')
+    logger.info(
+      { keyFile: DELIVERY_STATE_KEY_PATH },
+      `Delivery state is signed with the key in ${DELIVERY_STATE_KEY_PATH}, which this host created because no signing key is configured. ` +
+        'Keep that file with the host; without it a reply in delivery at that moment is handled again.',
+    );
+  else if (deliveryKeys.source !== 'DELIVERY_STATE_SIGNING_KEY')
     logger.warn(
       { reused: deliveryKeys.source },
       `Delivery state is signed with ${deliveryKeys.source}, a secret that exists for another purpose. ` +

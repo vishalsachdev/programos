@@ -94,6 +94,22 @@ export const SENDER_ALLOWLIST_PATH = path.join(
   'nanoclaw',
   'sender-allowlist.json',
 );
+/**
+ * The host's own folder for files no container may see: the two allowlists
+ * above and the delivery-state key below. It is outside the project root
+ * (which the main group's container gets read-only), and an additional
+ * mount that would reach it is refused (`src/mount-security.ts`).
+ */
+export const HOST_CONFIG_DIR = path.join(HOME_DIR, '.config', 'nanoclaw');
+/**
+ * The key the host creates at its first start when no signing key is
+ * configured (`src/delivery-state.ts`). One line of 64 hex characters,
+ * readable by the host user only.
+ */
+export const DELIVERY_STATE_KEY_PATH = path.join(
+  HOST_CONFIG_DIR,
+  'delivery-state.key',
+);
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');

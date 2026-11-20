@@ -18,10 +18,11 @@ import {
 // sender on the institution's mail domain gets one "access closed" reply.
 // INSTITUTION_DOMAIN decides which domain that is.
 
-const TEST_PORT = 39345;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 
 vi.hoisted(() => {
-  process.env.WEBHOOK_PORT = '39345';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
   process.env.INSTITUTION_DOMAIN = 'uni.test';
 });
@@ -67,6 +68,7 @@ vi.mock('../outbound-email.js', async (importOriginal) => {
 });
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { flushAuditLog } from '../audit-log.js';
 import { getChannelFactory } from './registry.js';
 
@@ -117,7 +119,7 @@ describe('access-closed reply follows INSTITUTION_DOMAIN', () => {
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
   });
 
   beforeEach(() => {

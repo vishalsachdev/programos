@@ -3607,6 +3607,88 @@ index 0000000000000000000000000000000000000000..febfb5ac31ea850f110b11cbe13e537d
 +}
 +
 +process.exit(failed ? 1 : 0);
+diff --git a/scripts/cleanup-sessions.sh b/scripts/cleanup-sessions.sh
+index c56d77754ca9a39b990a2054efc9e5b2f530b88f..a29fb7e543a48a3db4323e189f851861e660795f 100755
+--- a/scripts/cleanup-sessions.sh
++++ b/scripts/cleanup-sessions.sh
+@@ -7,6 +7,8 @@
+ #
+ # Retention:
+ #   Session JSONLs + tool-results:  7 days  (active session always kept)
++#   If the active sessions cannot be read (sqlite3 missing, query fails), no
++#   session file is pruned; group logs still are. The last line says so.
+ #   Debug logs:                     3 days
+ #   Todo files:                     3 days
+ #   Telemetry:                      7 days
+@@ -79,7 +81,21 @@ if [ ! -f "$STORE_DB" ]; then
+   exit 1
+ fi
+ 
+-ACTIVE_IDS=$(sqlite3 "$STORE_DB" "SELECT session_id FROM sessions;" 2>/dev/null || true)
++# Fail safe: the active session ids are the only thing that protects a live
++# session's files below. When they cannot be read (no sqlite3 command, or the
++# query fails), no session file is pruned and the summary line says why. An
++# empty list from a query that worked is a real answer and prunes as usual.
++ACTIVE_IDS=""
++SESSION_PRUNE_SKIPPED=""
++if ! command -v sqlite3 >/dev/null 2>&1; then
++  SESSION_PRUNE_SKIPPED="the sqlite3 command is not installed, so the active sessions cannot be read"
++elif ! ACTIVE_IDS=$(sqlite3 "$STORE_DB" "SELECT session_id FROM sessions;" 2>/dev/null); then
++  ACTIVE_IDS=""
++  SESSION_PRUNE_SKIPPED="the active sessions could not be read from $STORE_DB"
++fi
++if [ -n "$SESSION_PRUNE_SKIPPED" ]; then
++  log "WARNING: session files not pruned: $SESSION_PRUNE_SKIPPED" >&2
++fi
+ 
+ is_active() {
+   echo "$ACTIVE_IDS" | grep -qF "$1"
+@@ -88,6 +104,7 @@ is_active() {
+ # --- Prune session JSONLs and tool-results dirs ---
+ 
+ for group_dir in "$SESSIONS_DIR"/*/; do
++  [ -z "$SESSION_PRUNE_SKIPPED" ] || break
+   [ -d "$group_dir" ] || continue
+   jsonl_dir="$group_dir/.claude/projects/-workspace-group"
+   if [ -L "$group_dir/.claude" ] || [ -L "$group_dir/.claude/projects" ] ||
+@@ -118,6 +135,7 @@ done
+ # --- Prune debug logs (>3 days, skip files named after active sessions) ---
+ 
+ for group_dir in "$SESSIONS_DIR"/*/; do
++  [ -z "$SESSION_PRUNE_SKIPPED" ] || break
+   debug_dir="$group_dir/.claude/debug"
+   [ -L "$group_dir/.claude" ] || [ -L "$debug_dir" ] && continue
+   [ -d "$debug_dir" ] || continue
+@@ -131,6 +149,7 @@ done
+ # --- Prune todo files (>3 days, skip files named after active sessions) ---
+ 
+ for group_dir in "$SESSIONS_DIR"/*/; do
++  [ -z "$SESSION_PRUNE_SKIPPED" ] || break
+   todos_dir="$group_dir/.claude/todos"
+   [ -L "$group_dir/.claude" ] || [ -L "$todos_dir" ] && continue
+   [ -d "$todos_dir" ] || continue
+@@ -149,6 +168,7 @@ done
+ # --- Prune telemetry (>7 days, skip files named after active sessions) ---
+ 
+ for group_dir in "$SESSIONS_DIR"/*/; do
++  [ -z "$SESSION_PRUNE_SKIPPED" ] || break
+   telem_dir="$group_dir/.claude/telemetry"
+   [ -L "$group_dir/.claude" ] || [ -L "$telem_dir" ] && continue
+   [ -d "$telem_dir" ] || continue
+@@ -174,8 +194,11 @@ done
+ 
+ # --- Summary ---
+ 
++NOTE=""
++[ -z "$SESSION_PRUNE_SKIPPED" ] ||
++  NOTE="; session files NOT pruned: $SESSION_PRUNE_SKIPPED"
+ if $DRY_RUN; then
+-  log "DRY RUN complete — would free ~${TOTAL_FREED}K"
++  log "DRY RUN complete — would free ~${TOTAL_FREED}K$NOTE"
+ else
+-  log "Done — freed ~${TOTAL_FREED}K"
++  log "Done — freed ~${TOTAL_FREED}K$NOTE"
+ fi
 diff --git a/scripts/deploy.sh b/scripts/deploy.sh
 index e2dce1affabbcbdd2801e66bbc60224e564e5109..be7f049b7b953dc337c22eabe7134ca23ed14581 100755
 --- a/scripts/deploy.sh
@@ -8280,10 +8362,10 @@ index a1d1e32cbb6d17c44a5b8fec947f4a5f949e2213..a0c6f7e0e17c4e04bf1f04011c0ddd4d
        return;
 diff --git a/src/channels/webhook-admin-alert-email.test.ts b/src/channels/webhook-admin-alert-email.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..71f739c90fbf2fda7de03cbd6395f87d004b4f1d
+index 0000000000000000000000000000000000000000..d98efb79558859e7f297260e80f5c2198f4b1880
 --- /dev/null
 +++ b/src/channels/webhook-admin-alert-email.test.ts
-@@ -0,0 +1,408 @@
+@@ -0,0 +1,410 @@
 +import crypto from 'crypto';
 +import fs from 'fs';
 +import http from 'http';
@@ -8305,14 +8387,15 @@ index 0000000000000000000000000000000000000000..71f739c90fbf2fda7de03cbd6395f87d
 +// webhook channel raises must still be delivered, as one mail to the
 +// operator address, and nothing may call the Telegram API.
 +
-+const TEST_PORT = 39347;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
 +const OPERATOR = 'avery-ops@example.edu';
 +const RAW = 'discussions/raw/2026-10-24-re-admissions-updates.md';
 +const SVIX_SECRET_BYTES = Buffer.from('admin-alert-route-test-secret');
 +const SVIX_SECRET = `whsec_${SVIX_SECRET_BYTES.toString('base64')}`;
 +
 +vi.hoisted(() => {
-+  process.env.WEBHOOK_PORT = '39347';
++  process.env.WEBHOOK_PORT = '0';
 +  process.env.WEBHOOK_HOST = '127.0.0.1';
 +  delete process.env.TELEGRAM_BOT_TOKEN;
 +  delete process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -8404,6 +8487,7 @@ index 0000000000000000000000000000000000000000..71f739c90fbf2fda7de03cbd6395f87d
 +});
 +
 +import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 +import { ADMIN_ALERT_MAIL_HEADERS } from '../admin-alert.js';
 +import { flushAuditLog } from '../audit-log.js';
 +import { _closeDatabase, _initTestDatabase } from '../db.js';
@@ -8502,7 +8586,7 @@ index 0000000000000000000000000000000000000000..71f739c90fbf2fda7de03cbd6395f87d
 +    });
 +    if (!channel) throw new Error('webhook channel not registered');
 +    disconnect = () => channel.disconnect();
-+    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
 +  });
 +
 +  beforeEach(() => {
@@ -8693,10 +8777,39 @@ index 0000000000000000000000000000000000000000..71f739c90fbf2fda7de03cbd6395f87d
 +  });
 +});
 diff --git a/src/channels/webhook-attachment-recovery.test.ts b/src/channels/webhook-attachment-recovery.test.ts
-index 05877f2bd548b7efcc9b20c0079308b698eca5b7..0961fa71bb4d35e316e73dc5b7dbf040a1b8da34 100644
+index 05877f2bd548b7efcc9b20c0079308b698eca5b7..f8fd25c5a5e6249abb4eebf0d1f25c8ef5bcdaec 100644
 --- a/src/channels/webhook-attachment-recovery.test.ts
 +++ b/src/channels/webhook-attachment-recovery.test.ts
-@@ -166,7 +166,8 @@ describe('webhook large-attachment recovery', () => {
+@@ -14,10 +14,11 @@ import {
+   vi,
+ } from 'vitest';
+ 
+-const TEST_PORT = 39342;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
+ 
+ vi.hoisted(() => {
+-  process.env.WEBHOOK_PORT = '39342';
++  process.env.WEBHOOK_PORT = '0';
+   process.env.WEBHOOK_HOST = '127.0.0.1';
+   // The quota tests below post 12 retries; pin the person cap to 10 so a
+   // retry wrongly charged against quota still fails them (G19 v9.12 raised
+@@ -93,6 +94,7 @@ vi.mock('../document-extractor.js', async (importOriginal) => {
+ });
+ 
+ import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
+ import { flushAuditLog } from '../audit-log.js';
+ import type { NewMessage } from '../types.js';
+ import { getChannelFactory } from './registry.js';
+@@ -160,13 +162,14 @@ describe('webhook large-attachment recovery', () => {
+     });
+     if (!channel) throw new Error('webhook channel not registered');
+     disconnect = () => channel.disconnect();
+-    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
+   });
+ 
    beforeEach(() => {
      repo = fs.mkdtempSync(path.join(os.tmpdir(), 'attachment-recovery-'));
      fs.mkdirSync(path.join(repo, '.git')); // checkout-fs refuses a non-checkout
@@ -8706,7 +8819,7 @@ index 05877f2bd548b7efcc9b20c0079308b698eca5b7..0961fa71bb4d35e316e73dc5b7dbf040
      mocks.extractEmailAttachments.mockClear();
      mocks.telegramFetch.mockClear();
      currentOnMessage = vi.fn<OnMessage>();
-@@ -224,7 +225,7 @@ describe('webhook large-attachment recovery', () => {
+@@ -224,7 +227,7 @@ describe('webhook large-attachment recovery', () => {
    it('returns a retryable failure when the receipt cannot be written', async () => {
      const invalidRepo = path.join(repo, 'not-a-directory');
      fs.writeFileSync(invalidRepo, 'file');
@@ -8717,10 +8830,10 @@ index 05877f2bd548b7efcc9b20c0079308b698eca5b7..0961fa71bb4d35e316e73dc5b7dbf040
        phase: 'accepted',
 diff --git a/src/channels/webhook-auth.test.ts b/src/channels/webhook-auth.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..506f28c446924213d630ccd632a38e9e1fe896d2
+index 0000000000000000000000000000000000000000..df91c8c26603ed7f0b65c4d534310ae3d22ddd29
 --- /dev/null
 +++ b/src/channels/webhook-auth.test.ts
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,125 @@
 +/**
 + * Issue 55, the inbound mail listener: WEBHOOK_SECRET is checked with a
 + * constant-time comparison. Right secret passes; wrong, empty, missing and
@@ -8730,11 +8843,12 @@ index 0000000000000000000000000000000000000000..506f28c446924213d630ccd632a38e9e
 +
 +import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 +
-+const TEST_PORT = 39348;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
 +const SECRET = 'webhook-auth-test-secret';
 +
 +vi.hoisted(() => {
-+  process.env.WEBHOOK_PORT = '39348';
++  process.env.WEBHOOK_PORT = '0';
 +  process.env.WEBHOOK_HOST = '127.0.0.1';
 +  delete process.env.WEBHOOK_SECRET;
 +});
@@ -8760,6 +8874,7 @@ index 0000000000000000000000000000000000000000..506f28c446924213d630ccd632a38e9e
 +}));
 +
 +import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 +import { _closeDatabase, _initTestDatabase } from '../db.js';
 +import { getChannelFactory } from './registry.js';
 +
@@ -8805,7 +8920,7 @@ index 0000000000000000000000000000000000000000..506f28c446924213d630ccd632a38e9e
 +    });
 +    if (!channel) throw new Error('webhook channel not registered');
 +    disconnect = () => channel.disconnect();
-+    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
 +  });
 +
 +  afterAll(async () => {
@@ -8958,10 +9073,10 @@ index 0000000000000000000000000000000000000000..d3d36ac3089d4e8015231793677e443d
 +});
 diff --git a/src/channels/webhook-email-auth.test.ts b/src/channels/webhook-email-auth.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c91061f25de351a2423024e1b387314dfaf904e8
+index 0000000000000000000000000000000000000000..feaa9e9e0e6b8344d6880a930c9019154110f845
 --- /dev/null
 +++ b/src/channels/webhook-email-auth.test.ts
-@@ -0,0 +1,489 @@
+@@ -0,0 +1,491 @@
 +import { execFileSync } from 'child_process';
 +import fs from 'fs';
 +import http from 'http';
@@ -8984,11 +9099,12 @@ index 0000000000000000000000000000000000000000..c91061f25de351a2423024e1b387314d
 +// changes. The messages are the synthetic fixtures of `inbound/`; the `auth`
 +// field is what the intake worker would send (`inbound/src/auth.ts`).
 +
-+const TEST_PORT = 39348;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
 +
 +const hoisted = vi.hoisted(() => {
 +  const dir = `${process.env.TMPDIR || '/tmp'}/programos-email-auth-${process.pid}`;
-+  process.env.WEBHOOK_PORT = '39348';
++  process.env.WEBHOOK_PORT = '0';
 +  process.env.WEBHOOK_HOST = '127.0.0.1';
 +  process.env.INSTITUTION_DOMAIN = 'example.edu';
 +  // The real reader is used, pointed at a mirror this test creates.
@@ -9050,6 +9166,7 @@ index 0000000000000000000000000000000000000000..c91061f25de351a2423024e1b387314d
 +}));
 +
 +import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 +import { flushAuditLog } from '../audit-log.js';
 +import { _closeDatabase, _initTestDatabase } from '../db.js';
 +import { getChannelFactory } from './registry.js';
@@ -9277,7 +9394,7 @@ index 0000000000000000000000000000000000000000..c91061f25de351a2423024e1b387314d
 +    });
 +    if (!channel) throw new Error('webhook channel not registered');
 +    disconnect = () => channel.disconnect();
-+    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
 +  });
 +
 +  beforeEach(() => {
@@ -9453,10 +9570,10 @@ index 0000000000000000000000000000000000000000..c91061f25de351a2423024e1b387314d
 +});
 diff --git a/src/channels/webhook-inbound-intake.test.ts b/src/channels/webhook-inbound-intake.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..6abed551248d2a84153305b1c7bee8d2d18a531d
+index 0000000000000000000000000000000000000000..8b894437d03f25938660488bbcdf34063179f937
 --- /dev/null
 +++ b/src/channels/webhook-inbound-intake.test.ts
-@@ -0,0 +1,433 @@
+@@ -0,0 +1,435 @@
 +import crypto from 'crypto';
 +import { execFileSync } from 'child_process';
 +import fs from 'fs';
@@ -9485,11 +9602,12 @@ index 0000000000000000000000000000000000000000..6abed551248d2a84153305b1c7bee8d2
 +// committed the way the worker commits them: both files in one commit, by
 +// the author in `contract.json`.
 +
-+const TEST_PORT = 39345;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
 +
 +const hoisted = vi.hoisted(() => {
 +  const dir = `${process.env.TMPDIR || '/tmp'}/programos-inbound-intake-${process.pid}`;
-+  process.env.WEBHOOK_PORT = '39345';
++  process.env.WEBHOOK_PORT = '0';
 +  process.env.WEBHOOK_HOST = '127.0.0.1';
 +  // The real reader is used, pointed at a mirror this test creates.
 +  process.env.PROGRAM_READ_MIRROR = `${dir}/mirror.git`;
@@ -9537,6 +9655,7 @@ index 0000000000000000000000000000000000000000..6abed551248d2a84153305b1c7bee8d2
 +});
 +
 +import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 +import { flushAuditLog } from '../audit-log.js';
 +import {
 +  _closeDatabase,
@@ -9696,7 +9815,7 @@ index 0000000000000000000000000000000000000000..6abed551248d2a84153305b1c7bee8d2
 +    });
 +    if (!channel) throw new Error('webhook channel not registered');
 +    disconnect = () => channel.disconnect();
-+    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
 +  });
 +
 +  beforeEach(() => {
@@ -9891,17 +10010,19 @@ index 0000000000000000000000000000000000000000..6abed551248d2a84153305b1c7bee8d2
 +  });
 +});
 diff --git a/src/channels/webhook-ingest-context.test.ts b/src/channels/webhook-ingest-context.test.ts
-index a9ed2d9b39c983458cb3420c3a85cebc53fd75c8..4315fef1bcc9171a34b91e6cf7e59299458ee643 100644
+index a9ed2d9b39c983458cb3420c3a85cebc53fd75c8..661ebde59bc2572e9fa38112b2b4ce360cfc0639 100644
 --- a/src/channels/webhook-ingest-context.test.ts
 +++ b/src/channels/webhook-ingest-context.test.ts
-@@ -2,12 +2,14 @@ import fs from 'fs';
+@@ -2,12 +2,15 @@ import fs from 'fs';
  import os from 'os';
  import path from 'path';
  
 +import { Parser } from 'htmlparser2';
  import { afterEach, describe, expect, it, vi } from 'vitest';
  
- const TEST_PORT = 39341;
+-const TEST_PORT = 39341;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
  const receivedProbe = vi.hoisted(() => ({
    eml: '',
    readyTimer: undefined as Promise<number> | undefined,
@@ -9909,7 +10030,7 @@ index a9ed2d9b39c983458cb3420c3a85cebc53fd75c8..4315fef1bcc9171a34b91e6cf7e59299
  }));
  
  vi.mock('mailparser', async (importOriginal) => {
-@@ -16,6 +18,9 @@ vi.mock('mailparser', async (importOriginal) => {
+@@ -16,6 +19,9 @@ vi.mock('mailparser', async (importOriginal) => {
      ...original,
      simpleParser: async (input: string) => {
        const result = await original.simpleParser(input);
@@ -9919,15 +10040,25 @@ index a9ed2d9b39c983458cb3420c3a85cebc53fd75c8..4315fef1bcc9171a34b91e6cf7e59299
        // R3-2: arm the ready timer AFTER real email parsing, before evidence collection.
        const start = performance.now();
        receivedProbe.readyTimer = new Promise((resolve) =>
-@@ -69,6 +74,7 @@ vi.mock('../repo-reader.js', () => ({
+@@ -27,7 +33,7 @@ vi.mock('mailparser', async (importOriginal) => {
+ });
+ 
+ vi.hoisted(() => {
+-  process.env.WEBHOOK_PORT = '39341';
++  process.env.WEBHOOK_PORT = '0';
+   process.env.WEBHOOK_HOST = '127.0.0.1';
+ });
+ 
+@@ -69,6 +75,8 @@ vi.mock('../repo-reader.js', () => ({
  }));
  
  import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 +import { inboundEmailAddressesInHtml } from '../inbound-html-addresses.js';
  import { resolveChannelDeliveryContext } from '../channel-delivery.js';
  import { resolveEmailGateContext } from '../email-gate-context.js';
  import { processDelivery } from '../delivery-processor.js';
-@@ -91,6 +97,7 @@ import { getChannelFactory } from './registry.js';
+@@ -91,6 +99,7 @@ import { getChannelFactory } from './registry.js';
  describe('webhook inbound delivery context', () => {
    let disconnect: (() => Promise<void>) | undefined;
    let tempDir: string | undefined;
@@ -9935,7 +10066,7 @@ index a9ed2d9b39c983458cb3420c3a85cebc53fd75c8..4315fef1bcc9171a34b91e6cf7e59299
  
    afterEach(async () => {
      await disconnect?.();
-@@ -100,6 +107,8 @@ describe('webhook inbound delivery context', () => {
+@@ -100,6 +109,8 @@ describe('webhook inbound delivery context', () => {
      tempDir = undefined;
      receivedProbe.eml = '';
      receivedProbe.readyTimer = undefined;
@@ -9944,7 +10075,25 @@ index a9ed2d9b39c983458cb3420c3a85cebc53fd75c8..4315fef1bcc9171a34b91e6cf7e59299
    });
  
    // Catches losing addresses supplied in the actual inbound body across intake and restart.
-@@ -282,8 +291,29 @@ describe('webhook inbound delivery context', () => {
+@@ -126,7 +137,7 @@ describe('webhook inbound delivery context', () => {
+     });
+     if (!channel) throw new Error('webhook channel not registered');
+     disconnect = () => channel.disconnect();
+-    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
+ 
+     const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
+       method: 'POST',
+@@ -237,7 +248,7 @@ describe('webhook inbound delivery context', () => {
+       });
+       if (!channel) throw new Error('missing webhook');
+       disconnect = () => channel.disconnect();
+-      await channel.connect();
++      TEST_PORT = await connectOnFreePort(channel);
+       const subject = 'Please confirm subject-only@example.org';
+       const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
+         method: 'POST',
+@@ -282,8 +293,29 @@ describe('webhook inbound delivery context', () => {
    );
  
    // R8-3: the ready timer starts after MIME parsing, isolating the new evidence scan.
@@ -9975,7 +10124,16 @@ index a9ed2d9b39c983458cb3420c3a85cebc53fd75c8..4315fef1bcc9171a34b91e6cf7e59299
      const onMessage = vi.fn();
      const channel = getChannelFactory('webhook')!({
        onMessage,
-@@ -313,7 +343,18 @@ describe('webhook inbound delivery context', () => {
+@@ -291,7 +323,7 @@ describe('webhook inbound delivery context', () => {
+       registeredGroups: () => ({}),
+     })!;
+     disconnect = () => channel.disconnect();
+-    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
+     const html = '<span>'.repeat(64_000) + '</div>'.repeat(64_000);
+     const raw = `From: person@example.edu\r\nTo: program@example.org\r\nSubject: Evidence\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="deep-html"\r\n\r\n--deep-html\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nOrdinary received text.\r\n--deep-html\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}\r\n--deep-html--\r\n`;
+     const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
+@@ -313,7 +345,18 @@ describe('webhook inbound delivery context', () => {
      expect(response.status).toBe(200);
      expect(onMessage).toHaveBeenCalledOnce();
      expect(receivedProbe.readyTimer).toBeDefined();
@@ -9995,12 +10153,48 @@ index a9ed2d9b39c983458cb3420c3a85cebc53fd75c8..4315fef1bcc9171a34b91e6cf7e59299
    }, 20_000);
  
    // R3-2: reproduces 128,000 brackets in the original .eml delaying an already-ready timer at intake.
+@@ -327,7 +370,7 @@ describe('webhook inbound delivery context', () => {
+     });
+     if (!channel) throw new Error('missing webhook');
+     disconnect = () => channel.disconnect();
+-    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
+     receivedProbe.eml = `From: person@example.edu\r\nTo: program@example.org\r\nSubject: Evidence\r\n\r\n${'['.repeat(128_000)}person@example.edu`;
+     const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
+       method: 'POST',
+@@ -365,7 +408,7 @@ describe('webhook inbound delivery context', () => {
+     });
+     if (!channel) throw new Error('missing webhook');
+     disconnect = () => channel.disconnect();
+-    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
+     receivedProbe.eml =
+       'From: person@example.edu\r\nTo: "__header-contact@example.org__" <program@example.org>\r\nSubject: Confirm __subject-contact@example.org__\r\n\r\nPlease confirm:\n```\ninbound-only@example.org\n```\nContact __wrapped-contact@example.org__ and genuine_@example.org.';
+     const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
+@@ -535,7 +578,7 @@ describe('webhook inbound delivery context', () => {
+       });
+       if (!channel) throw new Error('missing webhook');
+       disconnect = () => channel.disconnect();
+-      await channel.connect();
++      TEST_PORT = await connectOnFreePort(channel);
+       receivedProbe.eml = `From: person@example.edu\r\nTo: program@example.org\r\n${includeCc ? `Cc:${foldedCc ? '\r\n ' : ' '}${bareCc ? actualAddress : `<${actualAddress}>`}\r\n` : ''}Subject: Contact\r\n\r\n${receivedBody}`;
+       const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
+         method: 'POST',
+@@ -761,7 +804,7 @@ describe('webhook inbound delivery context', () => {
+         registeredGroups: () => ({}),
+       })!;
+       disconnect = () => channel.disconnect();
+-      await channel.connect();
++      TEST_PORT = await connectOnFreePort(channel);
+       const raw = `From: person@example.edu\r\nTo: program@example.org\r\nSubject: HTML contact\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="html-contact"\r\n\r\n--html-contact\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nPlease use the Advisor contact link.\r\n--html-contact\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}\r\n--html-contact--\r\n`;
+       const response = await fetch(`http://127.0.0.1:${TEST_PORT}/`, {
+         method: 'POST',
 diff --git a/src/channels/webhook-institution-domain.test.ts b/src/channels/webhook-institution-domain.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..aed627472587da38136c151fac5bfa66a9e3a73e
+index 0000000000000000000000000000000000000000..16096db11eceacec3f581b76dae42044f4d49e4d
 --- /dev/null
 +++ b/src/channels/webhook-institution-domain.test.ts
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,183 @@
 +import fs from 'fs';
 +import http from 'http';
 +import os from 'os';
@@ -10021,10 +10215,11 @@ index 0000000000000000000000000000000000000000..aed627472587da38136c151fac5bfa66
 +// sender on the institution's mail domain gets one "access closed" reply.
 +// INSTITUTION_DOMAIN decides which domain that is.
 +
-+const TEST_PORT = 39345;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
 +
 +vi.hoisted(() => {
-+  process.env.WEBHOOK_PORT = '39345';
++  process.env.WEBHOOK_PORT = '0';
 +  process.env.WEBHOOK_HOST = '127.0.0.1';
 +  process.env.INSTITUTION_DOMAIN = 'uni.test';
 +});
@@ -10070,6 +10265,7 @@ index 0000000000000000000000000000000000000000..aed627472587da38136c151fac5bfa66
 +});
 +
 +import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 +import { flushAuditLog } from '../audit-log.js';
 +import { getChannelFactory } from './registry.js';
 +
@@ -10120,7 +10316,7 @@ index 0000000000000000000000000000000000000000..aed627472587da38136c151fac5bfa66
 +    });
 +    if (!channel) throw new Error('webhook channel not registered');
 +    disconnect = () => channel.disconnect();
-+    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
 +  });
 +
 +  beforeEach(() => {
@@ -10182,6 +10378,76 @@ index 0000000000000000000000000000000000000000..aed627472587da38136c151fac5bfa66
 +    expect(onMessage).not.toHaveBeenCalled();
 +  });
 +});
+diff --git a/src/channels/webhook-routed-approvals.test.ts b/src/channels/webhook-routed-approvals.test.ts
+index 3c5f1c1f8d8422403384865dd544127bf5075dbd..b43c2a7023f14590f159821436fd1548b765027c 100644
+--- a/src/channels/webhook-routed-approvals.test.ts
++++ b/src/channels/webhook-routed-approvals.test.ts
+@@ -19,10 +19,11 @@ import {
+ // the email, a GitHub push of the Routed Approvals entry starts the scan, and
+ // the host relays to the approver from the sender's allowlist row.
+ 
+-const TEST_PORT = 39344;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
+ 
+ vi.hoisted(() => {
+-  process.env.WEBHOOK_PORT = '39344';
++  process.env.WEBHOOK_PORT = '0';
+   process.env.WEBHOOK_HOST = '127.0.0.1';
+ });
+ 
+@@ -97,6 +98,7 @@ vi.mock('../outbound-email.js', async (importOriginal) => {
+ });
+ 
+ import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
+ import { flushAuditLog } from '../audit-log.js';
+ import {
+   _closeDatabase,
+@@ -163,7 +165,7 @@ describe('routed approvals at the webhook', () => {
+     });
+     if (!channel) throw new Error('webhook channel not registered');
+     disconnect = () => channel.disconnect();
+-    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
+   });
+ 
+   beforeEach(() => {
+diff --git a/src/channels/webhook-sender-cap.test.ts b/src/channels/webhook-sender-cap.test.ts
+index 708ceba29cf8b9ef91b5dcd5619de69dfc4cec23..f51b5116dd7748a9b4158273315b8ddde37123c9 100644
+--- a/src/channels/webhook-sender-cap.test.ts
++++ b/src/channels/webhook-sender-cap.test.ts
+@@ -18,10 +18,11 @@ import {
+ // principal 10; the first over-cap message alerts Avery once and sends a
+ // person (never an agent) one notice.
+ 
+-const TEST_PORT = 39343;
++// The system assigns a free port at connect(); see connectOnFreePort.
++let TEST_PORT = 0;
+ 
+ vi.hoisted(() => {
+-  process.env.WEBHOOK_PORT = '39343';
++  process.env.WEBHOOK_PORT = '0';
+   process.env.WEBHOOK_HOST = '127.0.0.1';
+ });
+ 
+@@ -81,6 +82,7 @@ vi.mock('../outbound-email.js', async (importOriginal) => {
+ });
+ 
+ import './webhook.js';
++import { connectOnFreePort } from '../test-support/webhook-test-port.js';
+ import { flushAuditLog } from '../audit-log.js';
+ import type { NewMessage } from '../types.js';
+ import { getChannelFactory } from './registry.js';
+@@ -157,7 +159,7 @@ describe('G19 tiered sender cap at the webhook', () => {
+     });
+     if (!channel) throw new Error('webhook channel not registered');
+     disconnect = () => channel.disconnect();
+-    await channel.connect();
++    TEST_PORT = await connectOnFreePort(channel);
+   });
+ 
+   beforeEach(() => {
 diff --git a/src/channels/webhook.ts b/src/channels/webhook.ts
 index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c24498610ed62 100644
 --- a/src/channels/webhook.ts
@@ -10506,6 +10772,163 @@ index 60406aa9bdf381de1dc5cccc33b3df88cf1cfba9..6033bf90c18d506cfe65a1e1a7408862
    // Short timeout: these run synchronously on the message path.
    return isRoot
      ? { uid: CHECKOUT_OWNER.uid, gid: CHECKOUT_OWNER.gid, env, timeout: 5_000 }
+diff --git a/src/cleanup-sessions-symlink.test.ts b/src/cleanup-sessions-symlink.test.ts
+index 2e9a42f5214e971a55d369ccee830e4f5b1c960f..1b4c7c5d9aa46943262632d2179cb1c79649377f 100644
+--- a/src/cleanup-sessions-symlink.test.ts
++++ b/src/cleanup-sessions-symlink.test.ts
+@@ -12,15 +12,78 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+ let root: string; // a throwaway project root holding a copy of the script
+ let outside: string;
+ 
+-function run(): { status: number | null; out: string } {
++function run(env?: NodeJS.ProcessEnv): {
++  status: number | null;
++  out: string;
++  lastLine: string;
++} {
+   const r = spawnSync(
+     'bash',
+     [path.join(root, 'scripts/cleanup-sessions.sh')],
+     {
+       encoding: 'utf8',
++      ...(env ? { env } : {}),
+     },
+   );
+-  return { status: r.status, out: r.stdout + r.stderr };
++  return {
++    status: r.status,
++    out: r.stdout + r.stderr,
++    // The host logs the last line of stdout only (src/session-cleanup.ts).
++    lastLine: r.stdout.trim().split('\n').pop() ?? '',
++  };
++}
++
++// A PATH that holds every command the script uses except sqlite3, so the
++// test does not depend on whether the machine has sqlite3 installed.
++function pathWithoutSqlite3(): string {
++  const bin = path.join(root, 'bin-no-sqlite3');
++  fs.mkdirSync(bin);
++  for (const cmd of [
++    'bash',
++    'basename',
++    'cut',
++    'dirname',
++    'du',
++    'find',
++    'grep',
++    'rm',
++    'wc',
++  ]) {
++    const found = (process.env.PATH ?? '')
++      .split(path.delimiter)
++      .map((d) => path.join(d, cmd))
++      .find((p) => fs.existsSync(p));
++    if (!found) throw new Error(`test setup: ${cmd} not found on PATH`);
++    fs.symlinkSync(found, path.join(bin, cmd));
++  }
++  return bin;
++}
++
++// A sqlite3 that answers the session query from a fixed list, or fails.
++function pathWithFakeSqlite3(script: string): string {
++  const bin = pathWithoutSqlite3();
++  fs.writeFileSync(path.join(bin, 'sqlite3'), `#!/bin/bash\n${script}\n`, {
++    mode: 0o755,
++  });
++  return bin;
++}
++
++function sessionFiles(): { dir: string; files: string[] } {
++  const claude = path.join(root, 'data/sessions/g/.claude');
++  const dir = path.join(claude, 'projects/-workspace-group');
++  for (const d of [dir, 'debug', 'todos', 'telemetry'])
++    fs.mkdirSync(path.isAbsolute(d) ? d : path.join(claude, d), {
++      recursive: true,
++    });
++  const files = [
++    path.join(dir, 'live.jsonl'),
++    path.join(dir, 'stale.jsonl'),
++    path.join(claude, 'debug/live.txt'),
++    path.join(claude, 'todos/live-agent-live.json'),
++    path.join(claude, 'telemetry/live.json'),
++  ];
++  files.forEach(makeOld);
++  return { dir, files };
+ }
+ 
+ function makeDb(file: string, sessionIds: string[] = []): void {
+@@ -58,7 +121,8 @@ describe('cleanup-sessions.sh', () => {
+     );
+     fs.mkdirSync(dir, { recursive: true });
+     makeOld(path.join(dir, 'old.jsonl'));
+-    expect(run().status).toBe(0);
++    // A sqlite3 that reports no active session: the machine's own may be absent.
++    expect(run({ PATH: pathWithFakeSqlite3('exit 0') }).status).toBe(0);
+     expect(fs.existsSync(path.join(dir, 'old.jsonl'))).toBe(false);
+   });
+ 
+@@ -72,6 +136,61 @@ describe('cleanup-sessions.sh', () => {
+     expect(fs.existsSync(path.join(outside, 'host.jsonl'))).toBe(true);
+   });
+ 
++  it('prunes no session file when sqlite3 is not installed, and says why', () => {
++    makeDb(path.join(root, 'store/messages.db'), ['live']);
++    const { files } = sessionFiles();
++    const logs = path.join(root, 'groups/g/logs');
++    fs.mkdirSync(logs, { recursive: true });
++    makeOld(path.join(logs, 'run.log'));
++
++    const r = run({ PATH: pathWithoutSqlite3() });
++
++    expect(r.status).toBe(0);
++    for (const f of files) expect(fs.existsSync(f), f).toBe(true);
++    expect(r.out).toMatch(/session files not pruned: the sqlite3 command/i);
++    expect(r.lastLine).toMatch(
++      /session files NOT pruned: the sqlite3 command is not installed/,
++    );
++    // Group logs do not depend on the session list and are still pruned.
++    expect(fs.existsSync(path.join(logs, 'run.log'))).toBe(false);
++  });
++
++  it('prunes no session file when the session query fails', () => {
++    makeDb(path.join(root, 'store/messages.db'), ['live']);
++    const { files } = sessionFiles();
++
++    const r = run({ PATH: pathWithFakeSqlite3('exit 1') });
++
++    expect(r.status).toBe(0);
++    for (const f of files) expect(fs.existsSync(f), f).toBe(true);
++    expect(r.lastLine).toMatch(
++      /session files NOT pruned: the active sessions could not be read/,
++    );
++  });
++
++  it('keeps the active session and prunes the rest when the query works', () => {
++    makeDb(path.join(root, 'store/messages.db'), ['live']);
++    const { dir, files } = sessionFiles();
++
++    const r = run({ PATH: pathWithFakeSqlite3('echo live') });
++
++    expect(r.status).toBe(0);
++    expect(fs.existsSync(path.join(dir, 'stale.jsonl'))).toBe(false);
++    for (const f of files.filter((f) => !f.endsWith('stale.jsonl')))
++      expect(fs.existsSync(f), f).toBe(true);
++    expect(r.out).not.toMatch(/NOT pruned/i);
++  });
++
++  it('prunes as usual when the query works and no session is active', () => {
++    makeDb(path.join(root, 'store/messages.db'));
++    const { files } = sessionFiles();
++
++    const r = run({ PATH: pathWithFakeSqlite3('exit 0') });
++
++    expect(r.status).toBe(0);
++    for (const f of files) expect(fs.existsSync(f), f).toBe(false);
++  });
++
+   it('does not open store/messages.db through a planted link', () => {
+     const hostDb = path.join(outside, 'other.db');
+     makeDb(hostDb, ['keep-me']);
 diff --git a/src/config.ts b/src/config.ts
 index c4c5543928a92309d50c25511c4937b287a2f666..5c501b043d9f62d3b49f072187e743959cfdb7fd 100644
 --- a/src/config.ts
@@ -28614,6 +29037,51 @@ index 0000000000000000000000000000000000000000..3e2a1d7e760afb150b72e3992b4b0743
 +    new RegExp(`^${name}:[ \\t]*(.*(?:\\r?\\n[ \\t].*)*)`, 'im'),
 +  );
 +  return match ? match[1].replace(/\r?\n[ \t]+/g, ' ').trim() : undefined;
++}
+diff --git a/src/test-support/webhook-test-port.ts b/src/test-support/webhook-test-port.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f012e768141bee66e6b5ada3fd75f8deb4aa3496
+--- /dev/null
++++ b/src/test-support/webhook-test-port.ts
+@@ -0,0 +1,39 @@
++/**
++ * Test helper: start a channel whose listener was configured with port 0
++ * (WEBHOOK_PORT='0', so the operating system picks a free port) and return
++ * the port it got. The channel does not expose its server, so the helper
++ * watches net.Server.prototype.listen for the duration of connect() only.
++ *
++ * Fixed port numbers in the tests collided: two files shared one number, and
++ * the numbers sat inside the system's range for outgoing connections.
++ */
++import net from 'net';
++
++export async function connectOnFreePort(channel: {
++  connect(): Promise<void>;
++}): Promise<number> {
++  const started: net.Server[] = [];
++  const original = net.Server.prototype.listen;
++  net.Server.prototype.listen = function (
++    this: net.Server,
++    ...args: unknown[]
++  ): net.Server {
++    started.push(this);
++    return (original as (...a: unknown[]) => net.Server).apply(this, args);
++  } as typeof net.Server.prototype.listen;
++  try {
++    await channel.connect();
++  } finally {
++    net.Server.prototype.listen = original;
++  }
++  if (started.length !== 1) {
++    throw new Error(
++      `connectOnFreePort: expected one listener from connect(), saw ${started.length}`,
++    );
++  }
++  const address = started[0].address();
++  if (!address || typeof address === 'string' || !address.port) {
++    throw new Error('connectOnFreePort: the listener has no assigned port');
++  }
++  return address.port;
 +}
 diff --git a/src/web-tools.test.ts b/src/web-tools.test.ts
 new file mode 100644

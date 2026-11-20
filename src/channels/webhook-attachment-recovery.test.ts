@@ -14,10 +14,11 @@ import {
   vi,
 } from 'vitest';
 
-const TEST_PORT = 39342;
+// The system assigns a free port at connect(); see connectOnFreePort.
+let TEST_PORT = 0;
 
 vi.hoisted(() => {
-  process.env.WEBHOOK_PORT = '39342';
+  process.env.WEBHOOK_PORT = '0';
   process.env.WEBHOOK_HOST = '127.0.0.1';
   // The quota tests below post 12 retries; pin the person cap to 10 so a
   // retry wrongly charged against quota still fails them (G19 v9.12 raised
@@ -93,6 +94,7 @@ vi.mock('../document-extractor.js', async (importOriginal) => {
 });
 
 import './webhook.js';
+import { connectOnFreePort } from '../test-support/webhook-test-port.js';
 import { flushAuditLog } from '../audit-log.js';
 import type { NewMessage } from '../types.js';
 import { getChannelFactory } from './registry.js';
@@ -160,7 +162,7 @@ describe('webhook large-attachment recovery', () => {
     });
     if (!channel) throw new Error('webhook channel not registered');
     disconnect = () => channel.disconnect();
-    await channel.connect();
+    TEST_PORT = await connectOnFreePort(channel);
   });
 
   beforeEach(() => {

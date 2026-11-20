@@ -32,5 +32,5 @@ The code in this repo as it is shipped:
 - An adopter's own deployment, host, mail provider or changed code. Report those to whoever runs them.
 - The reference deployment. It is private and is not tested through this repo.
 - The upstream framework and third-party packages. Report those to their projects; tell us too if the fault is reachable here.
-- The inbound mail intake service. None is in this repo.
+- An inbound mail intake service other than the one in `inbound/`. That worker is in scope as shipped; the mail platform it runs on is not.
 - Findings that need the admin's own credentials or access to the host.

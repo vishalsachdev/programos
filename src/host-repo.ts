@@ -43,9 +43,11 @@ import { BOT_GIT_AUTHOR_EMAIL } from './instance-identity.js';
 import {
   hasOriginCredential,
   originCredentialEnv,
+  originCredentialProblem,
   redactOriginCredential,
   splitOriginCredential,
 } from './origin-credential.js';
+import { realPathOfNearestExisting } from './real-path.js';
 import { logger } from './logger.js';
 import { CHECKOUT_OWNER, getProgramRepoPath } from './program-repo.js';
 import {
@@ -151,6 +153,8 @@ function originAsSet(): { url: string | null; problem?: string } {
   if (!url) return { url: null };
   if (!isPlainGitUrl(url))
     return { url: null, problem: `the origin from ${source} is not a git URL` };
+  const credentialProblem = originCredentialProblem(url);
+  if (credentialProblem) return { url: null, problem: credentialProblem };
   if (process.env.PROGRAM_ORIGIN_PATTERN && !isExpectedOrigin(url))
     return {
       url: null,
@@ -385,6 +389,44 @@ export function hostRepoPlacementProblem(): string | null {
   if (!path.isAbsolute(host)) return 'PROGRAM_HOST_REPO must be absolute';
   if (inside(checkout, host) || inside(host, checkout))
     return 'PROGRAM_HOST_REPO and PROGRAM_REPO must not contain each other';
+  return hostRepoLinkProblem(host, checkout);
+}
+
+/**
+ * A PROGRAM_HOST_REPO that is a symbolic link (or sits below one). The host
+ * works in the folder the link leads to, so that folder is the one that has
+ * to be safe: outside the agent's checkout and outside the project folder
+ * (both are mounted into a container), a folder, and owned by the user the
+ * host runs as (or, for a host that runs as root, by the user it hands the
+ * repositories to). Null when the path holds no link, or the link leads to
+ * such a folder.
+ */
+function hostRepoLinkProblem(host: string, checkout: string): string | null {
+  // The nearest existing folder decides: at the first start the repo's own
+  // folder is not there yet, and a link above it must still be seen.
+  const real = realPathOfNearestExisting(host);
+  if (real === path.resolve(host)) return null;
+  const realCheckout = realPathOfNearestExisting(checkout);
+  if (inside(realCheckout, real) || inside(real, realCheckout))
+    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, which is inside PROGRAM_REPO or contains it. The agent can write there`;
+  if (inside(realPathOfNearestExisting(process.cwd()), real))
+    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, inside the project folder, which the main group's container can read`;
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(real);
+  } catch {
+    // Nothing there yet: the host creates it, as its own.
+    return null;
+  }
+  if (!st.isDirectory())
+    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, which is not a folder`;
+  const uid = process.getuid?.();
+  if (
+    uid !== undefined &&
+    st.uid !== uid &&
+    !(uid === 0 && st.uid === CHECKOUT_OWNER.uid)
+  )
+    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, which belongs to another user. Point the setting at a folder the host's user owns`;
   return null;
 }
 
@@ -432,14 +474,27 @@ const securedHostRepos = new Set<string>();
 function secureHostRepo(): void {
   const host = getHostRepoPath();
   if (securedHostRepos.has(host)) return;
+  // The folder the path leads to: a PROGRAM_HOST_REPO that is a symbolic
+  // link is repaired at its target, which the placement check
+  // (hostRepoLinkProblem) has accepted as the host's own.
+  const real = realOrResolved(host);
   const targets: Array<[string, number]> = [
-    [host, 0o700],
-    [path.join(host, '.git', 'config'), 0o600],
+    [real, 0o700],
+    [path.join(real, '.git', 'config'), 0o600],
   ];
   try {
     for (const [target, mode] of targets) {
       const st = fs.lstatSync(target);
-      if (st.isSymbolicLink() || (st.mode & 0o077) === 0) continue;
+      if (st.isSymbolicLink()) {
+        // Only `.git/config` can be one here. Its mode is the mode of
+        // whatever it points at, which is not this host's to change.
+        logger.error(
+          { path: target },
+          'Host repo: this path is a symbolic link, so its permissions were not checked. Replace it with a regular file',
+        );
+        continue;
+      }
+      if ((st.mode & 0o077) === 0) continue;
       fs.chmodSync(target, mode);
       logger.warn(
         { path: target, was: (st.mode & 0o777).toString(8) },

@@ -70,6 +70,25 @@ afterEach(() => {
 });
 
 describe('read mirror and a token in PROGRAM_ORIGIN_URL', () => {
+  it('a token on an http:// origin: no clone is started, and the refusal names the scheme and not the URL', () => {
+    const plain = `http://${USER}:${TOKEN}@${ADDRESS}`;
+    vi.stubEnv('PROGRAM_ORIGIN_URL', plain);
+    vi.stubEnv(
+      'PROGRAM_ORIGIN_PATTERN',
+      '^https?://([A-Za-z0-9_.~:-]+@)?127[.]0[.]0[.]1:9/team/',
+    );
+    const recorder = recordGitProcesses(kb.root);
+    const reader = new RepoReader(kb.mirror);
+
+    expect(reader.init()).toBe(false);
+
+    expect(recorder.argv().some((a) => a.startsWith('clone'))).toBe(false);
+    expect(recorder.argvText()).not.toContain(TOKEN);
+    expect(logged.join('\n')).not.toContain(TOKEN);
+    expect(logged.join('\n')).not.toContain(USER);
+    expect(logged.join('\n')).toMatch(/mirror bootstrap refused.*http:\/\//);
+  });
+
   it('the bootstrap clone has the token in its environment only: not in its arguments, not in a log line', () => {
     const recorder = recordGitProcesses(kb.root);
     const reader = new RepoReader(kb.mirror);

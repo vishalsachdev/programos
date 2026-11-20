@@ -110,8 +110,8 @@ describe('the check at start', () => {
     expect(() => checkEnvFilePermissions()).not.toThrow();
   });
 
-  it.each(['false', '1', 'yes', ''])(
-    'only the value "true" makes it a refusal (%j does not)',
+  it.each(['false', 'FALSE', '0', 'off', '', '  '])(
+    'an off value, or none, does not make it a refusal (%j)',
     (value) => {
       writeWithMode(0o644);
       vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', value);
@@ -119,6 +119,48 @@ describe('the check at start', () => {
       expect(() => checkEnvFilePermissions()).not.toThrow();
     },
   );
+
+  it.each(['true', 'TRUE', ' True ', '1', 'on', 'On'])(
+    'every on value the other settings take makes it a refusal (%j)',
+    (value) => {
+      writeWithMode(0o644);
+      vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', value);
+      expect(() => checkEnvFilePermissions()).toThrow(
+        /refusing to start: REQUIRE_PRIVATE_ENV_FILE/,
+      );
+    },
+  );
+
+  it.each(['yes', 'enabled', 'ture', '2'])(
+    'a value the host does not know stops the start, whatever the mode of the file (%j)',
+    (value) => {
+      for (const mode of [0o644, 0o600]) {
+        writeWithMode(mode);
+        vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', value);
+        expect(() => checkEnvFilePermissions()).toThrow(
+          /REQUIRE_PRIVATE_ENV_FILE must be "true" or "false"/,
+        );
+      }
+    },
+  );
+
+  it('a value in .env that the host does not know stops the start too', () => {
+    writeWithMode(0o600, 'REQUIRE_PRIVATE_ENV_FILE=yes\n');
+    expect(() => checkEnvFilePermissions()).toThrow(
+      /REQUIRE_PRIVATE_ENV_FILE must be/,
+    );
+  });
+
+  it('a process value of spaces does not hide the value in .env', () => {
+    writeWithMode(0o644, 'REQUIRE_PRIVATE_ENV_FILE=true\n');
+    vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', '   ');
+    expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);
+  });
+
+  it('"on" in .env is a refusal for a readable file', () => {
+    writeWithMode(0o644, 'REQUIRE_PRIVATE_ENV_FILE=on\n');
+    expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);
+  });
 });
 
 describe('writeEnvFile (the setup steps)', () => {

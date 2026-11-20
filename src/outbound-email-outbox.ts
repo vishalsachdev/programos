@@ -14,7 +14,12 @@ import { STORE_DIR } from './config.js';
 import { getDatabase } from './db.js';
 import { assertSafeDbPath } from './host-fs-safety.js';
 
-export type OutboxLane = 'transactional' | 'bulk';
+/**
+ * `alert` carries operator alert mail (admin-alert.ts) with the transactional
+ * limits. Its own lane keeps a burst of alerts from delaying replies or
+ * filling their queue.
+ */
+export type OutboxLane = 'transactional' | 'bulk' | 'alert';
 
 export interface OutboundEmailOutboxResult {
   status: 'sent';

@@ -87,7 +87,7 @@ That language reads well in a "Responsible AI" or "Human-in-the-loop" section wi
 
 ## Related: agent-proposed mount additions
 
-The same proposes-via-PR / humans-merge mechanism extends to content sources: a running bot that detects "users keep asking about content I can't see" can open a PR against the program repo's `MOUNTS.md` proposing a new external mount, backed by the audit-log entries that motivated the proposal. A human reviews, makes the host-side mount change, and redeploys. See [`10-content-sources.md`](../../SPEC.md) → "Bot-proposed mount additions."
+The same proposes-via-PR / humans-merge mechanism extends to content sources: a running bot that detects "users keep asking about content I can't see" can open a PR against a proposed `MOUNTS.md` file in the program repo (not in the template; no code reads it) proposing a new external mount, backed by the audit-log entries that motivated the proposal. A human reviews, makes the host-side mount change, and redeploys. See [`content-sources.md`](./content-sources.md) → "Bot-proposed mount additions."
 
 ## Future work (optional research overlay)
 

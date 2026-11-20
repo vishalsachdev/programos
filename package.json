@@ -1,7 +1,26 @@
 {
-  "name": "nanoclaw",
+  "name": "programos",
   "version": "1.2.53",
-  "description": "Personal Claude assistant. Lightweight, secure, customizable.",
+  "description": "A coordinator bot for a project or program team, and the knowledge base it keeps.",
+  "keywords": [
+    "coordinator",
+    "email-bot",
+    "knowledge-base",
+    "team-assistant",
+    "governance",
+    "audit-log",
+    "claude",
+    "agent"
+  ],
+  "homepage": "https://programos.illinihunt.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vishalsachdev/programos.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vishalsachdev/programos/issues"
+  },
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

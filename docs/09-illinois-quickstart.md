@@ -28,7 +28,7 @@ This doc is Illinois-specific by design. If you're at another institution, the s
 
 ## Prerequisites
 
-- A ProgramOS deployment at Tier 2 (VPS) or Tier 3 (Cloud) with a public webhook URL. Tier 1 (laptop) doesn't apply — for laptop deployments, use the IMAP-polling email variant in [`03-channels.md`](./03-channels.md) instead, polling the shared mailbox directly.
+- A ProgramOS deployment at Tier 2 (VPS) or Tier 3 (Cloud) with a public webhook URL. Tier 1 (laptop) doesn't apply: this recipe needs a public webhook, and the code in this repo has no mail-polling variant. See [`deployment.md`](./deployment.md) for what a laptop can run.
 - A unit-controlled `@illinois.edu` mailbox. Best practice: a **role/shared mailbox** the unit's admin team owns (not a personal account). If you don't have one, request a shared mailbox from Tech Services — that ask is uncontroversial and usually fast.
 - A separate domain you control. Call it `bot.example.org` for the rest of this doc.
 

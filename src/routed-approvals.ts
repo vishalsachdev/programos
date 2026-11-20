@@ -35,6 +35,7 @@ import {
   type RoutedApprovalRow,
 } from './db.js';
 import { inboundEmailAddressesInText } from './email-addresses.js';
+import { INSTITUTION_DOMAIN } from './instance-identity.js';
 import { logger } from './logger.js';
 import type {
   OutboundEmail,
@@ -317,7 +318,7 @@ export function resolveRouteApprover(
   let basis: 'row-route' | 'no-route' = 'no-route';
   if (netids.length === 1) {
     const matches = rows.filter(
-      (r) => r.email === `${netids[0]}@example.edu` && !r.agent,
+      (r) => r.email === `${netids[0]}@${INSTITUTION_DOMAIN}` && !r.agent,
     );
     if (matches.length !== 1) {
       return {

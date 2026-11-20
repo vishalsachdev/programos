@@ -437,6 +437,54 @@ describe('admin alert Teams route', () => {
       expect(telegram).toHaveBeenCalledTimes(2);
     });
 
+    it('two unrelated alerts that overlap in time are both posted', async () => {
+      setRoute('teams');
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let calls = 0;
+      mocks.fetch.mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) await gate; // the first post is still in flight
+        return new Response(null, { status: 202 });
+      });
+      const first = dispatchAdminAlert('First', {
+        telegram: telegramReturning('sent'),
+      });
+      await vi.waitFor(() => expect(calls).toBe(1));
+      // Raised elsewhere (not from inside the first post) while it waits.
+      const second = dispatchAdminAlert('Second', {
+        telegram: telegramReturning('sent'),
+      });
+      await vi.waitFor(() => expect(calls).toBe(2));
+      release();
+      expect(await first).toBe('sent');
+      expect(await second).toBe('sent');
+      expect(teamsCalls()).toHaveLength(2);
+    });
+
+    it('an overlapping alert that fails still makes the throwing alerter reject', async () => {
+      setRoute('teams');
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let calls = 0;
+      mocks.fetch.mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) {
+          await gate;
+          return new Response(null, { status: 202 });
+        }
+        return new Response(null, { status: 500 });
+      });
+      const alerter = createThrowingAdminAlerter(vi.fn(async () => {}));
+      const first = alerter('First');
+      await vi.waitFor(() => expect(calls).toBe(1));
+      const second = alerter('Second').catch((err: Error) => err);
+      await vi.waitFor(() => expect(calls).toBe(2));
+      release();
+      await expect(first).resolves.toBeUndefined();
+      expect(await second).toBeInstanceOf(Error);
+    });
+
     it('with teams alone, that inner alert is suppressed, not posted', async () => {
       setRoute('teams');
       let innerOutcome: unknown;

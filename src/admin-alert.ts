@@ -32,12 +32,14 @@
  *
  * Rules the Teams route keeps:
  *   - No recursion. A failed Teams post is logged and returned as a result;
- *     it raises no alert of its own, and an alert raised while a Teams post
- *     is in flight is not posted to Teams again.
+ *     it raises no alert of its own, and an alert raised from inside a Teams
+ *     post's own call chain is not posted to Teams again. Unrelated alerts
+ *     that merely overlap in time are posted as usual.
  *   - One request, with a timeout; any status outside 2xx is a failure.
  *   - Size. The request body is kept under TEAMS_ALERT_MAX_BODY_BYTES; a
  *     longer alert is cut with a visible marker, never split into parts.
  */
+import { AsyncLocalStorage } from 'async_hooks';
 import { randomUUID } from 'crypto';
 
 import { AGENT_INBOX_ADDRESSES, ASSISTANT_NAME, BOT_EMAIL } from './config.js';
@@ -415,8 +417,18 @@ function describeError(err: unknown, url: string | undefined): string {
   return redactTeamsUrl(String(err), url);
 }
 
-/** True while a Teams post is in flight: nothing is posted to Teams then. */
-let teamsPostInFlight = 0;
+/**
+ * Set only inside the call chain of one Teams request (async context, not a
+ * process-wide flag). An alert raised from inside that chain is the post
+ * reporting on itself and is not posted to Teams; an unrelated alert that
+ * happens to overlap in time is not in this context and is posted.
+ */
+const teamsPostContext = new AsyncLocalStorage<true>();
+
+/** True when called from inside a Teams request's own call chain. */
+export function isInsideTeamsPost(): boolean {
+  return teamsPostContext.getStore() === true;
+}
 
 /**
  * Post one alert to the Teams workflow. Never throws; returns one of the
@@ -445,25 +457,26 @@ export async function sendAdminAlertTeams(
       'Admin alert cut to fit the Teams message size limit',
     );
   }
-  teamsPostInFlight += 1;
   let response: Response;
   try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildTeamsAlertPayload(fitted.text)),
-      // A redirect would send the alert somewhere the operator did not set.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(teamsTimeoutMs),
-    });
+    // Only the request runs in the context; the audit write below does not,
+    // so a later alert from the audit commit is not mistaken for recursion.
+    response = await teamsPostContext.run(true, () =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildTeamsAlertPayload(fitted.text)),
+        // A redirect would send the alert somewhere the operator did not set.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(teamsTimeoutMs),
+      }),
+    );
   } catch (err) {
     logger.error(
       { error: describeError(err, url) },
       'Admin alert to Teams failed (no answer or timeout)',
     );
     return 'failed-transient';
-  } finally {
-    teamsPostInFlight -= 1;
   }
   // The body is not read: an error page could echo the request URL.
   void response.body?.cancel().catch(() => {});
@@ -549,7 +562,7 @@ export async function dispatchAdminAlert(
     }
   }
   if (routes.includes('teams')) {
-    if (teamsPostInFlight > 0) {
+    if (isInsideTeamsPost()) {
       logger.error(
         { text: text.slice(0, 500), routes },
         'Admin alert raised during a Teams post; not posted to Teams (no recursion)',

@@ -46,7 +46,7 @@ The rest of the behaviour:
 | Any other status, including a redirect | Failed, not retryable. Redirects are not followed. |
 | The workflow URL is unset or not `https://` | Not sent. The startup check logs one error naming `ADMIN_ALERT_TEAMS_WORKFLOW_URL`. |
 | The alert is too long | Teams refuses a message above about 28 KB ([Teams connector reference](https://learn.microsoft.com/en-us/connectors/teams/), known issues). The request body is kept under 24,000 bytes: a longer alert is cut and ends with `[Cut to fit the Teams message size limit: N characters left out.]`. It is never split into several posts. |
-| An alert raised while a Teams post is in flight | Not posted to Teams (no recursion). A failed Teams post raises no alert of its own; it is logged. |
+| An alert raised from inside a Teams post's own call chain | Not posted to Teams (no recursion). A failed Teams post raises no alert of its own; it is logged. Unrelated alerts that only overlap in time are each posted. |
 
 There is no retry inside the route. A dead-letter or shortfall alert that no route delivered is kept and replayed by the caller, as on the other routes. Microsoft throttles a webhook that gets more than four requests a second ([Create an Incoming Webhook](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook)), and Power Automate turns off a flow that is throttled for 14 days in a row ([limits](https://learn.microsoft.com/en-us/power-automate/limits-and-config)). Alert volume is small, but a burst of failures can produce several alerts at once.
 

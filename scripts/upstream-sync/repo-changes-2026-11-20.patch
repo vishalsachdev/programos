@@ -4149,10 +4149,10 @@ index 804ae4a58b2eeaa5a78f93ffb2cf31652db1a2e1..fb133fab0f1ec46eade32203a51b7caa
      REGISTERED_GROUPS: registeredGroups,
 diff --git a/src/admin-alert-teams.test.ts b/src/admin-alert-teams.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..833530d9c997eeba18ca64bc007647e360d6ba95
+index 0000000000000000000000000000000000000000..4bc50ff2c4d1f3f975e9d7ba5d13525af1233c97
 --- /dev/null
 +++ b/src/admin-alert-teams.test.ts
-@@ -0,0 +1,554 @@
+@@ -0,0 +1,602 @@
 +import fs from 'fs';
 +import os from 'os';
 +import path from 'path';
@@ -4590,6 +4590,54 @@ index 0000000000000000000000000000000000000000..833530d9c997eeba18ca64bc007647e3
 +      await Promise.all(inner);
 +      expect(teamsCalls()).toHaveLength(1);
 +      expect(telegram).toHaveBeenCalledTimes(2);
++    });
++
++    it('two unrelated alerts that overlap in time are both posted', async () => {
++      setRoute('teams');
++      let release!: () => void;
++      const gate = new Promise<void>((resolve) => (release = resolve));
++      let calls = 0;
++      mocks.fetch.mockImplementation(async () => {
++        calls += 1;
++        if (calls === 1) await gate; // the first post is still in flight
++        return new Response(null, { status: 202 });
++      });
++      const first = dispatchAdminAlert('First', {
++        telegram: telegramReturning('sent'),
++      });
++      await vi.waitFor(() => expect(calls).toBe(1));
++      // Raised elsewhere (not from inside the first post) while it waits.
++      const second = dispatchAdminAlert('Second', {
++        telegram: telegramReturning('sent'),
++      });
++      await vi.waitFor(() => expect(calls).toBe(2));
++      release();
++      expect(await first).toBe('sent');
++      expect(await second).toBe('sent');
++      expect(teamsCalls()).toHaveLength(2);
++    });
++
++    it('an overlapping alert that fails still makes the throwing alerter reject', async () => {
++      setRoute('teams');
++      let release!: () => void;
++      const gate = new Promise<void>((resolve) => (release = resolve));
++      let calls = 0;
++      mocks.fetch.mockImplementation(async () => {
++        calls += 1;
++        if (calls === 1) {
++          await gate;
++          return new Response(null, { status: 202 });
++        }
++        return new Response(null, { status: 500 });
++      });
++      const alerter = createThrowingAdminAlerter(vi.fn(async () => {}));
++      const first = alerter('First');
++      await vi.waitFor(() => expect(calls).toBe(1));
++      const second = alerter('Second').catch((err: Error) => err);
++      await vi.waitFor(() => expect(calls).toBe(2));
++      release();
++      await expect(first).resolves.toBeUndefined();
++      expect(await second).toBeInstanceOf(Error);
 +    });
 +
 +    it('with teams alone, that inner alert is suppressed, not posted', async () => {
@@ -5553,10 +5601,10 @@ index 0000000000000000000000000000000000000000..c2f28e2bfd5e3f573b22b9cb334c0fb0
 +});
 diff --git a/src/admin-alert.ts b/src/admin-alert.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..713981777573865e9d17dab929b42deb6251e676
+index 0000000000000000000000000000000000000000..0d6376e1e99a964409f21618cc0a0d6dd6453aea
 --- /dev/null
 +++ b/src/admin-alert.ts
-@@ -0,0 +1,733 @@
+@@ -0,0 +1,746 @@
 +/**
 + * Operator (admin) alerts: one function that follows ADMIN_ALERT_ROUTE.
 + *
@@ -5591,12 +5639,14 @@ index 0000000000000000000000000000000000000000..713981777573865e9d17dab929b42deb
 + *
 + * Rules the Teams route keeps:
 + *   - No recursion. A failed Teams post is logged and returned as a result;
-+ *     it raises no alert of its own, and an alert raised while a Teams post
-+ *     is in flight is not posted to Teams again.
++ *     it raises no alert of its own, and an alert raised from inside a Teams
++ *     post's own call chain is not posted to Teams again. Unrelated alerts
++ *     that merely overlap in time are posted as usual.
 + *   - One request, with a timeout; any status outside 2xx is a failure.
 + *   - Size. The request body is kept under TEAMS_ALERT_MAX_BODY_BYTES; a
 + *     longer alert is cut with a visible marker, never split into parts.
 + */
++import { AsyncLocalStorage } from 'async_hooks';
 +import { randomUUID } from 'crypto';
 +
 +import { AGENT_INBOX_ADDRESSES, ASSISTANT_NAME, BOT_EMAIL } from './config.js';
@@ -5974,8 +6024,18 @@ index 0000000000000000000000000000000000000000..713981777573865e9d17dab929b42deb
 +  return redactTeamsUrl(String(err), url);
 +}
 +
-+/** True while a Teams post is in flight: nothing is posted to Teams then. */
-+let teamsPostInFlight = 0;
++/**
++ * Set only inside the call chain of one Teams request (async context, not a
++ * process-wide flag). An alert raised from inside that chain is the post
++ * reporting on itself and is not posted to Teams; an unrelated alert that
++ * happens to overlap in time is not in this context and is posted.
++ */
++const teamsPostContext = new AsyncLocalStorage<true>();
++
++/** True when called from inside a Teams request's own call chain. */
++export function isInsideTeamsPost(): boolean {
++  return teamsPostContext.getStore() === true;
++}
 +
 +/**
 + * Post one alert to the Teams workflow. Never throws; returns one of the
@@ -6004,25 +6064,26 @@ index 0000000000000000000000000000000000000000..713981777573865e9d17dab929b42deb
 +      'Admin alert cut to fit the Teams message size limit',
 +    );
 +  }
-+  teamsPostInFlight += 1;
 +  let response: Response;
 +  try {
-+    response = await fetch(url, {
-+      method: 'POST',
-+      headers: { 'Content-Type': 'application/json' },
-+      body: JSON.stringify(buildTeamsAlertPayload(fitted.text)),
-+      // A redirect would send the alert somewhere the operator did not set.
-+      redirect: 'manual',
-+      signal: AbortSignal.timeout(teamsTimeoutMs),
-+    });
++    // Only the request runs in the context; the audit write below does not,
++    // so a later alert from the audit commit is not mistaken for recursion.
++    response = await teamsPostContext.run(true, () =>
++      fetch(url, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify(buildTeamsAlertPayload(fitted.text)),
++        // A redirect would send the alert somewhere the operator did not set.
++        redirect: 'manual',
++        signal: AbortSignal.timeout(teamsTimeoutMs),
++      }),
++    );
 +  } catch (err) {
 +    logger.error(
 +      { error: describeError(err, url) },
 +      'Admin alert to Teams failed (no answer or timeout)',
 +    );
 +    return 'failed-transient';
-+  } finally {
-+    teamsPostInFlight -= 1;
 +  }
 +  // The body is not read: an error page could echo the request URL.
 +  void response.body?.cancel().catch(() => {});
@@ -6108,7 +6169,7 @@ index 0000000000000000000000000000000000000000..713981777573865e9d17dab929b42deb
 +    }
 +  }
 +  if (routes.includes('teams')) {
-+    if (teamsPostInFlight > 0) {
++    if (isInsideTeamsPost()) {
 +      logger.error(
 +        { text: text.slice(0, 500), routes },
 +        'Admin alert raised during a Teams post; not posted to Teams (no recursion)',

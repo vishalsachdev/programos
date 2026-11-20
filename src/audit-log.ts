@@ -17,6 +17,7 @@ import {
   makeSensorId,
   placeholderFor,
   runBehaviourSensor,
+  sensorEmailRepliesEnabled,
 } from './behaviour-sensor.js';
 import { channelFromJid, webChatSessionIdFromJid } from './channel-utils.js';
 import { logger } from './logger.js';
@@ -355,15 +356,55 @@ function outboundEmailLines(args: OutboundEmailAuditArgs): string[] {
   ];
 }
 
+/**
+ * What the reply sensor needs to check an email reply: the reply text the
+ * delivery gate accepted and the message it answers. Only the reply delivery
+ * path passes it; mail from the send_email tool, operator alerts and
+ * scheduled mail are not replies and are never checked (the chat path does
+ * not check its counterparts either).
+ */
+export interface EmailReplySensorInput {
+  replyText: string;
+  requestContext?: string;
+}
+
+/**
+ * `reply` is given for a delivered reply. With SENSOR_EMAIL_REPLIES on, the
+ * entry then carries a sensor line and the sensor runs once, after the entry
+ * is written: a retry of the same delivery finds the Delivery-ID and starts
+ * nothing. With the setting off (the default) the entry is unchanged and no
+ * request is made. The sensor never changes the result returned here.
+ */
 export function logOutboundEmailOnce(
   args: OutboundEmailAuditArgs & { deliveryId: string },
+  reply?: EmailReplySensorInput,
 ): AuditWriteResult {
   const marker = `**Delivery-ID:** ${singleLine(args.deliveryId, 200)}`;
-  return appendAuditEntryOnce(
-    marker,
-    outboundEmailLines(args),
+  if (!reply || !sensorEmailRepliesEnabled()) {
+    return appendAuditEntryOnce(
+      marker,
+      outboundEmailLines(args),
+      'outbound-email',
+    );
+  }
+  const inspection = inspectMarker(marker);
+  if (inspection === 'recorded') return 'already-recorded';
+  if (inspection === 'inspection-failed') return 'write-failed';
+  const sensorId = makeSensorId(localTimeHms(TIMEZONE));
+  const file = appendAuditEntry(
+    [...outboundEmailLines(args), placeholderFor(sensorId), marker],
     'outbound-email',
   );
+  if (!file) return 'write-failed';
+  // Fire-and-forget, as for chat: the mail is already sent and audited.
+  runBehaviourSensor(
+    reply.replyText,
+    file,
+    sensorId,
+    undefined,
+    reply.requestContext,
+  ).catch((err) => logger.warn({ err }, 'Behaviour sensor: unhandled error'));
+  return 'written';
 }
 
 export function logOutboundEmail(args: OutboundEmailAuditArgs): void {

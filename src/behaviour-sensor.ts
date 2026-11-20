@@ -191,6 +191,25 @@ export function shouldSkipSensor(replyText: string): boolean {
   return false;
 }
 
+/**
+ * Whether the sensor also checks email replies (SENSOR_EMAIL_REPLIES), off
+ * by default. Chat replies are always checked while the sensor is on. Turning
+ * this on sends the text of each delivered email reply, the start of the
+ * message it answers and ground-truth excerpts to the sensor's provider, so
+ * it is a choice and not a default. BEHAVIOUR_SENSOR_DISABLED=1 still turns
+ * every check off. Process environment first, then `.env`. Read on each call.
+ */
+export function sensorEmailRepliesEnabled(): boolean {
+  const value = (
+    process.env.SENSOR_EMAIL_REPLIES ||
+    readEnvFile(['SENSOR_EMAIL_REPLIES']).SENSOR_EMAIL_REPLIES ||
+    ''
+  )
+    .trim()
+    .toLowerCase();
+  return value === '1' || value === 'true' || value === 'on';
+}
+
 export function makeSensorId(time: string): string {
   const suffix = Math.random().toString(36).slice(2, 8);
   return `${time}-${suffix}`;

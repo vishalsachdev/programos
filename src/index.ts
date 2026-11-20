@@ -62,7 +62,6 @@ import {
   trustedBodyAddressesFromContext,
   formatGateRefusal,
   type DeliveryGateContext,
-  formatShortfallAlert,
   setDeliveryShortfallAlerter,
   warnIfShortReply,
 } from './delivery-gate.js';
@@ -123,6 +122,13 @@ import {
 } from './delivery-processor.js';
 import { stripMarkdown } from './email-format.js';
 import {
+  adminShortfallAlerter,
+  checkAdminAlertConfig,
+  createThrowingAdminAlerter,
+  sendTestAdminAlerts,
+  type ThrowingAdminAlerter,
+} from './admin-alert.js';
+import {
   shutdownOutboundEmailQueue,
   startOutboundEmailQueue,
 } from './outbound-email.js';
@@ -135,7 +141,7 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
-let sendDeadLetterAlert: (text: string) => Promise<void> = async (text) => {
+let sendDeadLetterAlert: ThrowingAdminAlerter = async (text) => {
   logger.error({ text }, 'Alert channel is not initialized');
   // Never resolve silently: an unsent alert must not look delivered to the
   // shortfall-replay layer, which deletes an alert only on confirmation.
@@ -1031,7 +1037,10 @@ async function main(): Promise<void> {
   // fire-and-forget catch it themselves; the shortfall-alert replay layer needs
   // the rejection, because a swallowed failure there reads as a confirmed
   // delivery and drops the alert permanently (round-3 review P1).
-  sendDeadLetterAlert = async (text: string): Promise<void> => {
+  // This is the Telegram route. sendDeadLetterAlert follows ADMIN_ALERT_ROUTE
+  // (admin-alert.ts) and keeps the same contract: it rejects when no route
+  // delivered the alert.
+  const sendViaAlertChannel = async (text: string): Promise<void> => {
     const alertJid = resolveDeadLetterJid();
     const alertChannel = findChannel(channels, alertJid);
     if (!alertChannel) {
@@ -1047,17 +1056,31 @@ async function main(): Promise<void> {
       throw new Error(`Alert delivery failed: ${outcome.reason}`);
     }
   };
+  sendDeadLetterAlert = createThrowingAdminAlerter(sendViaAlertChannel);
+  checkAdminAlertConfig();
 
   // G46 delivery completeness: any email fan-out shortfall (intended vs
   // actually-sent recipients) alerts the owner naming the missed recipients —
   // never silent partial success.
-  setDeliveryShortfallAlerter(async (shortfall) => {
-    await sendDeadLetterAlert(formatShortfallAlert(shortfall));
-  });
+  setDeliveryShortfallAlerter(
+    adminShortfallAlerter((text, opts) => sendDeadLetterAlert(text, opts)),
+  );
 
   // Start the durable email outbox queue only AFTER the owner alert channel is
   // wired, so replayed terminal outcomes and retained shortfalls alert the owner.
   startOutboundEmailQueue();
+
+  // First start: ADMIN_ALERT_TEST=1 sends one test alert on each enabled
+  // route and logs each result. Process environment only.
+  if (process.env.ADMIN_ALERT_TEST === '1') {
+    void sendTestAdminAlerts({
+      telegram: (text) =>
+        sendViaAlertChannel(text).then(
+          () => 'sent' as const,
+          () => 'failed-transient' as const,
+        ),
+    });
+  }
 
   /**
    * G46-gated send for non-streaming paths (scheduler forwards, IPC

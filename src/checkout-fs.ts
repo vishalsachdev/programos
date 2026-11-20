@@ -6,7 +6,8 @@ import { CHECKOUT_OWNER } from './program-repo.js';
 
 /**
  * File operations on the container-writable program-repo checkout, run as the
- * checkout owner (uid 1000) instead of root.
+ * checkout owner (CHECKOUT_OWNER in program-repo.ts; uid 1000 by default)
+ * instead of root.
  *
  * Why not in-process: any root path operation there can be redirected. A
  * container can swap a parent directory for a symlink between a check and
@@ -55,7 +56,7 @@ export function ownerSpawnOptions(isRoot = process.getuid?.() === 0): {
   env: Record<string, string>;
   timeout: number;
 } {
-  const env = { PATH: '/usr/bin:/bin', HOME: '/home/ubuntu' };
+  const env = { PATH: '/usr/bin:/bin', HOME: CHECKOUT_OWNER.home };
   // Short timeout: these run synchronously on the message path.
   return isRoot
     ? { uid: CHECKOUT_OWNER.uid, gid: CHECKOUT_OWNER.gid, env, timeout: 5_000 }

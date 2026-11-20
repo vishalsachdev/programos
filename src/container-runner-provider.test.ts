@@ -65,7 +65,9 @@ vi.mock('./credential-proxy.js', () => ({
 }));
 
 // The real module, on a mocked `.env`, so the settings-to-args path is real.
-const mockEnv: Record<string, string> = {};
+// Hoisted: modules that read settings at import time (instance-identity.ts)
+// call the mocked readEnvFile before this file's own statements run.
+const mockEnv = vi.hoisted(() => ({}) as Record<string, string>);
 vi.mock('./env.js', () => ({
   readEnvFile: vi.fn((keys: string[]) =>
     Object.fromEntries(

@@ -1,3 +1,9 @@
+// EXAMPLE from the reference deployment, which runs under pm2. The supported
+// recipe (docs/deployment.md) uses the systemd unit written by
+// setup/service.ts instead; use one process manager, not both. pm2 does not
+// export the PART 2 settings of config/instance.env.example: add an `env`
+// block here if you use this file.
+//
 // pm2 definition for the VPS process (until 2026-09 it was started from the
 // CLI, which left kill_timeout at pm2's 1.6 s default).
 //

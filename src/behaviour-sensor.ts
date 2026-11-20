@@ -1045,6 +1045,8 @@ export function gRuleTag(res: { phantom: string[] }): string | null {
  * CRS 572). extractCourseCodes matches any letters+digits pair, so only
  * codes whose PREFIX the canon itself uses are judged — "CRS 999" flags,
  * prose like "top 100" never does. Skips silently when canon unreadable.
+ * program/course_names.md is OPTIONAL (the ProgramOS template does not ship
+ * it): when it is missing, the canon is curriculum.md alone.
  */
 export function checkCourseCodeRefs(
   replyText: string,

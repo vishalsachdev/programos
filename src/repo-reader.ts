@@ -5,6 +5,7 @@ import path from 'path';
 import { logger } from './logger.js';
 import { checkoutGitOptions, getProgramRepoPath } from './program-repo.js';
 import { isAdminAuthorEmail } from './governance-protection.js';
+import { INTAKE_GIT_AUTHOR_EMAIL } from './instance-identity.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -333,7 +334,7 @@ export class RepoReader {
       );
       const [sha, author] = history.trim().split('\n')[0].split('\0');
       // A delayed webhook must never select a later agent-authored version.
-      if (!/^[0-9a-f]{40}$/.test(sha) || author !== 'email-inbox@example.org')
+      if (!/^[0-9a-f]{40}$/.test(sha) || author !== INTAKE_GIT_AUTHOR_EMAIL)
         return null;
       const { stdout } = await execFileAsync(
         'git',

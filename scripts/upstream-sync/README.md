@@ -25,7 +25,7 @@ Safety rules in the tool (tested in `test_export.py`):
 After `--apply`:
 
 1. Update the version in `UPSTREAM.md`.
-   Reapply every `*.patch` file in `scripts/upstream-sync/`, in name order. For each one run `git apply --check <file>`, then `git apply <file>`. If one no longer applies, reconcile it by hand against the new export before you continue; do not discard it. Delete a patch only when the source has taken the same change. `prompt-audit-2026-11-15.patch` includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`.
+   Reapply every `*.patch` file in `scripts/upstream-sync/`, in name order. For each one run `git apply --check <file>`, then `git apply <file>`. If one no longer applies, reconcile it by hand against the new export before you continue; do not discard it. Delete a patch only when the source has taken the same change. `prompt-audit-2026-11-15.patch` includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`. `repo-changes-2026-11-20.patch` holds every other change this repo made to exported paths after export 1; it was made against export 1 with the prompt-audit patch applied, so it goes second (name order does that). A new change to exported code here is a new patch file, or a regenerated `repo-changes` patch checked with `git apply --check` against that same baseline.
 2. Run `npx tsc --noEmit` and `npx vitest run`. All tests must pass with none skipped.
 3. Run a secret scan (`gitleaks detect --no-git -s .`).
 4. Read the diff. New files need the closest look: a new file can carry names that no rule covers yet.

@@ -22,9 +22,9 @@ change, and where you must stop and ask.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 1,824 passing tests (1,761 from the source, 63 for the model provider
-   setting added here). One timing test in `src/channels/webhook-ingest-context.test.ts`
-   can fail under load; rerun it alone before you treat it as real.
+   is 1,925 passing tests (1,761 from the source, 164 added here). One timing test
+   in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
+   alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
 5. Never put real secrets, real people's data, or mail content in this repo.
 
@@ -39,7 +39,7 @@ Policy comes before setup. Get these answers before you change anything:
    - the Anthropic API or a Claude subscription (the default);
    - an endpoint that serves the Anthropic API, set with `ANTHROPIC_BASE_URL`;
    - Claude on Microsoft Foundry in the user's own Azure subscription
-     (`MODEL_PROVIDERS`, [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md)).
+     (`MODEL_PROVIDERS`, [`docs/model-providers.md`](./docs/model-providers.md)).
      Tested here against fake servers only; that page has the live checks.
 
    `MODEL_PROVIDERS` is an ordered list. A second entry is a backup, and it
@@ -161,7 +161,7 @@ and say so.
   alert. The turn that hit the failure still fails and is retried. The state is
   in memory, the audit log has no per-turn provider field, and resuming a
   session on the other provider is untested. Do the live checks in
-  `docs/illinois/model-foundry.md` before the user relies on the backup.
+  `docs/model-providers.md` before the user relies on the backup.
 - **Sender caps exist only on email.** Telegram and web chat have no per-sender
   limit (`src/channels/sender-quota.ts` is called only from the email handler).
   Keep the chat allowlists short, and do not put an automated agent on a chat channel.

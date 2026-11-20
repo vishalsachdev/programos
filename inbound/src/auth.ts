@@ -20,15 +20,22 @@
 //    envelope sender in such a domain. Without that proof a header naming
 //    the forwarder is ignored: anyone can send a message straight to the
 //    bot's address with that header in it.
-// 3. A header that is read must hold exactly one DMARC result and at most
-//    one SPF result (see `toResult`), no comment that is still open at its
-//    end, and no property twice in one result (see `readHeader`). Otherwise
-//    it is dropped whole. A dropped header keeps its place: no header
-//    below it is read in its stead.
+// 3. A header that is read must hold exactly one DMARC result, at most one
+//    SPF result for each identity (the envelope sender, the HELO name; see
+//    `toResult`), no part that is not a result, no comment that is still
+//    open at its end or that holds another comment, and no property twice
+//    in one result (see `readHeader`). Otherwise it is dropped whole. A dropped header keeps
+//    its place: no header below it is read in its stead.
 // 4. Nothing else is read: no `ARC-*` header (this worker checks no
 //    signature), no `Received-SPF`, no header below the ones above.
 //
 // With both settings empty (the default) nothing is read.
+//
+// The record also says what became of the platform's result
+// (`platform_status`), because "the platform wrote nothing" and "a header
+// with the platform's name was there and could not be relied on" are not
+// the same thing to the host: the first is nobody's doing, the second can
+// be the sender's. Only the first may end as the verdict "unknown".
 
 /** One trusted server's results, reduced to what the host uses. */
 export interface AuthResult {
@@ -59,7 +66,35 @@ export interface AuthRecord {
    */
   from_headers: number;
   from_mailboxes: number;
+  /**
+   * True when `from_mailboxes` is 2 for one reason only: a comma in an
+   * unquoted display name or in a comment, beside the one address in angle
+   * brackets (`Lee, Dana <dlee@example.edu>`). A reader that follows RFC
+   * 5322 takes such a header as one mailbox; one that splits at every comma
+   * does not. The host accepts it only together with a DMARC result that
+   * names the domain of that address.
+   */
+  from_display_commas: boolean;
+  /**
+   * What became of the platform's result:
+   * - `unset`: PLATFORM_AUTHSERV_ID is empty, nothing was looked for.
+   * - `absent`: no header in the message carries the platform's name, or
+   *   the platform's header says that it made no check (`none`).
+   * - `read`: the platform's header is the first entry of `results`.
+   * - `rejected`: a header carries the platform's name and no result was
+   *   taken from it (not the first header, there twice, not the one the
+   *   platform's API reports, or in a form that cannot be relied on).
+   */
+  platform_status: PlatformStatus;
   results: AuthResult[];
+}
+
+export type PlatformStatus = 'unset' | 'absent' | 'read' | 'rejected';
+
+/** What `mail.ts` found in the From header text (`fromMailboxes` there). */
+export interface FromCount {
+  count: number;
+  displayCommas: boolean;
 }
 
 export interface AuthTrust {
@@ -96,12 +131,20 @@ export function hostNameList(value: string | undefined, key: string): string[] {
  * `open` is true when a comment is still open at the end of the value: the
  * text after it was removed with it, and that text may hold the server's
  * real results (sender text copied into a comment can open one more comment
- * than the server closes).
+ * than the server closes). `nested` is true when a comment held another
+ * comment. A server has no reason to write one, and it is the only way
+ * sender text inside a comment can keep a comment open past the server's
+ * own closing bracket, to be closed further on.
  */
-function stripComments(value: string): { text: string; open: boolean } {
+function stripComments(value: string): {
+  text: string;
+  open: boolean;
+  nested: boolean;
+} {
   let out = '';
   let depth = 0;
   let quoted = false;
+  let nested = false;
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
     if (ch === '\\' && i + 1 < value.length) {
@@ -112,6 +155,7 @@ function stripComments(value: string): { text: string; open: boolean } {
       if (ch === '"') quoted = false;
     } else if (ch === '(') {
       depth++;
+      if (depth > 1) nested = true;
     } else if (ch === ')' && depth > 0) {
       depth--;
       if (depth === 0) out += ' ';
@@ -120,11 +164,16 @@ function stripComments(value: string): { text: string; open: boolean } {
       if (ch === '"') quoted = true;
     }
   }
-  return { text: out, open: depth > 0 };
+  return { text: out, open: depth > 0, nested };
 }
 
 function domainOf(value: string): string {
-  const cleaned = value.replace(/^"|"$/g, '').trim().toLowerCase();
+  // Quotes, or the angle brackets some servers put around an address.
+  const cleaned = value
+    .replace(/^"|"$/g, '')
+    .replace(/^<(.*)>$/, '$1')
+    .trim()
+    .toLowerCase();
   const domain = cleaned.includes('@')
     ? cleaned.slice(cleaned.lastIndexOf('@') + 1)
     : cleaned;
@@ -165,12 +214,21 @@ function readHeader(value: string): Header {
   if (!id || head.includes('=') || !HOST_NAME.test(id))
     return { authservId: '', parsed: null };
   const unusable: Header = { authservId: id, parsed: null };
-  if (stripped.open || unquoted.includes('"')) return unusable;
+  if (stripped.open || stripped.nested || unquoted.includes('"'))
+    return unusable;
   const methods: Parsed['methods'] = [];
-  for (const part of parts) {
+  for (const [index, part] of parts.entries()) {
     const tokens = part.split(' ').filter(Boolean);
+    // Nothing after the last ";", and the word a server writes when it made
+    // no check ("authserv-id; none"), are not results and not errors.
+    if (tokens.length === 0 && index === parts.length - 1) continue;
+    if (parts.length === 1 && part.toLowerCase() === 'none') continue;
     const first = /^([a-z0-9-]+)(?:\/\d+)?=([a-z]+)$/i.exec(tokens[0] ?? '');
-    if (!first) continue;
+    // A part that is not "method=result": it may be the server's real
+    // result in a form this code does not read, or what is left of one
+    // after sender text got into the header. Either way the results that
+    // can be read are not the whole of what the server said.
+    if (!first) return unusable;
     const props = new Map<string, string>();
     for (const token of tokens.slice(1)) {
       const eq = token.indexOf('=');
@@ -196,7 +254,8 @@ function readHeader(value: string): Header {
  * Read one `Authentication-Results` value (RFC 8601). Returns null when the
  * value has no authserv-id (such a header cannot be tied to a named
  * server), and when the header cannot be relied on: an unclosed quote, a
- * comment still open at the end, a property given twice in one result.
+ * comment still open at the end, a property given twice in one result, a
+ * part between two ";" that is not a result.
  */
 export function parseAuthenticationResults(value: string): Parsed | null {
   return readHeader(value).parsed;
@@ -209,13 +268,29 @@ function domainProp(value: string | undefined): string {
 }
 
 /**
- * Reduce one parsed header, or return null when it cannot be relied on. A
- * header must carry exactly one DMARC result and at most one SPF result.
- * A second one means text was added to the header: by a continuation line
+ * Reduce one parsed header, or return null when it cannot be relied on.
+ *
+ * A header must carry exactly one DMARC result. It may carry one SPF result
+ * for the envelope sender and one for the HELO name, as RFC 8601 section
+ * 2.7.2 registers them (`smtp.mailfrom`, `smtp.helo`): a server that checks
+ * both identities writes two results. An SPF result with neither property
+ * is taken as the one for the envelope sender, and then it must be the only
+ * SPF result: a server that names the identity in one result names it in
+ * all. More than one result for the same identity means text was added to
+ * the header: by a continuation line
  * at the top of the sender's own headers, or by sender text that a server
  * copied into a comment and that closed the comment early. Such a header
  * is dropped whole, whichever of the two results came first.
+ *
+ * The platform checked SPF for the envelope sender it gave this worker. A
+ * platform result that names another domain in `smtp.mailfrom` is therefore
+ * not the platform's own, and the header is dropped. This is what keeps an
+ * added "spf=pass smtp.mailfrom=<a forwarder's domain>" from opening the
+ * forwarder rule when the platform itself wrote a HELO result only.
  */
+const hasIdentity = (m: Parsed['methods'][number]) =>
+  m.props.has('smtp.mailfrom') || m.props.has('smtp.helo');
+
 function toResult(
   parsed: Parsed,
   source: AuthResult['source'],
@@ -223,20 +298,34 @@ function toResult(
 ): AuthResult | null {
   const of = (method: string) =>
     parsed.methods.filter((m) => m.method === method);
-  const spfs = of('spf');
   const dmarcs = of('dmarc');
-  if (dmarcs.length !== 1 || spfs.length > 1) return null;
-  const spf = spfs[0];
+  if (dmarcs.length !== 1) return null;
   const dmarc = dmarcs[0];
-  // The platform checked SPF for the envelope sender it gave this worker,
-  // unless its result names another identity (the HELO name). A forwarder
-  // checked it for the sender it saw, which only its own header names.
+  const spfs = of('spf');
+  const forSender = spfs.filter(
+    (m) => !m.props.has('smtp.helo') || m.props.has('smtp.mailfrom'),
+  );
+  const forHelo = spfs.filter(
+    (m) => m.props.has('smtp.helo') && !m.props.has('smtp.mailfrom'),
+  );
+  if (forSender.length > 1 || forHelo.length > 1) return null;
+  if (spfs.length > 1 && spfs.some((m) => !hasIdentity(m))) return null;
+  // The result the host is told about is the one for the envelope sender.
+  // A HELO result alone is reported with no domain, so it can never stand
+  // for the envelope sender.
+  const spf = forSender[0] ?? forHelo[0];
   let spfDomain = '';
-  if (spf) {
-    const mailfrom = spf.props.get('smtp.mailfrom');
-    if (mailfrom !== undefined) spfDomain = domainProp(mailfrom);
-    else if (source === 'platform' && !spf.props.has('smtp.helo'))
-      spfDomain = envelopeDomain;
+  if (forSender[0]) {
+    const mailfrom = forSender[0].props.get('smtp.mailfrom');
+    if (mailfrom === undefined) {
+      // A forwarder checked SPF for the sender it saw, which only its own
+      // header names.
+      if (source === 'platform') spfDomain = envelopeDomain;
+    } else {
+      spfDomain = domainProp(mailfrom);
+      if (source === 'platform' && spfDomain !== (envelopeDomain || 'invalid'))
+        return null;
+    }
   }
   return {
     source,
@@ -279,7 +368,7 @@ const squash = (value: string) => value.replace(/\s+/g, ' ').trim();
 export function readAuth(
   headers: { key: string; value: string }[],
   envelopeFrom: string,
-  fromMailboxes: number,
+  from: FromCount,
   trust: AuthTrust,
   platformHeader?: string | null,
 ): AuthRecord {
@@ -289,28 +378,48 @@ export function readAuth(
     envelope_from_domain: envelopeDomain,
     // "From :" and a line with no colon are From headers to some readers.
     from_headers: headers.filter((h) => /^from(\s|$)/.test(h.key)).length,
-    from_mailboxes: fromMailboxes,
+    from_mailboxes: from.count,
+    from_display_commas: from.displayCommas,
+    platform_status: 'unset',
     results: [],
   };
+  if (!trust.platformAuthservId) return record;
+  // A header name with a space before the colon is the same header to some
+  // readers, so it is looked at too.
   const all = headers
-    .filter((h) => h.key === 'authentication-results')
+    .filter((h) => h.key.trim() === 'authentication-results')
     .map((h) => ({ value: h.value, ...readHeader(h.value) }));
-  if (!trust.platformAuthservId || all.length === 0) return record;
 
+  const named = all.filter((h) => h.authservId === trust.platformAuthservId);
+  // No header says it is the platform's. The platform puts its header
+  // above everything the sender wrote and the sender cannot take it out,
+  // so this state is not one the sender can bring about.
+  record.platform_status = 'absent';
+  if (named.length === 0) return record;
+
+  // From here on a header with the platform's name is in the message.
+  // Whatever stops it from being read, the message does not go back to
+  // "absent": every reason below is one a sender can cause.
+  record.platform_status = 'rejected';
   const top = all[0];
   if (!top.parsed || top.authservId !== trust.platformAuthservId) return record;
   // The platform's name on a second header: one of the two is planted, and
   // position alone should not decide which. A second header that cannot be
   // relied on counts too.
-  if (all.filter((h) => h.authservId === trust.platformAuthservId).length !== 1)
-    return record;
+  if (named.length !== 1) return record;
   // The first header in the raw bytes must be the one the platform's API
   // reports first. If the platform did not put its header into the raw
   // message, the first one there was written by the sender.
   if (!platformHeader || !squash(platformHeader).startsWith(squash(top.value)))
     return record;
+  // "authserv-id; none": the platform says it made no check.
+  if (top.parsed.methods.length === 0) {
+    record.platform_status = 'absent';
+    return record;
+  }
   const platform = toResult(top.parsed, 'platform', envelopeDomain);
   if (!platform) return record;
+  record.platform_status = 'read';
   record.results.push(platform);
 
   if (!cameThroughForwarder(platform, trust)) return record;
@@ -328,7 +437,10 @@ export function readAuth(
 
 /** One line for the Markdown copy. Built only from the record above. */
 export function authLine(record: AuthRecord): string {
-  if (record.results.length === 0) return 'no trusted result';
+  if (record.results.length === 0)
+    return record.platform_status === 'rejected'
+      ? 'a header with the platform name could not be relied on'
+      : 'no trusted result';
   return record.results
     .map((r) => {
       const dkim = r.dkim.length

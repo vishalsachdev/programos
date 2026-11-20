@@ -10,6 +10,7 @@ import {
   readAuth,
   type AuthRecord,
   type AuthTrust,
+  type FromCount,
 } from './auth.js';
 
 /** SMTP envelope values, as the mail platform reports them. */
@@ -134,14 +135,26 @@ function addressTokens(fromHeader: string): { raw: string[]; found: string[] } {
 }
 
 /**
- * True when the From header text is in a form that a second reader could
- * take as more than one mailbox, or as another mailbox than the one word
- * `addressTokens` found. Every test here errs towards "yes".
+ * How the From header text reads when it holds one address word:
+ *
+ * - `one`: every reader takes it as the same single mailbox.
+ * - `ambiguous`: a second reader could take it as more than one mailbox, or
+ *   as another mailbox than the one word `addressTokens` found. Every test
+ *   here errs towards this answer.
+ * - `display-commas`: it would be `one` but for commas in two places where
+ *   RFC 5322 does not make them separators for a reader that follows it: in
+ *   the unquoted display name before the one address in angle brackets
+ *   (`Lee, Dana <dlee@example.edu>`), and inside a comment beside it
+ *   (`Dana (Alumni, East) <dana@example.edu>`). A reader that splits at
+ *   every comma still sees a list, so this is not `one`; see
+ *   `fromMailboxes` for what it is used for.
  */
-function ambiguousFrom(fromHeader: string, raw: string[]): boolean {
+type FromForm = 'one' | 'display-commas' | 'ambiguous';
+
+function fromForm(fromHeader: string, raw: string[]): FromForm {
   // A control character: one reader stops at it, another drops it.
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u0008\u000a-\u001f\u007f]/.test(fromHeader)) return true;
+  if (/[\u0000-\u0008\u000a-\u001f\u007f]/.test(fromHeader)) return 'ambiguous';
   // Every "@" must sit inside exactly one address word. An "@" with a
   // comment or a space beside it ("a(x)@b", "a @b") is in no word, and an
   // address with two ("a@b@c") has one too many: both are addresses to some
@@ -151,14 +164,14 @@ function ambiguousFrom(fromHeader: string, raw: string[]): boolean {
     ats !== raw.length ||
     raw.some((a) => a.indexOf('@') !== a.lastIndexOf('@'))
   )
-    return true;
+    return 'ambiguous';
   // More than one address in angle brackets, or brackets that do not pair.
   const open = (fromHeader.match(/</g) ?? []).length;
   const close = (fromHeader.match(/>/g) ?? []).length;
-  if (open > 1 || open !== close) return true;
+  if (open > 1 || open !== close) return 'ambiguous';
   const lt = fromHeader.indexOf('<');
   const gt = fromHeader.indexOf('>');
-  if (gt < lt) return true;
+  if (gt < lt) return 'ambiguous';
   // Outside a quoted display name: a comma separates mailboxes, a colon or
   // a semicolon writes a group or a route, a backslash escapes for one
   // reader and not for another. A quote or a comment left open hides text
@@ -168,6 +181,7 @@ function ambiguousFrom(fromHeader: string, raw: string[]): boolean {
   // differently ("<dl(x)ee@example.edu>").
   let quoted = false;
   let depth = 0;
+  let commas = false;
   for (let i = 0; i < fromHeader.length; i++) {
     const ch = fromHeader[i];
     if (quoted) {
@@ -175,15 +189,33 @@ function ambiguousFrom(fromHeader: string, raw: string[]): boolean {
       else if (ch === '"') quoted = false;
     } else if (ch === '"') quoted = true;
     else if (ch === '(') {
-      if (lt < 0 || (i > lt && i < gt)) return true;
+      if (lt < 0 || (i > lt && i < gt)) return 'ambiguous';
       depth++;
     } else if (ch === ')') {
-      if (depth === 0) return true;
+      if (depth === 0) return 'ambiguous';
       depth--;
-    } else if (ch === ',' || ch === ':' || ch === ';' || ch === '\\')
-      return true;
+    } else if (ch === ',') {
+      // In a comment, or in the display name before "<". Anywhere else
+      // (no brackets, inside them, after them) it separates mailboxes.
+      if (depth === 0 && !(lt >= 0 && i < lt)) return 'ambiguous';
+      commas = true;
+    } else if (ch === ':' || ch === ';' || ch === '\\') return 'ambiguous';
   }
-  return quoted || depth !== 0;
+  if (quoted || depth !== 0) return 'ambiguous';
+  if (!commas) return 'one';
+  // The comma reading holds only for the plainest form around it: the
+  // brackets hold the address word and nothing else, nothing but comments
+  // follows them, and the display name has no encoded word (a reader that
+  // decodes before it splits could find an address or a bracket in it).
+  if (fromHeader.slice(lt + 1, gt) !== raw[0]) return 'ambiguous';
+  if (fromHeader.includes('=?')) return 'ambiguous';
+  let tailDepth = 0;
+  for (const ch of fromHeader.slice(gt + 1)) {
+    if (ch === '(') tailDepth++;
+    else if (ch === ')') tailDepth--;
+    else if (tailDepth === 0 && !/[ \t]/.test(ch)) return 'ambiguous';
+  }
+  return 'display-commas';
 }
 
 /**
@@ -194,7 +226,7 @@ function ambiguousFrom(fromHeader: string, raw: string[]): boolean {
  *
  * The result is 1 only for a header that every reader takes as the same
  * single mailbox. A header with one address word that could still be read
- * as more than one mailbox (`ambiguousFrom`) counts 2.
+ * as more than one mailbox (`fromForm`) counts 2.
  */
 export function fromAddressCount(fromHeader: string): number {
   const { raw, found } = addressTokens(fromHeader);
@@ -202,7 +234,7 @@ export function fromAddressCount(fromHeader: string): number {
   // eslint-disable-next-line no-control-regex
   const count =
     found.length + (raw.some((a) => /[^\x00-\x7f]/.test(a)) ? 1 : 0);
-  return count === 1 && ambiguousFrom(fromHeader, raw) ? 2 : count;
+  return count === 1 && fromForm(fromHeader, raw) !== 'one' ? 2 : count;
 }
 
 /**
@@ -225,6 +257,30 @@ export function fromMailboxCount(
   if (count !== 1) return count;
   const only = addressTokens(fromHeader).found[0];
   return address !== null && only === address.toLowerCase() ? 1 : 2;
+}
+
+/**
+ * What the payload says about the From header: `from_mailboxes` (above),
+ * and whether a count of 2 has the one cause the host may look past, commas
+ * in an unquoted display name or in a comment (`fromForm`). That is only
+ * said when the mail parser read the same address as the one counted, the
+ * condition `fromMailboxCount` puts on a count of 1.
+ */
+export function fromMailboxes(
+  fromHeader: string,
+  address: string | null,
+): FromCount {
+  const count = fromMailboxCount(fromHeader, address);
+  const { raw, found } = addressTokens(fromHeader);
+  const displayCommas =
+    count === 2 &&
+    found.length === 1 &&
+    // eslint-disable-next-line no-control-regex
+    !/[^\x00-\x7f]/.test(raw.join('')) &&
+    address !== null &&
+    found[0] === address.toLowerCase() &&
+    fromForm(fromHeader, raw) === 'display-commas';
+  return { count, displayCommas };
 }
 
 /** Lowercase ASCII words joined by hyphens, for the file name. */
@@ -338,7 +394,7 @@ export async function buildIntake(
   const auth = readAuth(
     email.headers,
     envelope.from,
-    fromMailboxCount(fromHeader, headerBox ? headerBox.address : null),
+    fromMailboxes(fromHeader, headerBox ? headerBox.address : null),
     trust,
     envelope.authenticationResults,
   );

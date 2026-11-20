@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,617 passing tests (1,761 from the source, 856 added here). One timing test
+   is 2,639 passing tests (1,761 from the source, 878 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -816,14 +816,25 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Options:* (a) `flag`: record the result in the audit log and change nothing
   else; (b) `enforce`: also drop mail from a listed address that was not
   confirmed. It gets no answer and no reply of any kind. With (b) one more
-  choice: what to do with mail that carries no result from a named server
-  (`EMAIL_AUTH_UNKNOWN`: `block`, the default, or `allow`).
+  choice: what to do with mail for which no named server said anything
+  (`EMAIL_AUTH_UNKNOWN`: `block`, the default, or `allow`). "Said nothing" is
+  narrow: no server is named, or the mail platform wrote no note at all. A note
+  that was there and was damaged, doubled or added to counts as not confirmed,
+  so a sender cannot turn a failed check into "no result". A second sub-choice,
+  for both modes: whether the server's note must name the domain it checked
+  (`EMAIL_AUTH_REQUIRE_FROM_DOMAIN`: `true`, the default, or `false`). Leave it
+  on unless the check of a real message (below) shows that the mail platform
+  never names the domain; then every message would read "not confirmed", and
+  `false` accepts the platform's bare "pass".
 - *Code default:* `flag`, with no server named. Every message is then recorded
   as `unknown` and handled as before.
 - *First pilot:* name the servers (below), stay on `flag` for the first weeks,
   and read the `[EMAIL AUTH]` lines in the audit log for real mail from each
-  listed person. When they say `authenticated`, ASK the admin whether to change
-  to `enforce`. Recommend it: a forged approval or status update is the most
+  listed person. Before that, take one real message the worker filed (the
+  `.eml` file) and run `npx tsx inbound/scripts/check-message.ts` on it with the
+  platform's name: it prints what the bot read and what `enforce` would do with
+  that message, and changes nothing. When the lines say `authenticated`, ASK the
+  admin whether to change to `enforce`. Recommend it: a forged approval or status update is the most
   damaging thing a stranger could send. Do not set `enforce` before those lines
   are right; real mail would be dropped without notice to the sender. The host
   refuses to start with `enforce` and no server named.
@@ -832,14 +843,22 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   writes; Cloudflare documents `mx.cloudflare.net`), and, only when a mailbox
   elsewhere forwards to the bot's address, `FORWARDER_AUTHSERV_IDS` and
   `FORWARDER_DOMAINS`. On the host: `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`, the same
-  names. Read the names off a real message with the person's mail administrator;
+  names, and always the platform's name among them (a list with only the
+  forwarder's name makes every message read as not confirmed). Read the names
+  off a real message with the person's mail administrator;
   do not guess them. An intake service you wrote yourself must send the `auth`
   field, or every verdict stays `unknown`.
 - *Settings:* `EMAIL_AUTH_MODE`, `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`,
-  `EMAIL_AUTH_UNKNOWN` (process).
+  `EMAIL_AUTH_UNKNOWN`, `EMAIL_AUTH_REQUIRE_FROM_DOMAIN` (process, else `.env`;
+  read once at start). A value the host does not know stops the start with a
+  message that names the setting, and the start log has one line that says which
+  mode is in effect: read that line to the person after a change.
 - *Limit to tell the person:* only a DMARC pass confirms a sender. A colleague
   whose mail domain publishes no DMARC record is never confirmed, and with
-  `enforce` their mail is dropped.
+  `enforce` their mail is dropped. A name written as `Lee, Dana` without quotes
+  is accepted when the address is the only one in the line and the server names
+  its domain; a "From" line with a second address, a group or other unusual
+  forms is never confirmed.
 - *Not tested:* never run against live mail. What a real mail system writes in
   its headers was taken from public documentation only, and the forwarding case
   rests on assumptions about the forwarding system that nobody checked. It

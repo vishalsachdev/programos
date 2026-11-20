@@ -9073,10 +9073,10 @@ index 0000000000000000000000000000000000000000..d3d36ac3089d4e8015231793677e443d
 +});
 diff --git a/src/channels/webhook-email-auth.test.ts b/src/channels/webhook-email-auth.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..feaa9e9e0e6b8344d6880a930c9019154110f845
+index 0000000000000000000000000000000000000000..b12627d0ad57eee271a3e297701d6097284f45eb
 --- /dev/null
 +++ b/src/channels/webhook-email-auth.test.ts
-@@ -0,0 +1,491 @@
+@@ -0,0 +1,513 @@
 +import { execFileSync } from 'child_process';
 +import fs from 'fs';
 +import http from 'http';
@@ -9331,6 +9331,8 @@ index 0000000000000000000000000000000000000000..feaa9e9e0e6b8344d6880a930c901915
 +    envelope_from_domain: 'mail.example.edu',
 +    from_headers: 1,
 +    from_mailboxes: 1,
++    from_display_commas: false,
++    platform_status: 'read',
 +    results: [
 +      {
 +        source: 'platform',
@@ -9550,6 +9552,26 @@ index 0000000000000000000000000000000000000000..feaa9e9e0e6b8344d6880a930c901915
 +      const allowed = await deliver(payload);
 +      expect(JSON.parse(allowed.body)).not.toHaveProperty('skipped');
 +      expect(onMessage).toHaveBeenCalledOnce();
++    });
++
++    it('drops a message whose platform header could not be relied on, also with EMAIL_AUTH_UNKNOWN=allow', async () => {
++      vi.stubEnv('EMAIL_AUTH_UNKNOWN', 'allow');
++      const payload = commitNew('enforce-rejected');
++      payload.auth = {
++        ...authFrom({}),
++        platform_status: 'rejected',
++        results: [],
++      };
++      const res = await deliver(payload);
++      expect(JSON.parse(res.body)).toMatchObject({
++        skipped: true,
++        reason: 'sender not authenticated',
++      });
++      expect(onMessage).not.toHaveBeenCalled();
++      expect(audit.logEmailAuthentication.mock.calls[0][0]).toMatchObject({
++        verdict: 'unauthenticated',
++        blocked: true,
++      });
 +    });
 +
 +    it('sends no access-closed reply to an unauthenticated address that is not on the list', async () => {
@@ -10449,7 +10471,7 @@ index 708ceba29cf8b9ef91b5dcd5619de69dfc4cec23..f51b5116dd7748a9b4158273315b8ddd
  
    beforeEach(() => {
 diff --git a/src/channels/webhook.ts b/src/channels/webhook.ts
-index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c24498610ed62 100644
+index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..8586c6b290f4a2dadd8483871d0bf0c7c06e7437 100644
 --- a/src/channels/webhook.ts
 +++ b/src/channels/webhook.ts
 @@ -27,6 +27,7 @@ import {
@@ -10460,20 +10482,17 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
    logInboundEmailReceiptOnce,
    logRoutedApproval,
  } from '../audit-log.js';
-@@ -77,6 +78,12 @@ import { readFromCheckoutBuffer } from '../checkout-fs.js';
+@@ -77,6 +78,9 @@ import { readFromCheckoutBuffer } from '../checkout-fs.js';
  import { deriveEmailChatJid, parseEmailIdentity } from './webhook-threading.js';
  import { logger } from '../logger.js';
  import { readEnvFile } from '../env.js';
-+import {
-+  emailAuthBlocks,
-+  emailAuthVerdict,
-+  readEmailAuthSettings,
-+} from '../email-auth.js';
++import { emailAuthBlocks, emailAuthVerdict } from '../email-auth.js';
++import { currentEmailAuthSettings } from '../email-auth-settings.js';
 +import { INSTITUTION_DOMAIN } from '../instance-identity.js';
  import { Channel, PreparedDelivery } from '../types.js';
  import {
    extractEmailAttachments,
-@@ -84,9 +91,12 @@ import {
+@@ -84,9 +88,12 @@ import {
    saveExtraction,
  } from '../document-extractor.js';
  import { isAutoReplyEml } from '../email-loop-detection.js';
@@ -10486,7 +10505,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
  
  const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3003', 10);
  const WEBHOOK_HOST = process.env.WEBHOOK_HOST || '0.0.0.0';
-@@ -186,11 +196,7 @@ registerChannel('webhook', (opts) => {
+@@ -186,11 +193,7 @@ registerChannel('webhook', (opts) => {
    // failure) can distinguish a transient outage (worth a retry) from a
    // permanent misconfiguration (retrying forever would get the endpoint
    // auto-disabled by the sender, e.g. Svix).
@@ -10499,7 +10518,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
      const token =
        resendEnv.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
      const chatId =
-@@ -226,6 +232,12 @@ registerChannel('webhook', (opts) => {
+@@ -226,6 +229,12 @@ registerChannel('webhook', (opts) => {
      }
    }
  
@@ -10512,7 +10531,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
    // Live checkout path — still needed for WRITE-side work (raw .eml reads of
    // just-committed mail, attachment extraction output) and for ownership
    // repair after host-side commits. Allowlist READS no longer touch it.
-@@ -423,13 +435,13 @@ registerChannel('webhook', (opts) => {
+@@ -423,13 +432,13 @@ registerChannel('webhook', (opts) => {
      const alertFrom = alertField(args.from, 'unknown');
      const alertSubject = alertField(args.subject, 'No Subject');
      if (result === 'write-failed') {
@@ -10528,7 +10547,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
          `High-attachment email accepted (${args.attachmentCount} files).\nFrom: ${alertFrom}\nSubject: ${alertSubject}\nA durable intake receipt exists; attachment storage and agent processing may still be pending.`,
        );
      }
-@@ -501,9 +513,7 @@ registerChannel('webhook', (opts) => {
+@@ -501,9 +510,7 @@ registerChannel('webhook', (opts) => {
            ? 'sent-earlier'
            : 'none',
      });
@@ -10539,7 +10558,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
      if (event.notice) {
        // A notice failure must not stop the alert retry and release below.
        await sendSenderCapNotice(event, resetAt, firstAlert === 'sent').catch(
-@@ -514,7 +524,7 @@ registerChannel('webhook', (opts) => {
+@@ -514,7 +521,7 @@ registerChannel('webhook', (opts) => {
      if (!event.alert || firstAlert === undefined) return;
      const finalAlert = await retryTransient(
        firstAlert,
@@ -10548,7 +10567,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
        SENDER_CAP_ALERT_RETRY_DELAYS_MS,
      );
      if (finalAlert !== 'sent') {
-@@ -595,7 +605,7 @@ registerChannel('webhook', (opts) => {
+@@ -595,7 +602,7 @@ registerChannel('webhook', (opts) => {
      cancelRelay: (deliveryId, reason) =>
        cancelQueuedOutboundEmail(deliveryId, reason),
      refreshMirror: () => getRepoReader().refreshAsync(),
@@ -10557,7 +10576,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
      audit: (event) => logRoutedApproval(event),
    });
  
-@@ -628,7 +638,9 @@ registerChannel('webhook', (opts) => {
+@@ -628,7 +635,9 @@ registerChannel('webhook', (opts) => {
    // skip obvious automated addresses + set Auto-Submitted so we don't loop
    // with the recipient's own autoresponder.
    // ───────────────────────────────────────────────────────────────────────
@@ -10568,7 +10587,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
    const blockedNotified = new Set<string>();
    const MAX_BLOCKED_NOTIFIED = 1000;
  
-@@ -655,7 +667,7 @@ registerChannel('webhook', (opts) => {
+@@ -655,7 +664,7 @@ registerChannel('webhook', (opts) => {
      if (from.includes(',') || from.includes(';')) return null;
      const angle = from.match(/<([^>]+)>/);
      const addr = (angle ? angle[1] : from).trim().toLowerCase();
@@ -10577,7 +10596,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
      return addr;
    }
  
-@@ -787,8 +799,8 @@ registerChannel('webhook', (opts) => {
+@@ -787,8 +796,8 @@ registerChannel('webhook', (opts) => {
              // degrades to log-and-200 — endlessly failing deliveries would
              // get the endpoint auto-disabled, ending bounce visibility.
              pingAdminViaTelegram: async (text) => {
@@ -10588,7 +10607,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
                }
              },
              logDeliveryProblem,
-@@ -810,8 +822,8 @@ registerChannel('webhook', (opts) => {
+@@ -810,8 +819,8 @@ registerChannel('webhook', (opts) => {
              res,
              githubPushSecret,
              async (text) => {
@@ -10599,7 +10618,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
                }
              },
              // A push is the moment a new Routed Approvals entry is committed.
-@@ -822,7 +834,7 @@ registerChannel('webhook', (opts) => {
+@@ -822,7 +831,7 @@ registerChannel('webhook', (opts) => {
  
          // Check secret
          const authHeader = req.headers['authorization'];
@@ -10608,18 +10627,19 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
            res.writeHead(401);
            res.end('Unauthorized');
            return;
-@@ -935,6 +947,30 @@ registerChannel('webhook', (opts) => {
+@@ -935,6 +944,31 @@ registerChannel('webhook', (opts) => {
                attachment_state === 'pending'
                  ? attachment_state
                  : undefined;
 +            // Sender authentication (src/email-auth.ts). The verdict is
 +            // recorded for every message; it changes what happens to the
 +            // message only with EMAIL_AUTH_MODE=enforce.
-+            const emailAuth = readEmailAuthSettings();
++            const emailAuth = currentEmailAuthSettings();
 +            const authDecision = emailAuthVerdict(
 +              from,
 +              body.auth,
 +              emailAuth.trusted,
++              { requireFromDomain: emailAuth.requireFromDomain },
 +            );
 +            const authBlocked = emailAuthBlocks(
 +              emailAuth,
@@ -10639,7 +10659,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
              if (phase === 'accepted') {
                if (
                  attachmentCount === null ||
-@@ -965,6 +1001,12 @@ registerChannel('webhook', (opts) => {
+@@ -965,6 +999,12 @@ registerChannel('webhook', (opts) => {
                  );
                  return;
                }
@@ -10652,7 +10672,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
                const receiptId =
                  (typeof message_id === 'string' &&
                    message_id.replace(/^<|>$/g, '')) ||
-@@ -1031,7 +1073,7 @@ registerChannel('webhook', (opts) => {
+@@ -1031,7 +1071,7 @@ registerChannel('webhook', (opts) => {
                const now = Date.now();
                if (now - lastBoxPingAt >= BOX_PING_DEBOUNCE_MS) {
                  lastBoxPingAt = now;
@@ -10661,7 +10681,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
                    `📦 Box update detected (from ${from}).\n` +
                      `Subject: ${emailSubject}\n` +
                      `→ Run a Box sync sweep to refresh Coordinator's course data.`,
-@@ -1079,7 +1121,7 @@ registerChannel('webhook', (opts) => {
+@@ -1079,7 +1119,7 @@ registerChannel('webhook', (opts) => {
                // "allowlist unavailable" failures — those aren't unauthorized
                // senders, just a failed read (see CLAUDE.md reliability note).
                if (access.reason === 'sender not on allowlist') {
@@ -10670,7 +10690,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
                  // A blocked **@example.edu** colleague gets one courteous
                  // reply instead of a silent drop. External/unknown senders
                  // stay silent (anti-backscatter). Deduped + skip automated.
-@@ -1088,14 +1130,17 @@ registerChannel('webhook', (opts) => {
+@@ -1088,14 +1128,17 @@ registerChannel('webhook', (opts) => {
                    key &&
                    isInstitutionSender(from) &&
                    !isLikelyAutomatedAddress(from) &&
@@ -10691,7 +10711,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
                    let isAuto = false;
                    if (raw_file_path) {
                      try {
-@@ -1139,6 +1184,33 @@ registerChannel('webhook', (opts) => {
+@@ -1139,6 +1182,33 @@ registerChannel('webhook', (opts) => {
                return;
              }
  
@@ -10725,7 +10745,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
              // (A missing sender never reaches this point when the allowlist
              // is available — canProcessEmailSender already rejected it above.)
              if (!allowlistState.available) {
-@@ -1187,6 +1259,14 @@ registerChannel('webhook', (opts) => {
+@@ -1187,6 +1257,14 @@ registerChannel('webhook', (opts) => {
              }
              processingEmails.add(dedupKey);
              activeDedupKey = dedupKey;
@@ -10740,7 +10760,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c2449
  
              // Auto-reply / mailing-list loop detection. Drops Outlook OOO,
              // Gmail vacation, list expansions, autoresponders BEFORE we
-@@ -1711,7 +1791,7 @@ registerChannel('webhook', (opts) => {
+@@ -1711,7 +1789,7 @@ registerChannel('webhook', (opts) => {
      ) {
        const meta = emailMetadata.get(jid);
  
@@ -13303,10 +13323,10 @@ index 4d956d1c8ae46c46a2344eae18d4b9145c1dd4b9..fc78ae49017576410be701d30b999553
  export const DELIVERY_NOTE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 diff --git a/src/delivery-state-key-file.test.ts b/src/delivery-state-key-file.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9c63882e5a0221b480f216933c3634b5ff399c8f
+index 0000000000000000000000000000000000000000..0b721abca76cb96bf1e19cb7d6881c9f17f1bff9
 --- /dev/null
 +++ b/src/delivery-state-key-file.test.ts
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,398 @@
 +/**
 + * Delivery state is always signed and always checked. With no signing key
 + * configured the host creates one at its first start, in a file only the
@@ -13627,6 +13647,69 @@ index 0000000000000000000000000000000000000000..9c63882e5a0221b480f216933c3634b5
 +    expect(() =>
 +      initDeliveryStateKeys(path.join(linked, 'delivery-state.key')),
 +    ).toThrow(/inside the project folder/);
++  });
++
++  it('is refused when a folder above it is a link into the project folder and the last folders do not exist yet', () => {
++    // The first start: "~/.config" leads into the store, "nanoclaw" is not
++    // there yet.
++    const config = path.join(root, 'home2', '.config');
++    fs.mkdirSync(path.dirname(config), { recursive: true });
++    fs.mkdirSync(path.join(project, 'store'));
++    fs.symlinkSync(path.join(project, 'store'), config);
++    const viaLink = path.join(config, 'nanoclaw', 'delivery-state.key');
++    expect(deliveryStateKeyFileProblem(viaLink)).toMatch(
++      /inside the project folder/,
++    );
++    expect(() => initDeliveryStateKeys(viaLink)).toThrow(
++      /inside the project folder/,
++    );
++    expect(fs.readdirSync(path.join(project, 'store'))).toEqual([]);
++  });
++
++  it('never has a name with half a key under it, and leaves no other file behind', () => {
++    initDeliveryStateKeys(keyFile);
++    expect(fs.readdirSync(path.dirname(keyFile))).toEqual([
++      'delivery-state.key',
++    ]);
++    // Created by a hard link of a finished file: the two steps are a write
++    // under another name and a link, so the key's name appears complete.
++    const source = fs.readFileSync(
++      path.join(__dirname, 'delivery-state.ts'),
++      'utf8',
++    );
++    const create = source.slice(source.indexOf('function createKeyFile'));
++    expect(create.indexOf('fs.writeFileSync(tmp')).toBeGreaterThan(0);
++    expect(create.indexOf('fs.linkSync(tmp, keyFile)')).toBeGreaterThan(
++      create.indexOf('fs.writeFileSync(tmp'),
++    );
++  });
++
++  it('with a key configured, a key file that cannot be read does not stop the host', () => {
++    fs.writeFileSync(
++      path.join(project, '.env'),
++      'WEBHOOK_SECRET=fake-webhook-secret\n',
++      { mode: 0o600 },
++    );
++    fs.mkdirSync(path.dirname(keyFile), { recursive: true });
++    for (const make of [
++      () => fs.writeFileSync(keyFile, ''),
++      () => fs.writeFileSync(keyFile, 'not a key'),
++      () => fs.mkdirSync(keyFile),
++    ]) {
++      fs.rmSync(keyFile, { recursive: true, force: true });
++      make();
++      expect(initDeliveryStateKeys(keyFile)).toEqual({
++        sign: 'fake-webhook-secret',
++        verify: ['fake-webhook-secret'],
++        source: 'WEBHOOK_SECRET',
++      });
++    }
++    // A folder of that name where a file is expected on the way.
++    const blocked = path.join(root, 'a-file');
++    fs.writeFileSync(blocked, 'x');
++    expect(
++      initDeliveryStateKeys(path.join(blocked, 'nanoclaw', 'k.key')).source,
++    ).toBe('WEBHOOK_SECRET');
 +  });
 +
 +  it('by default lives in the host settings folder, outside the project folder and every fixed mount', () => {
@@ -13996,10 +14079,10 @@ index a116c7b9b5b0b9c6e471ba80294270f079effade..e03f1208a0f387b72bb6a2e6c64ba653
 +  });
 +});
 diff --git a/src/delivery-state.ts b/src/delivery-state.ts
-index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325543e3130 100644
+index d0f4d128d85ab7eb38a94385187097f4121e60a1..eca56dc4f6f0311ef58e406b961a0456f1915542 100644
 --- a/src/delivery-state.ts
 +++ b/src/delivery-state.ts
-@@ -1,6 +1,11 @@
+@@ -1,8 +1,15 @@
 -import { createHmac, timingSafeEqual } from 'crypto';
 +import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 +import fs from 'fs';
@@ -14012,8 +14095,12 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325
 +} from './config.js';
  import { deleteRouterState, getRouterState, setRouterState } from './db.js';
  import { readEnvFile } from './env.js';
++import { logger } from './logger.js';
++import { realPathOfNearestExisting } from './real-path.js';
  import type { PreparedDelivery } from './types.js';
-@@ -72,20 +77,232 @@ function stateKey(jid: string): string {
+ 
+ const STATE_VERSION = 1 as const;
+@@ -72,20 +79,251 @@ function stateKey(jid: string): string {
    return `${STATE_KEY_PREFIX}${jid}`;
  }
  
@@ -14080,23 +14167,14 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325
    );
  }
  
-+/** The folder as the file system knows it, when it exists. */
-+function realOrSame(target: string): string {
-+  try {
-+    return fs.realpathSync(target);
-+  } catch {
-+    return path.resolve(target);
-+  }
-+}
-+
 +/**
 + * Why the key file must not be used at this place, or null. The project
 + * root is mounted into the main group's container, so a key under it is a
 + * key the agent can read.
 + */
 +export function deliveryStateKeyFileProblem(keyFile: string): string | null {
-+  const dir = realOrSame(path.dirname(keyFile));
-+  const root = realOrSame(process.cwd());
++  const dir = realPathOfNearestExisting(path.dirname(keyFile));
++  const root = realPathOfNearestExisting(process.cwd());
 +  if (isInside(dir, root)) {
 +    return (
 +      `The delivery-state key file would be at ${keyFile}, inside the project folder ${root}, which the main group's container can read. ` +
@@ -14162,24 +14240,39 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325
 +function createKeyFile(keyFile: string): string {
 +  const problem = deliveryStateKeyFileProblem(keyFile);
 +  if (problem) throw new Error(problem);
-+  fs.mkdirSync(path.dirname(keyFile), { recursive: true, mode: 0o700 });
 +  const key = randomBytes(32).toString('hex');
++  const tmp = `${keyFile}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 +  try {
-+    // "wx": never follows a link that is already there and never replaces a
-+    // file; another start that got there first wins.
-+    fs.writeFileSync(keyFile, `${key}\n`, { mode: 0o600, flag: 'wx' });
-+  } catch (err) {
-+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
++    fs.mkdirSync(path.dirname(keyFile), { recursive: true, mode: 0o700 });
++    // The folder may have been made through a link that was not there when
++    // the placement was judged; judge the place the file will really be in.
++    const late = deliveryStateKeyFileProblem(keyFile);
++    if (late) throw new Error(late);
++    // Written whole under another name, then given its name with a hard
++    // link: the name never exists with half a key in it (a stop between
++    // the two steps leaves no key file), a link never replaces a file that
++    // is there, and it does not follow a symbolic link at that name. A
++    // start that got there first wins.
++    fs.writeFileSync(tmp, `${key}\n`, { mode: 0o600, flag: 'wx' });
++    if (process.platform !== 'win32') fs.chmodSync(tmp, 0o600);
++    try {
++      fs.linkSync(tmp, keyFile);
++    } catch (err) {
++      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
 +      const existing = readKeyFile(keyFile);
 +      if (existing) return existing;
++      throw err;
 +    }
++    return key;
++  } catch (err) {
++    if (err instanceof Error && !('code' in err)) throw err;
 +    throw new Error(
 +      `Cannot create the delivery-state key file ${keyFile}: ${(err as NodeJS.ErrnoException).code ?? 'error'}. ` +
 +        'Make its folder writable by the host user, or set DELIVERY_STATE_SIGNING_KEY in .env.',
 +    );
++  } finally {
++    fs.rmSync(tmp, { force: true });
 +  }
-+  if (process.platform !== 'win32') fs.chmodSync(keyFile, 0o600);
-+  return key;
 +}
 +
 +/** One key per process for a process that never ran the start-up step. */
@@ -14207,7 +14300,20 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325
 +    // A key file under the project folder is never read: the agent could
 +    // have read it, or written it.
 +    const misplaced = deliveryStateKeyFileProblem(keyFile);
-+    if (!misplaced) fileKey = readKeyFile(keyFile);
++    if (!misplaced) {
++      try {
++        fileKey = readKeyFile(keyFile);
++      } catch (err) {
++        // With a key configured the file is only one more key to check
++        // old state with. A host that never needed it must not stop over
++        // it (a HOME the service user cannot enter, a stray file there).
++        if (!configured) throw err;
++        logger.warn(
++          { keyFile, reason: err instanceof Error ? err.message : 'error' },
++          'Delivery state: the key file was not read; a signing key is configured, so it is not needed. State signed with a key from that file, if any, will fail its check',
++        );
++      }
++    }
 +    if (!configured && !fileKey) fileKey = createKeyFile(keyFile);
 +  } else if (!configured) {
 +    processKey ??= randomBytes(32).toString('hex');
@@ -14256,7 +14362,7 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325
  function macFor(payload: string, key: string): string {
    return createHmac('sha256', key)
      .update('nanoclaw-delivery-state-v1\0')
-@@ -96,8 +313,7 @@ function macFor(payload: string, key: string): string {
+@@ -96,8 +334,7 @@ function macFor(payload: string, key: string): string {
  function unwrapSignedState(
    serialized: string,
  ): { ok: true; payload: string } | { ok: false; reason: string } {
@@ -14266,7 +14372,7 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325
    let wrapper: unknown;
    try {
      wrapper = JSON.parse(serialized);
-@@ -112,11 +328,15 @@ function unwrapSignedState(
+@@ -112,11 +349,15 @@ function unwrapSignedState(
    ) {
      return { ok: false, reason: 'missing-state-signature' };
    }
@@ -14285,7 +14391,7 @@ index d0f4d128d85ab7eb38a94385187097f4121e60a1..0a3c60a18d882fa74def974a9ada8325
    return { ok: true, payload: wrapper.payload };
  }
  
-@@ -261,14 +481,11 @@ export function saveDeliveryState(
+@@ -261,14 +502,11 @@ export function saveDeliveryState(
    if (Buffer.byteLength(serialized, 'utf8') > CONTAINER_MAX_OUTPUT_SIZE) {
      return { status: 'invalid', reason: 'state-too-large' };
    }
@@ -14640,12 +14746,207 @@ index 0000000000000000000000000000000000000000..14bdca3ba3ffdd5a304e1c1b461e6da4
 +    expect(seen).toBeGreaterThanOrEqual(inConfig.length + 2);
 +  });
 +});
+diff --git a/src/email-auth-settings.test.ts b/src/email-auth-settings.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e233d1e9d1e6bd5ac92ba4b8d327dce7e1eba312
+--- /dev/null
++++ b/src/email-auth-settings.test.ts
+@@ -0,0 +1,118 @@
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++import { logger } from './logger.js';
++import {
++  _resetEmailAuthSettingsForTests,
++  currentEmailAuthSettings,
++  initEmailAuthSettings,
++  loadEmailAuthSettings,
++} from './email-auth-settings.js';
++
++// The EMAIL_AUTH_* settings are read from the process environment and from
++// `.env`. `.env` is looked for in the working directory, so each test runs
++// in a folder of its own.
++
++const PLATFORM = 'mx.platform.example';
++const KEYS = [
++  'EMAIL_AUTH_MODE',
++  'EMAIL_AUTH_TRUSTED_AUTHSERV_IDS',
++  'EMAIL_AUTH_UNKNOWN',
++  'EMAIL_AUTH_REQUIRE_FROM_DOMAIN',
++];
++
++let dir: string;
++let cwd: string;
++
++function writeEnv(lines: string[]): void {
++  fs.writeFileSync(path.join(dir, '.env'), lines.join('\n') + '\n', {
++    mode: 0o600,
++  });
++}
++
++beforeEach(() => {
++  cwd = process.cwd();
++  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'email-auth-settings-'));
++  process.chdir(dir);
++  for (const key of KEYS) vi.stubEnv(key, '');
++  _resetEmailAuthSettingsForTests();
++});
++
++afterEach(() => {
++  process.chdir(cwd);
++  fs.rmSync(dir, { recursive: true, force: true });
++  vi.unstubAllEnvs();
++  vi.restoreAllMocks();
++  _resetEmailAuthSettingsForTests();
++});
++
++describe('where the EMAIL_AUTH_* settings are read from', () => {
++  it('reads every one of them from .env', () => {
++    writeEnv([
++      'EMAIL_AUTH_MODE=enforce',
++      `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS=${PLATFORM}`,
++      'EMAIL_AUTH_UNKNOWN=allow',
++      'EMAIL_AUTH_REQUIRE_FROM_DOMAIN=false',
++    ]);
++    const settings = loadEmailAuthSettings();
++    expect(settings.mode).toBe('enforce');
++    expect([...settings.trusted]).toEqual([PLATFORM]);
++    expect(settings.unknown).toBe('allow');
++    expect(settings.requireFromDomain).toBe(false);
++  });
++
++  it('the process environment wins over .env, key by key', () => {
++    writeEnv([
++      'EMAIL_AUTH_MODE=enforce',
++      `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS=${PLATFORM}`,
++    ]);
++    vi.stubEnv('EMAIL_AUTH_MODE', 'flag');
++    const settings = loadEmailAuthSettings();
++    expect(settings.mode).toBe('flag');
++    expect([...settings.trusted]).toEqual([PLATFORM]);
++  });
++
++  it('a value in .env that the host does not know stops the start', () => {
++    writeEnv(['EMAIL_AUTH_MODE=enforced']);
++    expect(() => initEmailAuthSettings()).toThrow(/"flag" or "enforce"/);
++    writeEnv(['EMAIL_AUTH_MODE=enforce']);
++    expect(() => initEmailAuthSettings()).toThrow(
++      /needs EMAIL_AUTH_TRUSTED_AUTHSERV_IDS/,
++    );
++    writeEnv(['EMAIL_AUTH_UNKNOWN=perhaps']);
++    expect(() => initEmailAuthSettings()).toThrow(/"block" or "allow"/);
++    writeEnv(['EMAIL_AUTH_REQUIRE_FROM_DOMAIN=sometimes']);
++    expect(() => initEmailAuthSettings()).toThrow(
++      /EMAIL_AUTH_REQUIRE_FROM_DOMAIN/,
++    );
++  });
++
++  it('says the mode in effect once at start, and keeps the settings until the restart', () => {
++    const info = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
++    writeEnv([
++      'EMAIL_AUTH_MODE=enforce',
++      `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS=${PLATFORM}`,
++    ]);
++    initEmailAuthSettings();
++    const lines = info.mock.calls.filter((call) =>
++      String(call[1]).includes('sender authentication'),
++    );
++    expect(lines).toHaveLength(1);
++    expect(lines[0][0]).toMatchObject({ mode: 'enforce', trusted: [PLATFORM] });
++    expect(String(lines[0][1])).toMatch(/enforce/);
++    // An edit of .env after the start changes nothing until the restart.
++    writeEnv(['EMAIL_AUTH_MODE=flag']);
++    expect(currentEmailAuthSettings().mode).toBe('enforce');
++  });
++
++  it('with nothing set: flag, and the start line says every verdict is unknown', () => {
++    const info = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
++    const settings = initEmailAuthSettings();
++    expect(settings.mode).toBe('flag');
++    expect(String(info.mock.calls.at(-1)?.[1])).toMatch(
++      /flag.*every verdict is "unknown"/,
++    );
++  });
++});
+diff --git a/src/email-auth-settings.ts b/src/email-auth-settings.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed8afc0b93c4b6a34c51b2dd0308083e641ffafb
+--- /dev/null
++++ b/src/email-auth-settings.ts
+@@ -0,0 +1,65 @@
++// Where the host gets the EMAIL_AUTH_* settings from, and when.
++//
++// They are read like the host's other plain settings (AGENT_WEB_TOOLS,
++// CONTAINER_NETWORK, REQUIRE_PRIVATE_ENV_FILE): the process environment
++// first, then `.env`. None of them is a secret, so either place is fine;
++// what is not fine is one place only, because `.env` is where an operator
++// writes settings and a value there that the host never reads looks set and
++// is not.
++//
++// They are read once, at start, and the host does not start on a value it
++// does not know. An edit takes effect at the next restart, as for the
++// listeners' secrets.
++
++import { readEnvFile } from './env.js';
++import {
++  EMAIL_AUTH_SETTING_KEYS,
++  readEmailAuthSettings,
++  type EmailAuthSettings,
++} from './email-auth.js';
++import { logger } from './logger.js';
++
++/** Process environment first, then `.env`, for each key. */
++export function loadEmailAuthSettings(): EmailAuthSettings {
++  const file = readEnvFile([...EMAIL_AUTH_SETTING_KEYS]);
++  const merged: Record<string, string | undefined> = {};
++  for (const key of EMAIL_AUTH_SETTING_KEYS) {
++    merged[key] = process.env[key] || file[key];
++  }
++  return readEmailAuthSettings(merged);
++}
++
++/** Set once at startup; null in tests and scripts that never start the host. */
++let startupSettings: EmailAuthSettings | null = null;
++
++/**
++ * The start-up step: read the settings, refuse a value that cannot work
++ * (it throws), keep them for every message, and say once what is in effect.
++ */
++export function initEmailAuthSettings(): EmailAuthSettings {
++  const settings = loadEmailAuthSettings();
++  startupSettings = settings;
++  const trusted = [...settings.trusted];
++  logger.info(
++    {
++      mode: settings.mode,
++      trusted,
++      unknown: settings.unknown,
++      requireFromDomain: settings.requireFromDomain,
++    },
++    settings.mode === 'enforce'
++      ? `Inbound email sender authentication: enforce (mail from a listed sender that is not authenticated is dropped; "unknown" is ${settings.unknown === 'allow' ? 'let through' : 'dropped'})`
++      : `Inbound email sender authentication: flag (the verdict is recorded and no message is dropped)${trusted.length === 0 ? '; no trusted mail server is set, so every verdict is "unknown"' : ''}`,
++  );
++  return settings;
++}
++
++/** The settings in effect. Before the start-up step they are read at each use. */
++export function currentEmailAuthSettings(): EmailAuthSettings {
++  return startupSettings ?? loadEmailAuthSettings();
++}
++
++/** @internal */
++export function _resetEmailAuthSettingsForTests(): void {
++  startupSettings = null;
++}
 diff --git a/src/email-auth.test.ts b/src/email-auth.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..8e6bbf5d337d2fc595b1e161a4fda04be30cce13
+index 0000000000000000000000000000000000000000..fe52e966c3eed7037f328d2ad7a8fd69daff6f7b
 --- /dev/null
 +++ b/src/email-auth.test.ts
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,409 @@
 +import { describe, expect, it } from 'vitest';
 +
 +import {
@@ -14677,6 +14978,8 @@ index 0000000000000000000000000000000000000000..8e6bbf5d337d2fc595b1e161a4fda04b
 +    envelope_from_domain: 'mail.example.edu',
 +    from_headers: 1,
 +    from_mailboxes: 1,
++    from_display_commas: false,
++    platform_status: results.length > 0 ? 'read' : 'absent',
 +    results,
 +    ...over,
 +  };
@@ -14695,23 +14998,114 @@ index 0000000000000000000000000000000000000000..8e6bbf5d337d2fc595b1e161a4fda04b
 +    ).toEqual({ verdict: 'unknown', reason: 'no trusted mail server is set' });
 +  });
 +
-+  it('is "unknown" with no auth field, an empty one, or only servers the host does not trust', () => {
++  it('is "unknown" only when nobody was asked or the platform wrote nothing', () => {
++    // An intake that sends no record.
 +    expect(verdict(undefined)).toBe('unknown');
-+    expect(verdict('pass')).toBe('unknown');
-+    expect(verdict(record([]))).toBe('unknown');
-+    expect(
-+      verdict(
-+        record([result({ authserv_id: 'mx.other.example', dmarc: 'pass' })]),
-+      ),
-+    ).toBe('unknown');
-+    // A record of a version this code does not know is not interpreted.
-+    expect(verdict(record([result({ dmarc: 'pass' })], { version: 2 }))).toBe(
-+      'unknown',
++    expect(verdict(null)).toBe('unknown');
++    // The worker has no platform set; the platform wrote no header.
++    expect(verdict(record([], { platform_status: 'unset' }))).toBe('unknown');
++    expect(verdict(record([], { platform_status: 'absent' }))).toBe('unknown');
++  });
++
++  it('is "unauthenticated" when the worker read results and none is from a server the host trusts', () => {
++    const decision = emailAuthVerdict(
++      'dlee@example.edu',
++      record([
++        result({
++          authserv_id: 'mx.other.example',
++          dmarc: 'pass',
++          dmarc_from: 'example.edu',
++        }),
++      ]),
++      trusted,
++    );
++    expect(decision.verdict).toBe('unauthenticated');
++    expect(decision.reason).toMatch(/EMAIL_AUTH_TRUSTED_AUTHSERV_IDS/);
++    // The host trusts the forwarder only. Mail sent straight to the bot
++    // carries the platform's result alone and must not come out "unknown"
++    // where the forwarded copy is "unauthenticated".
++    const forwarderOnly = new Set([CAMPUS]);
++    const direct = record([
++      result({ dmarc: 'fail', dmarc_from: 'example.edu' }),
++    ]);
++    const forwarded = record([
++      result({ dmarc: 'fail', dmarc_from: 'example.edu' }),
++      result({
++        source: 'forwarder',
++        authserv_id: CAMPUS,
++        dmarc: 'fail',
++        dmarc_from: 'example.edu',
++      }),
++    ]);
++    expect(verdict(direct, 'dlee@example.edu', forwarderOnly)).toBe(
++      'unauthenticated',
++    );
++    expect(verdict(forwarded, 'dlee@example.edu', forwarderOnly)).toBe(
++      'unauthenticated',
 +    );
 +  });
 +
-+  it('is "authenticated" on a DMARC pass from the platform', () => {
-+    expect(verdict(record([result({ dmarc: 'pass' })]))).toBe('authenticated');
++  it('is "unauthenticated", not "unknown", when a header with the platform name was there and was not read', () => {
++    const decision = emailAuthVerdict(
++      'dlee@example.edu',
++      record([], { platform_status: 'rejected' }),
++      trusted,
++    );
++    expect(decision.verdict).toBe('unauthenticated');
++    expect(decision.reason).toMatch(/could not be relied on/);
++  });
++
++  it('is "unauthenticated" on a record it cannot interpret', () => {
++    expect(verdict('pass')).toBe('unauthenticated');
++    expect(verdict([])).toBe('unauthenticated');
++    // A version this code does not know.
++    expect(
++      verdict(
++        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })], {
++          version: 2,
++        }),
++      ),
++    ).toBe('unauthenticated');
++    expect(verdict(record([], { results: 'none' }))).toBe('unauthenticated');
++    expect(verdict(record([], { platform_status: 'maybe' }))).toBe(
++      'unauthenticated',
++    );
++    // A status and a result list that contradict each other.
++    const pass = [result({ dmarc: 'pass', dmarc_from: 'example.edu' })];
++    expect(verdict(record(pass, { platform_status: 'absent' }))).toBe(
++      'unauthenticated',
++    );
++    expect(verdict(record(pass, { platform_status: 'unset' }))).toBe(
++      'unauthenticated',
++    );
++    expect(verdict(record([], { platform_status: 'read' }))).toBe(
++      'unauthenticated',
++    );
++    expect(verdict(record([null], { platform_status: 'read' }))).toBe(
++      'unauthenticated',
++    );
++  });
++
++  it('a worker from before platform_status: an empty result list is "unauthenticated"', () => {
++    // That worker sent an empty list both when the platform wrote nothing
++    // and when its header was unusable.
++    const old = (results: unknown[]) => ({
++      version: 1,
++      envelope_from_domain: 'mail.example.edu',
++      from_headers: 1,
++      from_mailboxes: 1,
++      results,
++    });
++    const decision = emailAuthVerdict('dlee@example.edu', old([]), trusted);
++    expect(decision.verdict).toBe('unauthenticated');
++    expect(decision.reason).toMatch(/inbound\/ worker/);
++    // Its results are still read.
++    expect(
++      verdict(old([result({ dmarc: 'pass', dmarc_from: 'example.edu' })])),
++    ).toBe('authenticated');
++  });
++
++  it('is "authenticated" on a DMARC pass from the platform that names the From domain', () => {
 +    expect(
 +      emailAuthVerdict(
 +        'dlee@example.edu',
@@ -14722,6 +15116,68 @@ index 0000000000000000000000000000000000000000..8e6bbf5d337d2fc595b1e161a4fda04b
 +      verdict: 'authenticated',
 +      reason: `DMARC pass for example.edu (${PLATFORM})`,
 +    });
++  });
++
++  it('a pass that names no From domain does not authenticate unless the deployer allows it for the platform', () => {
++    const bare = record([result({ dmarc: 'pass' })]);
++    const strict = emailAuthVerdict('dlee@example.edu', bare, trusted);
++    expect(strict.verdict).toBe('unauthenticated');
++    expect(strict.reason).toMatch(/names no From domain/);
++    expect(
++      emailAuthVerdict('dlee@example.edu', bare, trusted, {
++        requireFromDomain: false,
++      }).verdict,
++    ).toBe('authenticated');
++    // Never for a forwarder, whatever the setting.
++    expect(
++      emailAuthVerdict(
++        'dlee@example.edu',
++        record([
++          result({ dmarc: 'fail' }),
++          result({ source: 'forwarder', authserv_id: CAMPUS, dmarc: 'pass' }),
++        ]),
++        trusted,
++        { requireFromDomain: false },
++      ).verdict,
++    ).toBe('unauthenticated');
++    // A domain the worker could not read is not "no domain".
++    expect(
++      emailAuthVerdict(
++        'dlee@example.edu',
++        record([result({ dmarc: 'pass', dmarc_from: 'invalid' })]),
++        trusted,
++        { requireFromDomain: false },
++      ).verdict,
++    ).toBe('unauthenticated');
++  });
++
++  it('a From header with commas in the display name counts only with a pass that names the From domain', () => {
++    const commas = { from_mailboxes: 2, from_display_commas: true };
++    expect(
++      verdict(
++        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })], commas),
++      ),
++    ).toBe('authenticated');
++    // No named domain: not even where the deployer accepts that otherwise.
++    expect(
++      emailAuthVerdict(
++        'dlee@example.edu',
++        record([result({ dmarc: 'pass' })], commas),
++        trusted,
++        { requireFromDomain: false },
++      ).verdict,
++    ).toBe('unauthenticated');
++    // The flag does not excuse any other count, or a second From header.
++    const pass = [result({ dmarc: 'pass', dmarc_from: 'example.edu' })];
++    expect(
++      verdict(record(pass, { from_mailboxes: 3, from_display_commas: true })),
++    ).toBe('unauthenticated');
++    expect(verdict(record(pass, { ...commas, from_headers: 2 }))).toBe(
++      'unauthenticated',
++    );
++    expect(
++      verdict(record(pass, { from_mailboxes: 2, from_display_commas: 'yes' })),
++    ).toBe('unauthenticated');
 +  });
 +
 +  it('uses DMARC only: an aligned DKIM or SPF pass alone does not authenticate', () => {
@@ -14830,6 +15286,23 @@ index 0000000000000000000000000000000000000000..8e6bbf5d337d2fc595b1e161a4fda04b
 +    expect(s.mode).toBe('flag');
 +    expect([...s.trusted]).toEqual([]);
 +    expect(s.unknown).toBe('block');
++    expect(s.requireFromDomain).toBe(true);
++  });
++
++  it('EMAIL_AUTH_REQUIRE_FROM_DOMAIN takes the usual on and off words and nothing else', () => {
++    for (const on of ['true', 'TRUE', '1', 'on', ' true '])
++      expect(
++        readEmailAuthSettings({ EMAIL_AUTH_REQUIRE_FROM_DOMAIN: on })
++          .requireFromDomain,
++      ).toBe(true);
++    for (const off of ['false', '0', 'Off'])
++      expect(
++        readEmailAuthSettings({ EMAIL_AUTH_REQUIRE_FROM_DOMAIN: off })
++          .requireFromDomain,
++      ).toBe(false);
++    expect(() =>
++      readEmailAuthSettings({ EMAIL_AUTH_REQUIRE_FROM_DOMAIN: 'no thanks' }),
++    ).toThrow(/EMAIL_AUTH_REQUIRE_FROM_DOMAIN/);
 +  });
 +
 +  it('flag never blocks', () => {
@@ -14885,10 +15358,10 @@ index 0000000000000000000000000000000000000000..8e6bbf5d337d2fc595b1e161a4fda04b
 +});
 diff --git a/src/email-auth.ts b/src/email-auth.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..37af8f9f4541742f6f450b5c05be3ceac84cf266
+index 0000000000000000000000000000000000000000..d7cf469a915b8250bf4558488a55db6d28604276
 --- /dev/null
 +++ b/src/email-auth.ts
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,290 @@
 +// Sender authentication for inbound email: one verdict per message.
 +//
 +// The allowlist names people by the address in the From header, and anyone
@@ -14916,7 +15389,22 @@ index 0000000000000000000000000000000000000000..37af8f9f4541742f6f450b5c05be3cea
 +  trusted: Set<string>;
 +  /** enforce only: what happens to a message with the verdict "unknown". */
 +  unknown: 'block' | 'allow';
++  /**
++   * True (the default): a DMARC pass counts only when the server names the
++   * From domain it checked (`header.from`). False: a pass from the mail
++   * platform with no domain named is taken as a pass for the From address
++   * of the message.
++   */
++  requireFromDomain: boolean;
 +}
++
++/** The settings `readEmailAuthSettings` reads, for a caller that collects them. */
++export const EMAIL_AUTH_SETTING_KEYS = [
++  'EMAIL_AUTH_MODE',
++  'EMAIL_AUTH_TRUSTED_AUTHSERV_IDS',
++  'EMAIL_AUTH_UNKNOWN',
++  'EMAIL_AUTH_REQUIRE_FROM_DOMAIN',
++] as const;
 +
 +export interface EmailAuthDecision {
 +  verdict: EmailAuthVerdict;
@@ -14928,10 +15416,15 @@ index 0000000000000000000000000000000000000000..37af8f9f4541742f6f450b5c05be3cea
 +  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 +
 +/**
-+ * Read the three settings. Throws on a value that is not one of the listed
-+ * ones, and on "enforce" with no trusted server: that would block every
-+ * message, or (with EMAIL_AUTH_UNKNOWN=allow) check nothing while saying
-+ * "enforce".
++ * Read the settings from the record given. Throws on a value that is not
++ * one of the listed ones, and on "enforce" with no trusted server: that
++ * would block every message, or (with EMAIL_AUTH_UNKNOWN=allow) check
++ * nothing while saying "enforce".
++ *
++ * This file reads nothing else and imports nothing, so the offline check
++ * (`inbound/scripts/check-message.ts`) runs the same code. The host gets its
++ * record from the process environment and `.env` together
++ * (`src/email-auth-settings.ts`).
 + */
 +export function readEmailAuthSettings(
 +  env: Record<string, string | undefined> = process.env,
@@ -14955,17 +15448,21 @@ index 0000000000000000000000000000000000000000..37af8f9f4541742f6f450b5c05be3cea
 +  if (unknown !== 'block' && unknown !== 'allow') {
 +    throw new Error('EMAIL_AUTH_UNKNOWN must be "block" or "allow"');
 +  }
++  const requireRaw = (env.EMAIL_AUTH_REQUIRE_FROM_DOMAIN || 'true')
++    .trim()
++    .toLowerCase();
++  const requireFromDomain = ['1', 'true', 'on'].includes(requireRaw);
++  if (!requireFromDomain && !['0', 'false', 'off'].includes(requireRaw)) {
++    throw new Error(
++      'EMAIL_AUTH_REQUIRE_FROM_DOMAIN must be "true" or "false" (also 1, on, 0, off)',
++    );
++  }
 +  if (mode === 'enforce' && trusted.size === 0) {
 +    throw new Error(
 +      'EMAIL_AUTH_MODE=enforce needs EMAIL_AUTH_TRUSTED_AUTHSERV_IDS: with no trusted mail server no message can be authenticated. Set the list, or use EMAIL_AUTH_MODE=flag.',
 +    );
 +  }
-+  return { mode, trusted, unknown };
-+}
-+
-+/** Start-up check: the host does not start on a setting that cannot work. */
-+export function assertEmailAuthConfigured(): void {
-+  readEmailAuthSettings();
++  return { mode, trusted, unknown, requireFromDomain };
 +}
 +
 +function domainOfAddress(address: string): string {
@@ -14978,73 +15475,171 @@ index 0000000000000000000000000000000000000000..37af8f9f4541742f6f450b5c05be3cea
 +  return typeof value === 'string' ? value.toLowerCase() : '';
 +}
 +
++const unauthenticated = (reason: string): EmailAuthDecision => ({
++  verdict: 'unauthenticated',
++  reason,
++});
++
 +/**
 + * Turn the worker's record into one verdict for the address in `from`.
 + *
-+ * - "unknown": no result from a server in `trusted` (no `auth` field, an
-+ *   empty one, or only servers the host was not told to believe).
-+ * - "authenticated": a trusted server reports a DMARC pass for the From
-+ *   domain. SPF and DKIM results are recorded and not used: a pass of
-+ *   either says nothing about the From header unless DMARC ties it to it,
-+ *   so a sender whose domain publishes no DMARC record is never
-+ *   "authenticated".
-+ * - "unauthenticated": a trusted server reported, and no DMARC pass covers
-+ *   the From domain.
++ * - "unknown" has two causes and no other: nobody was asked, or the mail
++ *   platform said nothing. Nobody was asked: the host trusts no server, the
++ *   payload has no `auth` field (an intake that does not report), or the
++ *   worker has no platform set. The platform said nothing: no header in the
++ *   message carries its name. None of these is something the sender of a
++ *   message can bring about.
++ * - "authenticated": a trusted server reports a DMARC pass and names the
++ *   From domain as the one it checked. SPF and DKIM results are recorded
++ *   and not used: a pass of either says nothing about the From header
++ *   unless DMARC ties it to it, so a sender whose domain publishes no DMARC
++ *   record is never "authenticated".
++ * - "unauthenticated": everything else. A trusted server reported and no
++ *   DMARC pass covers the From domain; or a header with the platform's name
++ *   was in the message and could not be relied on (twice, extended, not
++ *   the first, malformed); or the worker read results and none is from a
++ *   server this host trusts; or the record itself is not in the form this
++ *   code knows.
++ *
++ * `requireFromDomain` false lets a pass from the platform (never from a
++ * forwarder) count without a named domain. See EMAIL_AUTH_REQUIRE_FROM_DOMAIN
++ * in docs/setup-reference.md for when that is needed and what it gives up.
 + */
 +export function emailAuthVerdict(
 +  from: unknown,
 +  auth: unknown,
 +  trusted: ReadonlySet<string>,
++  options: { requireFromDomain?: boolean } = {},
 +): EmailAuthDecision {
++  const requireFromDomain = options.requireFromDomain !== false;
 +  if (trusted.size === 0) {
 +    return { verdict: 'unknown', reason: 'no trusted mail server is set' };
 +  }
-+  const record =
-+    auth && typeof auth === 'object' ? (auth as Record<string, unknown>) : {};
-+  const counted = (Array.isArray(record.results) ? record.results : [])
-+    .filter(
-+      (r): r is Record<string, unknown> =>
-+        !!r && typeof r === 'object' && trusted.has(text(r.authserv_id)),
-+    )
-+    .slice(0, 4);
-+  if (record.version !== 1 || counted.length === 0) {
++  if (auth === undefined || auth === null) {
 +    return {
 +      verdict: 'unknown',
-+      reason: 'the intake sent no result from a trusted mail server',
++      reason: 'the intake sent no authentication record',
 +    };
++  }
++  if (typeof auth !== 'object' || Array.isArray(auth)) {
++    return unauthenticated('the authentication record is not readable');
++  }
++  const record = auth as Record<string, unknown>;
++  if (record.version !== 1 || !Array.isArray(record.results)) {
++    return unauthenticated(
++      'the authentication record is not in a form this host knows',
++    );
++  }
++  const results = record.results as unknown[];
++  const status = record.platform_status;
++  if (status === 'unset' || status === 'absent') {
++    // Said by the worker, never by the message. With results beside it the
++    // record contradicts itself.
++    if (results.length > 0) {
++      return unauthenticated('the authentication record contradicts itself');
++    }
++    return {
++      verdict: 'unknown',
++      reason:
++        status === 'unset'
++          ? 'the intake has no mail platform set to read results from'
++          : 'the mail platform wrote no result for this message',
++    };
++  }
++  if (status === 'rejected') {
++    return unauthenticated(
++      "a header with the mail platform's name was in the message and could not be relied on",
++    );
++  }
++  if (status !== 'read' && status !== undefined) {
++    return unauthenticated(
++      'the authentication record is not in a form this host knows',
++    );
++  }
++  if (results.length === 0) {
++    // `read` with nothing read, or a worker from before `platform_status`:
++    // that one sent an empty list both when the platform wrote nothing and
++    // when its header was there and unusable, and the two cannot be told
++    // apart here.
++    return unauthenticated(
++      status === 'read'
++        ? 'the authentication record contradicts itself'
++        : 'the intake worker does not say why it read no result (deploy the current inbound/ worker)',
++    );
++  }
++  if (
++    !results.every(
++      (r) =>
++        !!r &&
++        typeof r === 'object' &&
++        !Array.isArray(r) &&
++        typeof (r as Record<string, unknown>).authserv_id === 'string',
++    ) ||
++    results.length > 4
++  ) {
++    return unauthenticated('the authentication record is not readable');
++  }
++  const counted = (results as Record<string, unknown>[]).filter((r) =>
++    trusted.has(text(r.authserv_id)),
++  );
++  if (counted.length === 0) {
++    // The worker read a result and this host trusts none of the servers it
++    // read. Not "unknown": with a forwarder trusted and the platform not,
++    // whether a forwarder result is in the list depends on the route the
++    // sender chose, and mail sent straight to the bot would get out of a
++    // check the forwarded copy fails.
++    return unauthenticated(
++      'the intake read a result, and from no server this host trusts (EMAIL_AUTH_TRUSTED_AUTHSERV_IDS must name the mail platform the intake reads)',
++    );
 +  }
 +  const ids = counted.map((r) => text(r.authserv_id)).join(', ');
 +  const fromDomain = domainOfAddress(text(from));
 +  if (!fromDomain) {
-+    return { verdict: 'unauthenticated', reason: 'no usable From address' };
++    return unauthenticated('no usable From address');
 +  }
-+  if (record.from_headers !== 1 || record.from_mailboxes !== 1) {
-+    return {
-+      verdict: 'unauthenticated',
-+      reason: `the message does not have exactly one From address (checked by ${ids})`,
-+    };
++  // One From header with one address. A count of 2 that comes only from
++  // commas in the display name or in a comment (`from_display_commas`) is
++  // looked past, and then the server must name the From domain whatever
++  // the setting: the named domain is what ties the pass to this address
++  // when two readers may have split the header differently.
++  const displayCommas =
++    record.from_mailboxes === 2 && record.from_display_commas === true;
++  if (
++    record.from_headers !== 1 ||
++    (record.from_mailboxes !== 1 && !displayCommas)
++  ) {
++    return unauthenticated(
++      `the message does not have exactly one From address (checked by ${ids})`,
++    );
 +  }
++  let unnamedPass = false;
 +  for (const r of counted) {
 +    const id = text(r.authserv_id);
-+    const dmarcFrom = text(r.dmarc_from);
++    if (text(r.dmarc) !== 'pass') continue;
 +    // Only DMARC is used: it is the one check that is about the From
-+    // header. The mail platform checks it for the From header of the
-+    // message it hands over and may not name the domain; a forwarder must
-+    // name it. A named domain must be the From domain exactly.
-+    if (
-+      text(r.dmarc) === 'pass' &&
-+      (dmarcFrom ? dmarcFrom === fromDomain : text(r.source) === 'platform')
-+    ) {
-+      return {
-+        verdict: 'authenticated',
-+        reason: `DMARC pass for ${fromDomain} (${id})`,
-+      };
++    // header. A named domain must be the From domain exactly.
++    const dmarcFrom = text(r.dmarc_from);
++    if (dmarcFrom) {
++      if (dmarcFrom !== fromDomain) continue;
++    } else {
++      // No domain named. Only the mail platform may be taken at its word,
++      // only when the deployer said so, and never for a From header that
++      // needed the lenient reading.
++      if (requireFromDomain || displayCommas || text(r.source) !== 'platform') {
++        unnamedPass = true;
++        continue;
++      }
 +    }
++    return {
++      verdict: 'authenticated',
++      reason: `DMARC pass for ${fromDomain} (${id})`,
++    };
 +  }
-+  return {
-+    verdict: 'unauthenticated',
-+    reason: `no DMARC pass covers ${fromDomain} (checked by ${ids})`,
-+  };
++  return unauthenticated(
++    unnamedPass
++      ? `a DMARC pass names no From domain, so it is not tied to ${fromDomain} (checked by ${ids})`
++      : `no DMARC pass covers ${fromDomain} (checked by ${ids})`,
++  );
 +}
 +
 +/** enforce: true when a message with this verdict must not be processed. */
@@ -15255,10 +15850,10 @@ index b418cd405708cecbbaa53b3a7ece1e875289b974..4e9b01c6f948bf488f739ffff690aa8d
   * markers. Non-throwing — on parse failure, returns `{isAutoReply: false}`
 diff --git a/src/env-file-permissions.test.ts b/src/env-file-permissions.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..b4e65dd5c5432cd6adfa88a750d862e7e61da509
+index 0000000000000000000000000000000000000000..05f5f533b134905cbeaefdadb9d22e54b0de302c
 --- /dev/null
 +++ b/src/env-file-permissions.test.ts
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,214 @@
 +/**
 + * Issue 54: `.env` holds every secret. The host says so at start when other
 + * users of the machine can read it, and refuses to start only when asked to.
@@ -15412,6 +16007,12 @@ index 0000000000000000000000000000000000000000..b4e65dd5c5432cd6adfa88a750d862e7
 +    );
 +  });
 +
++  it('a process value of spaces does not hide the value in .env', () => {
++    writeWithMode(0o644, 'REQUIRE_PRIVATE_ENV_FILE=true\n');
++    vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', '   ');
++    expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);
++  });
++
 +  it('"on" in .env is a refusal for a readable file', () => {
 +    writeWithMode(0o644, 'REQUIRE_PRIVATE_ENV_FILE=on\n');
 +    expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);
@@ -15468,10 +16069,10 @@ index 0000000000000000000000000000000000000000..b4e65dd5c5432cd6adfa88a750d862e7
 +  });
 +});
 diff --git a/src/env.ts b/src/env.ts
-index 82cd5c3da0f0e4ebbfc83f2b5fe7aa09b7cf8e21..c15a0d444050ee508157a6af46f45ab34fdd75e8 100644
+index 82cd5c3da0f0e4ebbfc83f2b5fe7aa09b7cf8e21..ebb471c9ea92cb27c1d1e47d78b3fe0d867bcd1c 100644
 --- a/src/env.ts
 +++ b/src/env.ts
-@@ -41,3 +41,96 @@ export function readEnvFile(keys: string[]): Record<string, string> {
+@@ -41,3 +41,97 @@ export function readEnvFile(keys: string[]): Record<string, string> {
  
    return result;
  }
@@ -15550,7 +16151,8 @@ index 82cd5c3da0f0e4ebbfc83f2b5fe7aa09b7cf8e21..c15a0d444050ee508157a6af46f45ab3
 +export function checkEnvFilePermissions(file = envFilePath()): void {
 +  const strict = booleanSetting(
 +    'REQUIRE_PRIVATE_ENV_FILE',
-+    process.env.REQUIRE_PRIVATE_ENV_FILE ||
++    // Trimmed first: a process value of spaces must not hide the file's.
++    (process.env.REQUIRE_PRIVATE_ENV_FILE ?? '').trim() ||
 +      readEnvFile(['REQUIRE_PRIVATE_ENV_FILE']).REQUIRE_PRIVATE_ENV_FILE,
 +    false,
 +  );
@@ -16887,10 +17489,10 @@ index 0000000000000000000000000000000000000000..cae89b45bb422eea68dd456a0b8a1e4d
 +});
 diff --git a/src/host-repo-symlink.test.ts b/src/host-repo-symlink.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..bbd80e04b15bdd2eb99e3d5a8cadbee4938d7485
+index 0000000000000000000000000000000000000000..7259970343de3c75354c6f7e36fa155ed39b16d2
 --- /dev/null
 +++ b/src/host-repo-symlink.test.ts
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,148 @@
 +/**
 + * A PROGRAM_HOST_REPO that is a symbolic link. The host works in the folder
 + * the link leads to, so that folder is the one made private; a link that
@@ -16987,6 +17589,25 @@ index 0000000000000000000000000000000000000000..bbd80e04b15bdd2eb99e3d5a8cadbee4
 +    vi.spyOn(process, 'cwd').mockReturnValue(project);
 +    fs.symlinkSync(path.join(project, 'store', 'host'), link);
 +    vi.stubEnv('PROGRAM_HOST_REPO', link);
++    expect(hostRepoPlacementProblem()).toMatch(/inside the project folder/);
++  });
++
++  it('below a link into the checkout or the project folder, when the repo folder does not exist yet: refused, and nothing is created', () => {
++    // The first start: the setting is "<link>/program-repo-host" and only
++    // the link is there.
++    fs.symlinkSync(kb.checkout, link);
++    vi.stubEnv('PROGRAM_HOST_REPO', path.join(link, 'program-repo-host'));
++    expect(hostRepoPlacementProblem()).toMatch(/inside PROGRAM_REPO/);
++    expect(() => ensureHostRepo()).toThrow(/host repo refused/);
++    expect(fs.existsSync(path.join(kb.checkout, 'program-repo-host'))).toBe(
++      false,
++    );
++
++    const project = path.join(kb.root, 'project');
++    fs.mkdirSync(path.join(project, 'store'), { recursive: true });
++    vi.spyOn(process, 'cwd').mockReturnValue(project);
++    fs.rmSync(link);
++    fs.symlinkSync(path.join(project, 'store'), link);
 +    expect(hostRepoPlacementProblem()).toMatch(/inside the project folder/);
 +  });
 +
@@ -17445,10 +18066,10 @@ index 0000000000000000000000000000000000000000..bd514b7fedddef7d62dbbecedef86e54
 +});
 diff --git a/src/host-repo.ts b/src/host-repo.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..f264ee156fc0583e286ac04006bca89cc46fda2e
+index 0000000000000000000000000000000000000000..653d389f5c5661b5fa64982aec70aa371720c4e8
 --- /dev/null
 +++ b/src/host-repo.ts
-@@ -0,0 +1,1469 @@
+@@ -0,0 +1,1472 @@
 +/**
 + * The host-owned copy of the program repo, and the only place where the host
 + * runs git with a working tree or a credential.
@@ -17498,6 +18119,7 @@ index 0000000000000000000000000000000000000000..f264ee156fc0583e286ac04006bca89c
 +  redactOriginCredential,
 +  splitOriginCredential,
 +} from './origin-credential.js';
++import { realPathOfNearestExisting } from './real-path.js';
 +import { logger } from './logger.js';
 +import { CHECKOUT_OWNER, getProgramRepoPath } from './program-repo.js';
 +import {
@@ -17852,12 +18474,14 @@ index 0000000000000000000000000000000000000000..f264ee156fc0583e286ac04006bca89c
 + * such a folder.
 + */
 +function hostRepoLinkProblem(host: string, checkout: string): string | null {
-+  const real = realOrResolved(host);
++  // The nearest existing folder decides: at the first start the repo's own
++  // folder is not there yet, and a link above it must still be seen.
++  const real = realPathOfNearestExisting(host);
 +  if (real === path.resolve(host)) return null;
-+  const realCheckout = realOrResolved(checkout);
++  const realCheckout = realPathOfNearestExisting(checkout);
 +  if (inside(realCheckout, real) || inside(real, realCheckout))
 +    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, which is inside PROGRAM_REPO or contains it. The agent can write there`;
-+  if (inside(realOrResolved(process.cwd()), real))
++  if (inside(realPathOfNearestExisting(process.cwd()), real))
 +    return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, inside the project folder, which the main group's container can read`;
 +  let st: fs.Stats;
 +  try {
@@ -19393,7 +20017,7 @@ index 0000000000000000000000000000000000000000..8d5ed4ff95e4e60490caee25e48a6e1e
 +  );
 +}
 diff --git a/src/index.ts b/src/index.ts
-index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..b44b25842a346465e0d3f978f98b69aa3085e9f5 100644
+index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..822aea0b5f95e4305bad01a3ea5b7fe4e35e695c 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -12,7 +12,15 @@ import {
@@ -19486,7 +20110,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..b44b25842a346465e0d3f978f98b69aa
    shutdownOutboundEmailQueue,
    startOutboundEmailQueue,
  } from './outbound-email.js';
-+import { assertEmailAuthConfigured } from './email-auth.js';
++import { initEmailAuthSettings } from './email-auth-settings.js';
 +import { originCredentialProblem } from './origin-credential.js';
  
  let lastTimestamp = '';
@@ -19555,7 +20179,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..b44b25842a346465e0d3f978f98b69aa
      const imageAttachments =
        agentMode === 'normal' ? parseImageReferences(prompt) : [];
  
-@@ -866,16 +897,63 @@ function ensureContainerSystemRunning(): void {
+@@ -866,16 +897,64 @@ function ensureContainerSystemRunning(): void {
  }
  
  async function main(): Promise<void> {
@@ -19570,8 +20194,9 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..b44b25842a346465e0d3f978f98b69aa
 +  // OUTBOUND_MAIL_PROVIDER=smtp: only an encrypted, authenticated submission.
 +  assertOutboundMailConfigured();
 +
-+  // EMAIL_AUTH_MODE=enforce needs a trusted mail server to be named.
-+  assertEmailAuthConfigured();
++  // EMAIL_AUTH_*: read once from the process environment and `.env`, a
++  // value the host does not know stops it, and the mode in effect is logged.
++  initEmailAuthSettings();
 +
 +  // A credential in an origin URL is handled for https:// only. The message
 +  // names the scheme, never the URL.
@@ -19620,7 +20245,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..b44b25842a346465e0d3f978f98b69aa
    );
  
    // Graceful shutdown handlers
-@@ -1028,7 +1106,10 @@ async function main(): Promise<void> {
+@@ -1028,7 +1107,10 @@ async function main(): Promise<void> {
    // fire-and-forget catch it themselves; the shortfall-alert replay layer needs
    // the rejection, because a swallowed failure there reads as a confirmed
    // delivery and drops the alert permanently (round-3 review P1).
@@ -19632,7 +20257,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..b44b25842a346465e0d3f978f98b69aa
      const alertJid = resolveDeadLetterJid();
      const alertChannel = findChannel(channels, alertJid);
      if (!alertChannel) {
-@@ -1044,18 +1125,36 @@ async function main(): Promise<void> {
+@@ -1044,18 +1126,36 @@ async function main(): Promise<void> {
        throw new Error(`Alert delivery failed: ${outcome.reason}`);
      }
    };
@@ -19672,7 +20297,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..b44b25842a346465e0d3f978f98b69aa
    /**
     * G46-gated send for non-streaming paths (scheduler forwards, IPC
     * messages): validates against the owning channel's declared profile.
-@@ -1143,12 +1242,21 @@ async function main(): Promise<void> {
+@@ -1143,12 +1243,21 @@ async function main(): Promise<void> {
      },
    });
    startSessionCleanup();
@@ -20872,10 +21497,10 @@ index 4a9eb1212816dc5d5ecba1b75f31e5e695ce292f..57ee4522efdfd956fc78967ec7a6cfd8
      realPath,
 diff --git a/src/origin-credential.test.ts b/src/origin-credential.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..d68c61ab1f88eb0fd798f0c46c4745505222f93a
+index 0000000000000000000000000000000000000000..753d1e70c14b6f805508f2045cd67e1f56f518b3
 --- /dev/null
 +++ b/src/origin-credential.test.ts
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,378 @@
 +import { execFileSync } from 'child_process';
 +import fs from 'fs';
 +import os from 'os';
@@ -21112,6 +21737,53 @@ index 0000000000000000000000000000000000000000..d68c61ab1f88eb0fd798f0c46c474550
 +    expect(out).not.toContain(SECRET);
 +  });
 +
++  it('takes out a credential next to a quote or a space, and in each spelling of its escapes', () => {
++    const q = String.fromCharCode(34);
++    // No URL given: a quote inside the user-info does not end the match.
++    for (const userinfo of [
++      `kb-bot:${SECRET}${q}x${at}y`,
++      `kb-bot:${SECRET}'x`,
++    ]) {
++      const out = redactOriginCredential(
++        `fatal: unable to access 'https://${userinfo}${at}${HOST}/x/'`,
++      );
++      expect(out, userinfo.replace(SECRET, '…')).not.toContain(SECRET);
++    }
++    // A space in the token, with the URL known.
++    const spaced = `https://kb-bot:${SECRET} part2${at}${HOST}/x`;
++    expect(
++      redactOriginCredential(`bad token ${SECRET} part2 for ${spaced}`, [
++        spaced,
++      ]),
++    ).not.toContain(SECRET);
++    // Written with "@" as is, printed encoded; and escapes in either case.
++    expect(
++      redactOriginCredential(`bad token ${SECRET}%40v2`, [
++        `https://kb-bot:${SECRET}${at}v2${at}${HOST}/x`,
++      ]),
++    ).toBe('bad token ***');
++    expect(
++      redactOriginCredential(`bad token ${SECRET}%2fv2`, [
++        `https://kb-bot:${SECRET}%2Fv2${at}${HOST}/x`,
++      ]),
++    ).toBe('bad token ***');
++    // An escape that cannot be decoded does not stop the others.
++    expect(
++      redactOriginCredential(`bad token ${SECRET}/v2%zz`, [
++        `https://kb-bot:${SECRET}%2Fv2%zz${at}${HOST}/x`,
++      ]),
++    ).toBe('bad token ***');
++  });
++
++  it('does not blank the user name of an SSH address, which is not a secret', () => {
++    const text = 'ssh: connect to host gitlab.example.edu port 22: refused';
++    expect(
++      redactOriginCredential(text, [
++        'ssh://gitlab@gitlab.example.edu/team/repo.git',
++      ]),
++    ).toBe(text);
++  });
++
 +  it('leaves a URL with a port and no credential alone', () => {
 +    const text = `fatal: unable to access 'https://${HOST}:8443/team/repo.git/'`;
 +    expect(
@@ -21145,6 +21817,32 @@ index 0000000000000000000000000000000000000000..d68c61ab1f88eb0fd798f0c46c474550
 +        `http://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
 +      ),
 +    ).toMatch(/http:\/\/.*not encrypted.*https:\/\//);
++  });
++
++  it('refuses a URL with spaces in it, and a token in the query string or the fragment on any scheme', () => {
++    for (const url of [
++      `http://kb bot:${SECRET}${at}git.example.edu/team/repo.git`,
++      `http://kb-bot:${SECRET}${at}git.example.edu/team/re po.git`,
++      `http://git.example.edu/team/repo.git?private_token=${SECRET}`,
++      `https://git.example.edu/team/repo.git?access_token=${SECRET}`,
++      `https://git.example.edu/team/repo.git#${SECRET}`,
++    ]) {
++      const problem = originCredentialProblem(url);
++      expect(problem, url.replace(SECRET, '…')).toBeTruthy();
++      expect(problem).not.toContain(SECRET);
++      expect(problem).not.toContain('git.example.edu');
++    }
++  });
++
++  it('reads the user part up to the path: an "@" in the path of an SSH address is not a password', () => {
++    for (const url of [
++      'ssh://git@git.example.edu:2222/team/repo@v2.git',
++      'ssh://git.example.edu:2222/team/repo@v2.git',
++      'http://git.example.edu:8080/team/repo@v2.git',
++      'http://git.example.edu/team/repo@v2.git',
++    ]) {
++      expect(originCredentialProblem(url), url).toBeNull();
++    }
 +  });
 +
 +  it('has nothing to say about the forms the host handles', () => {
@@ -21183,10 +21881,10 @@ index 0000000000000000000000000000000000000000..d68c61ab1f88eb0fd798f0c46c474550
 +});
 diff --git a/src/origin-credential.ts b/src/origin-credential.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c9c6a3b6ad020ddd5b842d15d4df1f6a5ccd5858
+index 0000000000000000000000000000000000000000..8e85d06e7fc684a9b627853f67f83e9b1a08a8ea
 --- /dev/null
 +++ b/src/origin-credential.ts
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,210 @@
 +/**
 + * A credential written inside the origin URL ("https://user:token@host/...").
 + *
@@ -21248,13 +21946,29 @@ index 0000000000000000000000000000000000000000..c9c6a3b6ad020ddd5b842d15d4df1f6a
 +export function originCredentialProblem(
 +  url: string | null | undefined,
 +): string | null {
-+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^\s]*)$/i.exec((url ?? '').trim());
++  // Anything after "://" counts, spaces included: a URL git would refuse
++  // still reaches a log line first.
++  const m = /^([a-z][a-z0-9+.-]*):\/\/([\s\S]*)$/i.exec((url ?? '').trim());
 +  if (!m) return null;
 +  const scheme = m[1].toLowerCase();
-+  if (scheme === 'https' || scheme === 'file') return null;
-+  const at = m[2].lastIndexOf('@');
-+  if (at < 0) return null;
-+  const userinfo = m[2].slice(0, at);
++  if (scheme === 'file') return null;
++  // A token in the query string or the fragment is part of the address on
++  // every scheme: it cannot be handed to git apart from the URL.
++  if (/[?#]/.test(m[2]))
++    return `the origin URL has a "?" or a "#" part. A token written there is part of the address and would reach git's command line and the log. Put the credential before the host name of an https:// URL (https://user:token@host/...), or use an SSH key.`;
++  if (scheme === 'https') return null;
++  // The user-info ends at the last "@" before the path. A password pasted
++  // with a "/" in it cuts the host part short: then what stands before the
++  // first "/" has a ":" that is not followed by a port number, and an "@"
++  // comes later.
++  const slash = m[2].indexOf('/');
++  const authority = slash < 0 ? m[2] : m[2].slice(0, slash);
++  let userinfo = authority.includes('@')
++    ? authority.slice(0, authority.lastIndexOf('@'))
++    : '';
++  if (!userinfo && m[2].includes('@') && /:(?!\d*$)/.test(authority))
++    userinfo = m[2].slice(0, m[2].lastIndexOf('@'));
++  if (!userinfo) return null;
 +  if (scheme === 'ssh' && !userinfo.includes(':')) return null;
 +  return scheme === 'ssh'
 +    ? 'the origin URL is an ssh:// address with a password in it. SSH takes no password from a URL, and git would be given it on its command line. Remove the password and use an SSH key.'
@@ -21287,12 +22001,29 @@ index 0000000000000000000000000000000000000000..c9c6a3b6ad020ddd5b842d15d4df1f6a
 +  };
 +}
 +
++/** Percent-decoded, one escape at a time: a bad escape stays as written. */
 +function decoded(text: string): string {
-+  try {
-+    return decodeURIComponent(text);
-+  } catch {
-+    return text;
-+  }
++  return text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
++    try {
++      return decodeURIComponent(run);
++    } catch {
++      return run;
++    }
++  });
++}
++
++/**
++ * Every spelling of one piece of a credential that a program may print: as
++ * written, decoded, and encoded again with the escapes in either letter
++ * case.
++ */
++function spellings(part: string): string[] {
++  const plain = decoded(part);
++  const encoded = encodeURIComponent(plain);
++  const lower = encoded.replace(/%[0-9A-F]{2}/g, (e) => e.toLowerCase());
++  const asWrittenUpper = part.replace(/%[0-9a-f]{2}/gi, (e) => e.toUpperCase());
++  const asWrittenLower = part.replace(/%[0-9a-f]{2}/gi, (e) => e.toLowerCase());
++  return [part, plain, encoded, lower, asWrittenUpper, asWrittenLower];
 +}
 +
 +/**
@@ -21303,18 +22034,26 @@ index 0000000000000000000000000000000000000000..c9c6a3b6ad020ddd5b842d15d4df1f6a
 + *    a well-formed URL);
 + *  - up to the last "@" of the whole URL, for a token with a "/" in it.
 + * Any scheme, so a URL this host refuses to use is still taken out of text
-+ * that quotes it.
++ * that quotes it. The one exception: the user name of an SSH address with
++ * no password is not a secret ("git"), and taking it out would blank that
++ * word wherever it stands.
 + */
 +function userinfoReadings(url: string): string[] {
-+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^\s]*)$/i.exec(url.trim());
++  const m = /^([a-z][a-z0-9+.-]*):\/\/([\s\S]*)$/i.exec(url.trim());
 +  if (!m) return [];
-+  const rest = m[1];
++  const rest = m[2];
 +  const out = new Set<string>();
 +  const authority = rest.split(/[/?#]/)[0];
 +  if (authority.includes('@'))
 +    out.add(authority.slice(0, authority.lastIndexOf('@')));
 +  if (rest.includes('@')) out.add(rest.slice(0, rest.lastIndexOf('@')));
-+  return [...out].filter(Boolean);
++  const readings = [...out].filter(Boolean);
++  if (m[1].toLowerCase() === 'ssh' && authority.includes('@'))
++    return readings.filter(
++      (r) =>
++        r.includes(':') && r === authority.slice(0, authority.lastIndexOf('@')),
++    );
++  return readings;
 +}
 +
 +/**
@@ -21342,8 +22081,8 @@ index 0000000000000000000000000000000000000000..c9c6a3b6ad020ddd5b842d15d4df1f6a
 +      }
 +      for (const part of parts) {
 +        // A very short piece ("x", "git") would blank ordinary words.
-+        if (part.length >= 4) secrets.add(part);
-+        if (decoded(part).length >= 4) secrets.add(decoded(part));
++        for (const form of spellings(part))
++          if (form.length >= 4) secrets.add(form);
 +      }
 +    }
 +  }
@@ -21351,10 +22090,10 @@ index 0000000000000000000000000000000000000000..c9c6a3b6ad020ddd5b842d15d4df1f6a
 +  for (const secret of [...secrets].sort((a, b) => b.length - a.length))
 +    out = out.split(secret).join('***');
 +  // Any "scheme://...@" left in the text: everything up to the last "@" of
-+  // the word goes. A user name or a token may hold "@", ":" and "/" as
-+  // written, so no shorter match is safe. The cost: a URL with no
++  // the word goes. A user name or a token may hold "@", ":", "/" and quotes
++  // as written, so no shorter match is safe. The cost: a URL with no
 +  // credential and an "@" in its path loses its host in the log line.
-+  return out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s'"]*@/gi, '$1***@');
++  return out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s]*@/gi, '$1***@');
 +}
 diff --git a/src/outbound-email-attempt-budget.test.ts b/src/outbound-email-attempt-budget.test.ts
 new file mode 100644
@@ -26575,6 +27314,35 @@ index 30e89a240d80cb17d8806781f5bb2035cec9b120..c930e6889a5761a1cbeabef202b292b4
 +export function getProgramRepoPath(): string {
 +  return process.env.PROGRAM_REPO || DEFAULT_PROGRAM_REPO;
  }
+diff --git a/src/real-path.ts b/src/real-path.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e483bc09c691cb87f1db3d9eb4db525b0bfccac4
+--- /dev/null
++++ b/src/real-path.ts
+@@ -0,0 +1,23 @@
++import fs from 'fs';
++import path from 'path';
++
++/**
++ * The path as the file system knows it. A part that does not exist yet
++ * cannot be resolved, so the nearest folder above it that does exist is
++ * resolved and the rest is put back: a link higher up still counts when the
++ * last folders are yet to be created.
++ */
++export function realPathOfNearestExisting(target: string): string {
++  let current = path.resolve(target);
++  const rest: string[] = [];
++  for (;;) {
++    try {
++      return path.join(fs.realpathSync(current), ...rest);
++    } catch {
++      const parent = path.dirname(current);
++      if (parent === current) return path.resolve(target);
++      rest.unshift(path.basename(current));
++      current = parent;
++    }
++  }
++}
 diff --git a/src/repo-reader-git-stderr.test.ts b/src/repo-reader-git-stderr.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..56bf3bea45fe411efe98be4823a82844f13bac02

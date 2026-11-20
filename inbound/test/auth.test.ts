@@ -5,6 +5,7 @@ import {
   buildIntake,
   fromAddressCount,
   fromMailboxCount,
+  fromMailboxes,
 } from '../src/mail.js';
 import { authTrust } from '../src/settings.js';
 import { MemoryKV, testEnv } from './helpers.js';
@@ -98,6 +99,8 @@ describe('which headers are read', () => {
       envelope_from_domain: 'mail.example.edu',
       from_headers: 1,
       from_mailboxes: 1,
+      from_display_commas: false,
+      platform_status: 'read',
       results: [
         {
           source: 'platform',
@@ -283,9 +286,14 @@ describe('which headers are read', () => {
   });
 
   it('marks a domain it cannot read as invalid, not as absent', async () => {
-    const { payload } = await auth([
-      `${AR}${PLATFORM}; spf=pass smtp.mailfrom=<>; dkim=pass header.d=localhost; dmarc=pass header.from=a_b.attacker.example.net`,
-    ]);
+    // A null envelope sender: the platform's "smtp.mailfrom" is then no
+    // host name either, and the two agree.
+    const { payload } = await auth(
+      [
+        `${AR}${PLATFORM}; spf=pass smtp.mailfrom=<>; dkim=pass header.d=localhost; dmarc=pass header.from=a_b.attacker.example.net`,
+      ],
+      { envelopeFrom: '' },
+    );
     expect(payload.auth.results[0]).toMatchObject({
       spf_domain: 'invalid',
       dkim: [{ result: 'pass', domain: 'invalid' }],
@@ -451,6 +459,322 @@ describe('the From header', () => {
     // No address was read from the header: `from` is the envelope sender.
     expect(fromMailboxCount('a@attacker.example.net', null)).toBe(2);
     expect(fromMailboxCount('', null)).toBe(0);
+  });
+});
+
+describe('what the record says became of the platform result', () => {
+  const status = async (top: string[], options: Options = {}) =>
+    (await auth(top, options)).payload.auth.platform_status;
+  const real = `${AR}${PLATFORM}; spf=fail; dkim=none; dmarc=fail header.from=example.edu`;
+
+  it('unset: no platform is named in the settings', async () => {
+    expect(
+      await status([real], {
+        trust: {
+          platformAuthservId: '',
+          forwarderAuthservIds: [],
+          forwarderDomains: [],
+        },
+      }),
+    ).toBe('unset');
+  });
+
+  it('absent: no header in the message carries the platform name', async () => {
+    expect(await status([])).toBe('absent');
+    expect(await status([`${AR}other.example; dmarc=pass`])).toBe('absent');
+    // A header that names no server at all.
+    expect(await status([`${AR}dmarc=pass header.from=example.edu`])).toBe(
+      'absent',
+    );
+  });
+
+  it('absent: the platform says it made no check', async () => {
+    const none = await auth([`${AR}${PLATFORM}; none`]);
+    expect(none.payload.auth.platform_status).toBe('absent');
+    expect(none.payload.auth.results).toEqual([]);
+    // "none" with a result added behind it is not that form.
+    expect(
+      await status([
+        `${AR}${PLATFORM}; none`,
+        ' ; dmarc=pass header.from=example.edu',
+      ]),
+    ).toBe('rejected');
+  });
+
+  it('read: the platform header was taken', async () => {
+    const { payload, markdown } = await auth([real]);
+    expect(payload.auth.platform_status).toBe('read');
+    expect(payload.auth.results).toHaveLength(1);
+    expect(markdown).toContain('dmarc=fail (example.edu)');
+  });
+
+  it('rejected, never absent, for every way a sender can keep the platform header from being read', async () => {
+    const cases: [string, string[], Options?][] = [
+      [
+        'a continuation line that adds a result',
+        [real, ' ; dmarc=pass header.from=example.edu'],
+      ],
+      ['a continuation line that adds text only', [real, ' ; hello']],
+      [
+        'a second header with the platform name',
+        [real, `${AR}${PLATFORM}; dmarc=pass header.from=example.edu`],
+      ],
+      [
+        'a second one with a space before the colon',
+        [
+          real,
+          `Authentication-Results : ${PLATFORM}; dmarc=pass header.from=example.edu`,
+        ],
+      ],
+      [
+        'a second one that cannot be parsed',
+        [real, `${AR}${PLATFORM}; dmarc=pass (open`],
+      ],
+      [
+        'an unclosed comment from sender text',
+        [
+          `${AR}${PLATFORM}; spf=fail (domain of "x (y"@attacker.example.net) smtp.mailfrom=attacker.example.net; dmarc=fail header.from=example.edu`,
+        ],
+        { envelopeFrom: '"x (y"@attacker.example.net' },
+      ],
+      [
+        'an unclosed quote',
+        [`${AR}${PLATFORM}; spf=fail smtp.mailfrom="a; dmarc=fail`],
+      ],
+      [
+        'a property twice in one result',
+        [
+          `${AR}${PLATFORM}; dmarc=fail header.from=example.edu header.from=example.org`,
+        ],
+      ],
+      [
+        'a comment inside a comment, closed by a line of the sender',
+        [
+          `${AR}${PLATFORM}; spf=pass (domain of "x) ; dmarc=pass header.from=example.edu; arc=none (("@attacker.example.net designates 192.0.2.1 as permitted sender) smtp.mailfrom=attacker.example.net; dkim=none; dmarc=fail (p=reject) header.from=example.edu`,
+          ' )',
+        ],
+        {
+          envelopeFrom:
+            '"x) ; dmarc=pass header.from=example.edu; arc=none (("@attacker.example.net',
+        },
+      ],
+      [
+        'a comment inside a comment',
+        [`${AR}${PLATFORM}; dmarc=fail (p=reject (strict)) header.from=example.edu`],
+      ],
+      ['two DMARC results', [`${AR}${PLATFORM}; dmarc=fail; dmarc=pass`]],
+      ['no DMARC result', [`${AR}${PLATFORM}; spf=pass; dkim=pass`]],
+      [
+        'a part that is not a result',
+        [`${AR}${PLATFORM}; dmarc = fail; spf=pass`],
+      ],
+    ];
+    for (const [name, top, options] of cases) {
+      const { payload, markdown } = await auth(top, options);
+      expect(payload.auth.platform_status, name).toBe('rejected');
+      expect(payload.auth.results, name).toEqual([]);
+      expect(markdown, name).toContain(
+        'X-Intake-Authentication: a header with the platform name could not be relied on',
+      );
+    }
+  });
+
+  it('rejected: a header with the platform name that the platform did not put first', async () => {
+    const planted = `${PLATFORM}; spf=pass; dmarc=pass header.from=example.edu`;
+    expect(await status([`${AR}other.example; spf=fail`, `${AR}${planted}`])).toBe(
+      'rejected',
+    );
+    expect(await status([`${AR}${planted}`], { platformHeader: null })).toBe(
+      'rejected',
+    );
+    expect(
+      await status([`${AR}${planted}`], {
+        platformHeader: `${PLATFORM}; spf=fail; dmarc=fail, ${planted}`,
+      }),
+    ).toBe('rejected');
+  });
+
+  it('a forwarder header that cannot be relied on leaves the platform result read', async () => {
+    const { payload } = await auth(
+      [
+        `${AR}${PLATFORM}; spf=pass; dkim=fail; dmarc=fail`,
+        `${AR}${CAMPUS}; dmarc=pass header.from=example.edu; dmarc=pass header.from=example.edu`,
+      ],
+      { envelopeFrom: 'srs0=ab=cd=example.edu=dlee@campus.example.edu' },
+    );
+    expect(payload.auth.platform_status).toBe('read');
+    expect(payload.auth.results.map((r) => r.source)).toEqual(['platform']);
+  });
+});
+
+describe('more than one SPF result in one header', () => {
+  it('reads one result for the HELO name and one for the envelope sender', async () => {
+    // RFC 8601 section 2.7.2 registers smtp.helo and smtp.mailfrom; a
+    // server that checks both identities writes two results.
+    for (const top of [
+      `${AR}${PLATFORM}; dkim=pass header.d=example.edu; spf=none (no record) smtp.helo=out.example.edu; spf=pass (permitted sender) smtp.mailfrom=bounce@mail.example.edu; dmarc=pass header.from=example.edu`,
+      `${AR}${PLATFORM}; spf=pass smtp.mailfrom=mail.example.edu; spf=none smtp.helo=out.example.edu; dmarc=pass header.from=example.edu`,
+      // Angle brackets around the address.
+      `${AR}${PLATFORM}; spf=none smtp.helo=out.example.edu; spf=pass smtp.mailfrom=<bounce@mail.example.edu>; dmarc=pass header.from=example.edu`,
+    ]) {
+      const { payload } = await auth([top]);
+      expect(payload.auth.platform_status, top).toBe('read');
+      // The result reported is the envelope sender's, never the HELO one.
+      expect(payload.auth.results[0], top).toMatchObject({
+        spf: 'pass',
+        spf_domain: 'mail.example.edu',
+        dmarc: 'pass',
+      });
+    }
+  });
+
+  it('drops the header on two results for the same identity', async () => {
+    for (const top of [
+      `${AR}${PLATFORM}; spf=fail smtp.mailfrom=mail.example.edu; spf=pass smtp.mailfrom=mail.example.edu; dmarc=fail`,
+      `${AR}${PLATFORM}; spf=fail; spf=pass smtp.mailfrom=mail.example.edu; dmarc=fail`,
+      `${AR}${PLATFORM}; spf=fail; spf=pass; dmarc=fail`,
+      // A result that names no identity beside one that does: a server
+      // that names the identity in one result names it in all.
+      `${AR}${PLATFORM}; spf=none smtp.helo=out.example.edu; spf=pass; dmarc=fail`,
+      `${AR}${PLATFORM}; spf=pass; spf=none smtp.helo=out.example.edu; dmarc=fail`,
+      `${AR}${PLATFORM}; spf=none smtp.helo=a.example.edu; spf=pass smtp.helo=b.example.edu; dmarc=fail`,
+      // One result that names both identities is the envelope sender's.
+      `${AR}${PLATFORM}; spf=fail smtp.mailfrom=mail.example.edu; spf=pass smtp.helo=a.example.edu smtp.mailfrom=mail.example.edu; dmarc=fail`,
+    ]) {
+      const { payload } = await auth([top]);
+      expect(payload.auth.platform_status, top).toBe('rejected');
+      expect(payload.auth.results, top).toEqual([]);
+    }
+  });
+
+  it('drops a platform header whose SPF result is for another domain than the envelope sender', async () => {
+    // The platform checked SPF for the envelope sender it reports. With a
+    // HELO result only in the real header, an added result for a
+    // forwarder's domain must not open the forwarder rule.
+    const { payload } = await auth(
+      [
+        `${AR}${PLATFORM}; spf=pass smtp.helo=mail.attacker.example.net; dmarc=fail header.from=example.edu`,
+        ' ; spf=pass smtp.mailfrom=campus.example.edu',
+        `${AR}${CAMPUS}; dmarc=pass header.from=example.edu`,
+      ],
+      { envelopeFrom: 'x@attacker.example.net' },
+    );
+    expect(payload.auth.platform_status).toBe('rejected');
+    expect(payload.auth.results).toEqual([]);
+    // The same with a null envelope sender.
+    const bounce = await auth(
+      [
+        `${AR}${PLATFORM}; spf=pass smtp.helo=mail.attacker.example.net; dmarc=fail header.from=example.edu`,
+        ' ; spf=pass smtp.mailfrom=campus.example.edu',
+        `${AR}${CAMPUS}; dmarc=pass header.from=example.edu`,
+      ],
+      { envelopeFrom: '' },
+    );
+    expect(bounce.payload.auth.results).toEqual([]);
+    // An added result that names no identity, beside the platform's HELO
+    // result, with an envelope sender the attacker chose in the forwarder's
+    // domain.
+    const bare = await auth(
+      [
+        `${AR}${PLATFORM}; spf=pass smtp.helo=mail.attacker.example.net; dmarc=fail header.from=example.edu`,
+        ' ; spf=pass',
+        `${AR}${CAMPUS}; dmarc=pass header.from=example.edu`,
+      ],
+      { envelopeFrom: 'x@campus.example.edu' },
+    );
+    expect(bare.payload.auth.platform_status).toBe('rejected');
+    expect(bare.payload.auth.results).toEqual([]);
+    // A forwarder names the sender it saw, which is not this envelope.
+    const forwarded = await auth(
+      [
+        `${AR}${PLATFORM}; spf=none smtp.helo=out.campus.example.edu; spf=pass smtp.mailfrom=campus.example.edu; dkim=fail; dmarc=fail`,
+        `${AR}${CAMPUS}; spf=pass smtp.mailfrom=dlee@example.edu; dmarc=pass header.from=example.edu`,
+      ],
+      { envelopeFrom: 'srs0=ab=cd=example.edu=dlee@campus.example.edu' },
+    );
+    expect(forwarded.payload.auth.results.map((r) => r.source)).toEqual([
+      'platform',
+      'forwarder',
+    ]);
+  });
+});
+
+describe('commas in the display name', () => {
+  const lenient = (header: string, address: string | null) =>
+    fromMailboxes(header, address);
+
+  it('still counts 2, and says when commas in the display name or a comment are the only cause', () => {
+    for (const header of [
+      'Lee, Dana <dlee@example.edu>',
+      'Lee, Dana, PhD <dlee@example.edu>',
+      'Dana (Alumni, East) <dlee@example.edu>',
+      'Lee, Dana (Finance, East) <dlee@example.edu> (she, her)',
+      '"Lee" , Dana <DLee@example.edu>',
+    ]) {
+      expect(lenient(header, 'dlee@example.edu'), header).toEqual({
+        count: 2,
+        displayCommas: true,
+      });
+    }
+    // The quoted form needs no leniency.
+    expect(lenient('"Lee, Dana" <dlee@example.edu>', 'dlee@example.edu')).toEqual(
+      { count: 1, displayCommas: false },
+    );
+  });
+
+  it('does not say so for a header that can hold a second mailbox', () => {
+    for (const header of [
+      // A comma that is not in the display name before "<" or in a comment.
+      'dlee@example.edu,',
+      'dlee@example.edu, Dana',
+      '<dlee@example.edu>, Dana',
+      'Lee, Dana <dlee@example.edu>, x',
+      'Lee, Dana <dlee@example.edu> x',
+      // A second address, in any form.
+      'a@attacker.example.net, Dana <dlee@example.edu>',
+      '"a@attacker.example.net", Dana <dlee@example.edu>',
+      'Lee, Dana <dlee@example.edu> (a@attacker.example.net)',
+      'a(x)@attacker.example.net, Dana <dlee@example.edu>',
+      // A group, a route, an escape, an open quote or comment.
+      'team: Lee, Dana <dlee@example.edu>;',
+      'Lee, Dana <@attacker.example.net:dlee@example.edu>',
+      'Lee\\, Dana <dlee@example.edu>',
+      'Lee, "Dana <dlee@example.edu>',
+      'Lee, Dana (x <dlee@example.edu>',
+      // More inside the brackets than the address.
+      'Lee, Dana < dlee@example.edu>',
+      'Lee, Dana <dlee@example.edu > ',
+      // An encoded word a reader may decode before it splits.
+      '=?utf-8?q?a=40attacker.example.net?=, Dana <dlee@example.edu>',
+      // A character outside ASCII in the address.
+      'Lee, Dana <dlee@Kent.example.edu>'.replace('K', '\u212a'),
+    ]) {
+      expect(lenient(header, 'dlee@example.edu').displayCommas, header).toBe(
+        false,
+      );
+      expect(lenient(header, 'dlee@example.edu').count, header).not.toBe(1);
+    }
+    // The parser read another address than the one counted, or none.
+    expect(
+      lenient('Lee, Dana <dlee@example.edu>', 'a@attacker.example.net'),
+    ).toEqual({ count: 2, displayCommas: false });
+    expect(lenient('Lee, Dana <dlee@example.edu>', null)).toEqual({
+      count: 2,
+      displayCommas: false,
+    });
+  });
+
+  it('puts both facts in the payload', async () => {
+    const { payload } = await auth(
+      [`${AR}${PLATFORM}; dmarc=pass header.from=example.edu`],
+      { from: 'From: Lee, Dana <dlee@example.edu>' },
+    );
+    expect(payload.from).toBe('dlee@example.edu');
+    expect(payload.auth).toMatchObject({
+      from_headers: 1,
+      from_mailboxes: 2,
+      from_display_commas: true,
+    });
   });
 });
 

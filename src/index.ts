@@ -144,7 +144,7 @@ import {
   shutdownOutboundEmailQueue,
   startOutboundEmailQueue,
 } from './outbound-email.js';
-import { assertEmailAuthConfigured } from './email-auth.js';
+import { initEmailAuthSettings } from './email-auth-settings.js';
 import { originCredentialProblem } from './origin-credential.js';
 
 let lastTimestamp = '';
@@ -908,8 +908,9 @@ async function main(): Promise<void> {
   // OUTBOUND_MAIL_PROVIDER=smtp: only an encrypted, authenticated submission.
   assertOutboundMailConfigured();
 
-  // EMAIL_AUTH_MODE=enforce needs a trusted mail server to be named.
-  assertEmailAuthConfigured();
+  // EMAIL_AUTH_*: read once from the process environment and `.env`, a
+  // value the host does not know stops it, and the mode in effect is logged.
+  initEmailAuthSettings();
 
   // A credential in an origin URL is handled for https:// only. The message
   // names the scheme, never the URL.

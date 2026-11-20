@@ -22,6 +22,7 @@ It will not:
 - serve students or the public. It is for a staff team;
 - invent content. It reads and cites your record;
 - change who has access because a message asked. Only the admin does that;
+- search the web or open web pages, unless you turn that on. On a Linux server the bot's workspace has no route to the internet by default; on a laptop with Docker Desktop it does, so use test data there;
 - delete old mail. Everything it files stays in your record until a person removes it;
 - decide what your institution allows. You get that answer from your own offices.
 
@@ -87,6 +88,7 @@ One question at a time, each with an explanation and a recommendation. You can a
 6. Who is on the allowlist, and what they are told about where their mail goes.
 7. How people reach the bot, and how the operator is alerted (Telegram, email, or both).
 8. Whether the bot sends any reminders on a schedule. For a first pilot: none.
+9. Whether the bot may search the web or reach the internet from its workspace. For a first pilot: no.
 
 Your agent does the file changes and the tests. Only you can create accounts, approve a cost, ask your IT office for something, or say "go live". The agent asks you before anything that costs money, sends mail, or goes live.
 

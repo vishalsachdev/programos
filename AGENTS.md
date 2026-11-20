@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,089 passing tests (1,761 from the source, 328 added here). One timing test
+   is 2,154 passing tests (1,761 from the source, 393 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -106,7 +106,9 @@ move up without starting again. "First start" means part 14.
   must be set, or the host refuses to start.
 - **What it does NOT give you:** no email, so no colleague can use it; no routed
   approval by mail; no public address; it stops when the laptop sleeps. It is a look at the
-  behaviour, not a service.
+  behaviour, not a service. On a laptop with Docker Desktop the agent container's
+  network is open by default (choice 17): what the agent reads can leave the
+  machine unseen. Use test data only.
 - **Steps that apply:** part 13 steps 1 to 6 with only the model, identity and
   Telegram settings; First start steps 1, 2, 3, 4 (the main group and the Telegram
   group; no email group), 5, 6 and 7. Skip "Inbound mail" and both optional webhooks.
@@ -139,9 +141,9 @@ move up without starting again. "First start" means part 14.
     questions).
 - **What it does NOT give you:** no channel for students or the public; no
   single sign-on; no retention or deletion of old mail (the code never deletes
-  from the program repo); no restriction on the agent container's network on
-  `main` (see "Coming" below); no second mail provider. Sender caps are in memory
-  and reset on restart.
+  from the program repo); no second mail provider; no web search, web fetch or
+  browsing for the agent unless you turn them on (choice 17). Sender caps are in
+  memory and reset on restart.
 - **Steps that apply:** all of part 13, all of First start, "Inbound mail", and
   the supported hosting recipe in `docs/deployment.md`. Add the two optional
   webhooks when the machine has its public HTTPS name.
@@ -210,13 +212,6 @@ the person. The pilot is not done until every line is ticked or has a written re
 - **Not verified:** no request from this repo has reached a real Foundry
   endpoint; the failover was tested against fake servers only. One university's
   open questions are under `docs/illinois/`; none of them is answered there.
-
-### Coming, not on `main`
-
-- **PR 40 (issues 32 and 33):** a restricted network for the agent container,
-  web search and web fetch off by default, and the host pushing the agent's
-  commits. Do not offer these as options until that pull request is merged and
-  this file lists them in part 5.
 
 ### Policy questions (ASK)
 
@@ -418,7 +413,8 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Cost to the person:* a virtual machine from a cloud provider or their
   institution (check the provider's current pricing), and a DNS name for it.
 - *Settings:* `WEBHOOK_HOST=127.0.0.1`, `WEBHOOK_PORT`, `CREDENTIAL_PROXY_PORT`
-  (process); `TZ` (.env). Only when the host process runs as root, which the
+  (process); `TZ` (.env). `WEBHOOK_HOST` matters for choice 17 too: left unset,
+  the listener is on all interfaces and the agent container can reach it. Only when the host process runs as root, which the
   recipe does not do: `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID`,
   `CHECKOUT_OWNER_HOME` (process).
 - *Detail:* `docs/deployment.md`; `docs/illinois/hosting.md` (a stub).
@@ -516,6 +512,56 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   files are right for the project.
 - *Detail:* part 8.
 
+**17. What the agent can reach: the container's network and web tools**
+- *Plain words:* the agent works in a sealed workspace (a container). Two
+  settings decide whether anything it reads (the team's mail, the knowledge
+  base) can leave that workspace by a route other than a reply. The first is the
+  workspace's network. The second is whether the agent may search the web and
+  fetch pages. Neither route is checked by the delivery gate or written to the
+  audit log.
+- *Options for the network (`CONTAINER_NETWORK`):*
+  - `restricted`: the container reaches the credential proxy on the host and
+    nothing outside: no website, no git host, no outside name lookup.
+  - `open`: the container can reach any host. The host logs a warning at each start.
+- *Options for web tools (`AGENT_WEB_TOOLS`):* unset (off) or `1` (on). A web
+  search is run by the model provider, so the agent's query leaves through the
+  proxy even on the restricted network. Web fetch and `agent-browser` also need
+  the network `open`.
+- *Code default:* network `restricted` on Docker Engine on Linux and `open` on
+  Docker Desktop (macOS, Windows with WSL), where `restricted` was not verified.
+  Web tools off. Any other value of `CONTAINER_NETWORK` stops the start.
+- *First pilot:* `restricted` and web tools off, on a Linux machine. ASK before
+  you set `open` or turn web tools on, and write the answer in `setup-decisions.md`.
+- *What stops working with the pilot choice:* web search and web fetch;
+  `agent-browser`; `curl` and any other network use from the agent's shell;
+  `git push` inside the container (the host pushes; `git pull` still works,
+  because it reads the host's read-only export: First start, step 5); a scheduled-task script that fetches a URL (the example in
+  `groups/global/references/scheduled-task-scripts.md` does). With web tools off
+  the proxy also refuses requests that would make the model provider reach an
+  outside host for the agent: a web search or fetch tool, a remote MCP server, an
+  image or document given as a URL, and the provider's managed agents API
+  ("Safety items").
+- *What the restricted network does not stop.* Tell the person each of these:
+  - **A host service that listens on all interfaces is reachable from the
+    container**, on the network's gateway address. The webhook listener does that
+    unless `WEBHOOK_HOST=127.0.0.1` is set, and the host logs a warning at each
+    start while it is not. Set it (choice 8).
+  - Whatever the agent puts in a model request goes to the model provider.
+- *Settings:* `CONTAINER_NETWORK`, `AGENT_WEB_TOOLS` (process, else .env; both
+  are read at start, so a change needs a restart); `CONTAINER_NETWORK_NAME`
+  (process; the Docker network's name, default `nanoclaw-agents`; change it only
+  if the name is taken); `CREDENTIAL_PROXY_HOST` (process; used on the open
+  network only).
+- *Not tested:* no agent turn has run against a real model provider on the
+  restricted network. On 2026-11-20 real agent containers on that network
+  completed a turn against a local stand-in for the provider (API-key mode and
+  OAuth mode); the proxy's refusals have run against stand-ins only. Foundry was
+  not run in a container. `restricted` is not
+  verified on Docker Desktop or on Docker older than 29. First start, step 9,
+  checks the network on the machine in use.
+- *Detail:* "Safety items"; First start, step 9; `SPEC.md` sections 2 and 11;
+  `docs/data-handling.md`, "The container's network".
+
 ## 6. Words to explain
 
 Use these, or your own words of the same length, the first time each term comes up.
@@ -601,6 +647,8 @@ and say so.
 | Telegram admin channel | In production in K-ai. The default route for operator alerts (see "Safety items") | Bot token, admin chat ID, **the chat sender allowlist file** |
 | Operator alerts by email (`ADMIN_ALERT_ROUTE=email`) | New in this repo, not in K-ai. Tested here with the mail provider stubbed; **not yet run against a live provider** | `OPERATOR_CC_EMAIL` set to one person's address, the outbound provider key |
 | Behaviour sensor and evaluation scripts | In production in K-ai | Ground-truth files in the program repo; see "Academic examples" |
+| Restricted container network (`CONTAINER_NETWORK`) | New in this repo (2026-11-20); not in K-ai. Checked with real containers on Docker Engine on Linux only | Docker Engine on Linux for the default; see "Safety items" |
+| Web search, web fetch, `agent-browser` | Off by default since 2026-11-20 | `AGENT_WEB_TOOLS=1`; fetch and browser also need `CONTAINER_NETWORK=open`. ASK first |
 | Web chat | Was in production, later retired there | A secret and a reverse proxy; treat as untested. **No allowlist of people: any caller with the secret is answered** |
 
 ## 10. Safety items you must handle
@@ -673,6 +721,35 @@ and say so.
   other. Put only the admin's handle on the Telegram allowlist until the source fixes this.
 - **Retired people:** delete their allowlist row and handle. The email check accepts
   an address in any table row in the allowlist file, also below the "Retired access" note.
+- **The container's network is restricted by default on Linux.** `CONTAINER_NETWORK`
+  (`src/container-runtime.ts`) has two values. `restricted` puts the container on a
+  Docker network created with `--internal`: it reaches the host's credential proxy and
+  no outside host, no git host and no outside DNS name. `open` is the runtime's default
+  network, where the agent can send what it reads (mail, the knowledge base) to any
+  host, unseen by the delivery gate and the audit log; the host logs a warning at each
+  start. The default is `restricted` on Docker Engine on Linux, where it was checked
+  with real containers, and `open` on Docker Desktop (macOS, WSL), where it was not.
+  ASK before you set `open` (choice 17). Limits the user must know:
+  - **The container still reaches any host service that listens on all interfaces.**
+    The webhook listener does so unless `WEBHOOK_HOST=127.0.0.1` is set in the process
+    environment; the code default is all interfaces, and the host warns at each start
+    while the network is restricted and that address is not loopback. Set it.
+- **Web search and web fetch are off by default.** `AGENT_WEB_TOOLS=1` turns them on
+  (`src/web-tools.ts`). Web fetch and `agent-browser` need `CONTAINER_NETWORK=open` as
+  well. While the setting is off, the tools are removed from the agent's list, and the
+  credential proxy is the boundary: it reads every request the container sends, and
+  refuses one that would make the model provider contact an outside host. That is a
+  web search or web fetch tool, a remote MCP server (`mcp_servers`, `mcp_toolset`), an
+  image or document given as a URL, and the managed agents API (`/v1/agents`,
+  `/v1/sessions`, `/v1/environments`). On a model path it also refuses a body it
+  cannot read as JSON, or one with a content encoding. It forwards only the model
+  paths (`/v1/messages` and below, `/v1/complete`), the model list and the OAuth key
+  exchange; any other path on the provider's host is refused and named once in the
+  host log. Limits: the refused features were read from the type definitions of the
+  pinned SDK, not seen at a live provider; and a tool type the proxy does not know is
+  forwarded with one warning in the host log, so tool types are not an allowlist. If
+  an agent turn fails with "Refused by this deployment", read the host log for the
+  reason before you change a setting. ASK before you turn web tools on.
 - **Mounts:** `config-examples/mount-allowlist.json` must list only the program repo. The email group is not the main group and it must write to the program repo in status-update mode, so `nonMainReadOnly` is `false` in the example. Keep the web chat group's own mount read-only in its group registration.
 - **Protected files are guarded for the agent's file-editing tools only.** `container/agent-runner/src/protected-write-guard.ts` blocks Write, Edit and NotebookEdit on protected paths. It does not inspect shell commands, so the agent can still change such a file in its checkout. The host does not push that: a commit from the checkout that changes a protected path is refused, whatever author it names, and the operator is alerted (`src/host-repo.ts`). The git-author check in `src/governance-protection.ts` still judges commits that reach the origin another way. Do not describe the tool guard to the user as a hard block.
 - **Known gaps inherited from the source** (reported there): the conflict-check skill tells the agent to notify the admin with a Telegram tool that is not registered; two prompts and that skill disagree on how to record an uncorroborated spreadsheet fact (the skill is stricter: it goes to open questions); `groups/main/CLAUDE.md` is mostly upstream framework text.
@@ -802,6 +879,13 @@ Do these once, in this order, before the first test message:
    `Admin alert test NOT delivered` for each. Check that the user received each one,
    then remove the variable. For the email route, "delivered" means the mail provider
    accepted the mail; confirm it reached the inbox.
+9. Run `npx tsx scripts/check-container-egress.ts` as the service user, with the
+   service's environment. It starts containers the way the host does and must print
+   PASS for each line: the container reaches the host's proxy address; on the
+   restricted network it reaches no outside host and resolves no outside name; a
+   commit made inside the container is taken out of a (temporary) checkout by the
+   host and arrives on a (temporary) remote. The host's credential against the
+   real origin is step 5's check. Do not send the first test message until both pass.
 
 ## 15. Governance
 

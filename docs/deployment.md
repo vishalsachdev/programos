@@ -5,9 +5,9 @@ The code is the source of truth for how the bot runs. This page holds only what 
 ## What the host must be able to do
 
 - **Start a Docker container for each turn.** The host process (Node) launches the agent in a new container per message. This needs a machine where you control Docker: a laptop, a small server or a cloud virtual machine. Managed "run my web app" services that do not let the app start containers will not work.
-- **Keep a git checkout of your knowledge-base repo** on local disk, with push rights. See `AGENTS.md`, "First start".
+- **Keep a git checkout of your knowledge-base repo** on local disk. The host pulls and pushes it with its own git credential; the agent container has none and needs none. See `AGENTS.md`, "First start".
 - **Receive HTTPS on one port** if you use email or web chat. Put a reverse proxy with TLS in front, and bind the listener to loopback.
-- **Reach your AI service, your mail provider, your git host, and Telegram if you use it** on the way out. [`data-handling.md`](./data-handling.md) lists what data goes to each.
+- **Reach your AI service, your mail provider, your git host, and Telegram if you use it** on the way out. [`data-handling.md`](./data-handling.md) lists what data goes to each. This is the host. The agent container reaches only the host: on Docker Engine on Linux its network is restricted by default (`CONTAINER_NETWORK`), and web search and fetch are off (`AGENT_WEB_TOOLS`). On Docker Desktop the default network is open and the host warns at each start; `SPEC.md` section 11 says what each setting does and does not block.
 
 ## Start small
 
@@ -225,6 +225,7 @@ Go through this list at the end of the recipe.
 - The people who approve data use at your institution have seen [`data-handling.md`](./data-handling.md), and its "Decide before go-live" list has an answer on each line.
 - Operator alerts have a route that works. The default route is Telegram for the admin; `ADMIN_ALERT_ROUTE=email` mails them to the operator's address instead, and `telegram,email` does both. A test alert arrives on each route you enabled (`AGENTS.md`, "First start", step 8). The startup log has no `Admin alert setup` error.
 - The reply sensor is off, or its destination is approved for your data.
+- `npx tsx scripts/check-container-egress.ts` prints PASS on every line: on the restricted network the container reaches the host's proxy address and nothing outside, and a commit made in a container reaches a temporary remote through the host.
 - `npx tsx scripts/check-host-git-trust.ts --network` shows no FAIL line, and a commit the agent makes in a test turn arrives on the git host.
 - One plain question passes end to end on each channel you enabled.
 - If email is on: the intake service files a test message (two files in `discussions/raw/`, by the expected git author), and one routed approval passes end to end. A sender who is not on the allowlist gets no answer, or the one courtesy reply if they are at your institution.

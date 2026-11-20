@@ -37,19 +37,118 @@ index 0000000000000000000000000000000000000000..e4b2ba5d3a6ef24af9d526a6840dd604
 +  },
 +  "logDenied": true
 +}
+diff --git a/container/agent-runner/src/allowed-tools.ts b/container/agent-runner/src/allowed-tools.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..bef0b77d9912549001a7f9067ca08d7cf111140b
+--- /dev/null
++++ b/container/agent-runner/src/allowed-tools.ts
+@@ -0,0 +1,52 @@
++/**
++ * The agent's tool list. WebSearch and WebFetch send text chosen by the
++ * agent to outside services, so they are off unless the host sets
++ * AGENT_WEB_TOOLS, which reaches the container as NANOCLAW_WEB_TOOLS=1.
++ *
++ * This is a default, not a boundary: the runner source is writable by the
++ * agent. The boundaries are on the host: the container's network
++ * (CONTAINER_NETWORK) and the credential proxy, which refuses model requests
++ * that carry a web tool while the setting is off.
++ */
++
++export const WEB_TOOLS = ['WebSearch', 'WebFetch'] as const;
++
++const BASE_TOOLS = [
++  'Bash',
++  'Read',
++  'Write',
++  'Edit',
++  'Glob',
++  'Grep',
++  'Task',
++  'TaskOutput',
++  'TaskStop',
++  'TeamCreate',
++  'TeamDelete',
++  'SendMessage',
++  'TodoWrite',
++  'ToolSearch',
++  'Skill',
++  'NotebookEdit',
++  'mcp__nanoclaw__*',
++];
++
++type Env = Record<string, string | undefined>;
++
++export function webToolsEnabled(env: Env): boolean {
++  return env.NANOCLAW_WEB_TOOLS === '1';
++}
++
++/** Tools pre-approved in a normal run. */
++export function normalAllowedTools(env: Env): string[] {
++  return webToolsEnabled(env) ? [...BASE_TOOLS, ...WEB_TOOLS] : [...BASE_TOOLS];
++}
++
++/**
++ * Tools removed from the session. Needed because the run uses
++ * bypassPermissions, under which a tool that is merely absent from the
++ * allowed list still runs.
++ */
++export function disallowedTools(env: Env): string[] {
++  return webToolsEnabled(env) ? [] : [...WEB_TOOLS];
++}
 diff --git a/container/agent-runner/src/index.ts b/container/agent-runner/src/index.ts
-index 3d29372e6432a3e0b61da58dd4ed769482c6dd70..2890f42db01f8aecc8219fb6487d6a7111521c17 100644
+index 3d29372e6432a3e0b61da58dd4ed769482c6dd70..8685b2de3698e047da856b45958a88d36004b4a8 100644
 --- a/container/agent-runner/src/index.ts
 +++ b/container/agent-runner/src/index.ts
-@@ -24,6 +24,7 @@ import {
+@@ -23,7 +23,9 @@ import {
+   PreCompactHookInput,
  } from '@anthropic-ai/claude-agent-sdk';
  import { fileURLToPath } from 'url';
++import { disallowedTools, normalAllowedTools } from './allowed-tools.js';
  import { createAgentHooks } from './protected-write-guard.js';
 +import { syncFromUpstream } from './kb-upstream.js';
  
  interface ContainerInput {
    prompt: string;
-@@ -728,6 +729,8 @@ async function main(): Promise<void> {
+@@ -101,27 +103,7 @@ const IPC_INPUT_DIR = '/workspace/ipc/input';
+ const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
+ const IPC_POLL_MS = 500;
+ 
+-const NORMAL_ALLOWED_TOOLS = [
+-  'Bash',
+-  'Read',
+-  'Write',
+-  'Edit',
+-  'Glob',
+-  'Grep',
+-  'WebSearch',
+-  'WebFetch',
+-  'Task',
+-  'TaskOutput',
+-  'TaskStop',
+-  'TeamCreate',
+-  'TeamDelete',
+-  'SendMessage',
+-  'TodoWrite',
+-  'ToolSearch',
+-  'Skill',
+-  'NotebookEdit',
+-  'mcp__nanoclaw__*',
+-];
++const NORMAL_ALLOWED_TOOLS = normalAllowedTools(process.env);
+ 
+ /**
+  * Push-based async iterable for streaming user messages to the SDK.
+@@ -586,6 +568,9 @@ async function runQuery(
+           }
+         : undefined,
+       allowedTools: isDeliveryRepair ? [] : NORMAL_ALLOWED_TOOLS,
++      // allowedTools only pre-approves, and bypassPermissions approves
++      // everything else: the web tools are removed here.
++      disallowedTools: disallowedTools(process.env),
+       env: sdkEnv,
+       permissionMode: 'bypassPermissions',
+       allowDangerouslySkipPermissions: true,
+@@ -728,6 +713,8 @@ async function main(): Promise<void> {
        /* may not exist */
      }
      log(`Received input for group: ${containerInput.groupFolder}`);
@@ -170,6 +269,54 @@ index 0000000000000000000000000000000000000000..f20bc7aeb78c3e8739693a3d3ac173b6
 +    return 'failed';
 +  }
 +}
+diff --git a/container/skills/agent-browser/SKILL.md b/container/skills/agent-browser/SKILL.md
+index cb3aa8612363cd0da0708f7681c8456af1603674..f6e2907c0c33a87bdebcca72f1c568f82b6332cd 100644
+--- a/container/skills/agent-browser/SKILL.md
++++ b/container/skills/agent-browser/SKILL.md
+@@ -1,11 +1,13 @@
+ ---
+ name: agent-browser
+-description: Use when a task needs a page that WebFetch cannot read because it requires JavaScript, login or forms, and the admin has authorized opening any URL from inbound mail or an attachment.
++description: Use when a task needs a page that WebFetch cannot read because it requires JavaScript, login or forms, and the admin has authorized opening any URL from inbound mail or an attachment. Works only when the operator has opened the container's network (it is restricted by default, and then no page loads).
+ allowed-tools: Bash(agent-browser:*)
+ ---
+ 
+ # Browser Automation with agent-browser
+ 
++The container's network is restricted by default: no outside page loads, and `agent-browser open` fails. That is expected. Do not look for another route; tell the user the operator has not opened the network.
++
+ ## Quick start
+ 
+ ```bash
+diff --git a/container/skills/capabilities/SKILL.md b/container/skills/capabilities/SKILL.md
+index 8e8be1431bd593853cb6971a03c9bbbf20c4ca7a..3e4a3853b7b8d126ab82648bac1e371be5a6616c 100644
+--- a/container/skills/capabilities/SKILL.md
++++ b/container/skills/capabilities/SKILL.md
+@@ -36,7 +36,7 @@ Each directory is an installed skill. The directory name is the skill name (e.g.
+ 
+ Read the allowed tools from your SDK configuration. You always have access to:
+ - **Core:** Bash, Read, Write, Edit, Glob, Grep
+-- **Web:** WebSearch, WebFetch
++- **Web:** WebSearch, WebFetch (only when the operator has turned web tools on; off by default. `echo $NANOCLAW_WEB_TOOLS` prints `1` when they are on)
+ - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
+ - **Other:** TodoWrite, ToolSearch, Skill, NotebookEdit
+ - **MCP:** mcp__nanoclaw__* (messaging, tasks, group management)
+@@ -76,13 +76,13 @@ Present the report as a clean, readable message. Example:
+ 📋 *NanoClaw Capabilities*
+ 
+ *Installed Skills:*
+-• /agent-browser — Browse the web, fill forms, extract data
++• /agent-browser — Browse the web, fill forms, extract data (needs the container's network open)
+ • /capabilities — This report
+ (list all found skills)
+ 
+ *Tools:*
+ • Core: Bash, Read, Write, Edit, Glob, Grep
+-• Web: WebSearch, WebFetch
++• Web: WebSearch, WebFetch / off (web tools are not turned on)
+ • Orchestration: Task, TeamCreate, SendMessage
+ • MCP: send_message, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group
+ 
 diff --git a/container/skills/kb-conflict-check/check-ingestion-crosscheck.mjs b/container/skills/kb-conflict-check/check-ingestion-crosscheck.mjs
 index 5678eaccb49918a3c9d7299b52fc15811c5b3f9e..22fda848078f2863b6320a64508d1b0980b50a83 100644
 --- a/container/skills/kb-conflict-check/check-ingestion-crosscheck.mjs
@@ -228,6 +375,28 @@ index 893622a1cc6438dcc253b75b35f814d5beeb2df0..2449efb71a2ad8da01e027b6884c5472
  4. **If no audit logs or eval data exist for the period**, write a brief "No data available for this period" report and exit.
  5. **Analyze patterns:**
     - Which topics have recurring low-confidence answers?
+diff --git a/container/skills/status/SKILL.md b/container/skills/status/SKILL.md
+index 3a99fcce84179620fedb8a626e3b48a736661210..a35747fe4f61b7520c6585b7c3a98cb8bddf79e6 100644
+--- a/container/skills/status/SKILL.md
++++ b/container/skills/status/SKILL.md
+@@ -48,7 +48,7 @@ ls /workspace/ipc/ 2>/dev/null
+ Confirm which tool families are available to you:
+ 
+ - **Core:** Bash, Read, Write, Edit, Glob, Grep
+-- **Web:** WebSearch, WebFetch
++- **Web:** WebSearch, WebFetch (only when the operator has turned web tools on; off by default. `echo $NANOCLAW_WEB_TOOLS` prints `1` when they are on)
+ - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
+ - **MCP:** mcp__nanoclaw__* (send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task, update_task, register_group)
+ 
+@@ -88,7 +88,7 @@ Present as a clean, readable message:
+ • IPC: ✓ (messages, tasks, input)
+ 
+ *Tools:*
+-• Core: ✓  Web: ✓  Orchestration: ✓  MCP: ✓
++• Core: ✓  Web: ✓ / off  Orchestration: ✓  MCP: ✓
+ 
+ *Container:*
+ • agent-browser: ✓ / not installed
 diff --git a/ecosystem.config.cjs b/ecosystem.config.cjs
 index 879af27c44f367a0ef883dbcf8462b346edf0329..bef7006d21396a0b7f99d19d3e7ca5123bb0173e 100644
 --- a/ecosystem.config.cjs
@@ -254,6 +423,34 @@ index 879af27c44f367a0ef883dbcf8462b346edf0329..bef7006d21396a0b7f99d19d3e7ca512
  // costs time when git hangs. src/pm2-kill-timeout.test.ts keeps it in step.
  module.exports = {
    apps: [
+diff --git a/groups/global/CLAUDE.md b/groups/global/CLAUDE.md
+index 21ac568c67ff1bdb72a5864bbfc12526d475cebe..2cd3e9f9efa8c4e08942df6436ddde2cbc164a95 100644
+--- a/groups/global/CLAUDE.md
++++ b/groups/global/CLAUDE.md
+@@ -24,6 +24,8 @@ Start every task with a pull, so you work on the current state:
+ cd /workspace/extra/program-repo && git pull
+ ```
+ 
++**The host pushes for you.** `git pull` here reads a read-only copy that the host keeps current, and the host pushes your commits when your turn ends. This container holds no git credential and may have no network route to the git host or to any website, so `git push`, `curl`, `agent-browser`, and web search or fetch can fail here. A failed `git push` is expected: do not retry it and do not treat it as a problem to report. Work on the local state and commit as usual. Say a change is "committed"; say it is "pushed" only if your own `git push` printed a success (G51). If a task needs a web page you cannot reach, say so instead of answering from memory.
++
+ All file reads, edits, and writes must use paths under `/workspace/extra/program-repo/`.
+ 
+ ## Context Recovery
+diff --git a/groups/main/CLAUDE.md b/groups/main/CLAUDE.md
+index c1227beb1a772781bbfe650a3d8199fa86f81b11..d8f8efa36545f7eb7f483a72ce41e4009080d0e6 100644
+--- a/groups/main/CLAUDE.md
++++ b/groups/main/CLAUDE.md
+@@ -5,8 +5,8 @@ You are Andy, a personal assistant. You help with tasks, answer questions, and c
+ ## What You Can Do
+ 
+ - Answer questions and have conversations
+-- Search the web and fetch content from URLs
+-- **Browse the web** with `agent-browser` — open pages, click, fill forms, take screenshots, extract data (run `agent-browser open <url>` to start, then `agent-browser snapshot -i` to see interactive elements)
++- Search the web and fetch content from URLs, only when the operator has turned web tools on. They are off by default: if `WebSearch` and `WebFetch` are not in your tool list, say so and do not try another way
++- **Browse the web** with `agent-browser` — open pages, click, fill forms, take screenshots, extract data (run `agent-browser open <url>` to start, then `agent-browser snapshot -i` to see interactive elements). This works only when the operator has opened the container's network. By default the network is restricted and no page loads
+ - Read and write files in your workspace
+ - Run bash commands in your sandbox
+ - Schedule tasks to run later or on a recurring basis
 diff --git a/package-lock.json b/package-lock.json
 index 045eb05e88b529625f762b0a0e79af8e0ee5c55e..41864c8da8c916671692e641fcb3bf76c441ba7a 100644
 --- a/package-lock.json
@@ -307,6 +504,260 @@ index d76f58e74fa5b16aecd27f5c2fdea37e8fb694c2..5334f53af9de1b1529732d82d2613d6a
    "type": "module",
    "main": "dist/index.js",
    "scripts": {
+diff --git a/scripts/check-container-egress.ts b/scripts/check-container-egress.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..25e224f94058e15842daa16171a22e8289767aa2
+--- /dev/null
++++ b/scripts/check-container-egress.ts
+@@ -0,0 +1,248 @@
++#!/usr/bin/env tsx
++/**
++ * First-start check for the agent container's network and the push path.
++ *
++ *   npx tsx scripts/check-container-egress.ts
++ *
++ * Run it on the deployment host, as the user that runs the service, with the
++ * same environment (CONTAINER_NETWORK, CONTAINER_IMAGE, PROGRAM_REPO). It
++ * starts containers with the network arguments the host itself uses
++ * (hostGatewayArgs in src/container-runtime.ts) and checks:
++ *
++ *   1. the container reaches the host on the credential proxy's address;
++ *   2. restricted: the container cannot reach an outside host by name or by
++ *      address, and cannot resolve an outside name;
++ *      open: reported, not failed;
++ *   3. a commit made inside the container, in a mounted checkout, ends up on
++ *      the remote after the host takes it out and pushes it (src/host-repo.ts;
++ *      a temporary checkout, host repository and local remote, so the real
++ *      knowledge base is not touched).
++ *
++ * The host's credential against the real origin is checked by
++ * `npx tsx scripts/check-host-git-trust.ts --network`.
++ *
++ * Exit code 0 only if every check passes.
++ */
++import { execFile, execFileSync } from 'child_process';
++import fs from 'fs';
++import http from 'http';
++import type { AddressInfo } from 'net';
++import os from 'os';
++import path from 'path';
++
++import { CONTAINER_IMAGE } from '../src/config.js';
++import {
++  CONTAINER_HOST_GATEWAY,
++  CONTAINER_RUNTIME_BIN,
++  containerNetworkMode,
++  hostGatewayArgs,
++  resolveProxyBindHost,
++} from '../src/container-runtime.js';
++import { syncHostRepo } from '../src/host-repo.js';
++import { CHECKOUT_OWNER } from '../src/program-repo.js';
++
++const OUTSIDE_NAME = process.env.CHECK_OUTSIDE_HOST || 'example.com';
++const OUTSIDE_ADDRESS = process.env.CHECK_OUTSIDE_ADDRESS || '1.1.1.1';
++
++let failed = 0;
++function report(ok: boolean, what: string, detail = ''): void {
++  if (!ok) failed++;
++  console.log(
++    `${ok ? 'PASS' : 'FAIL'}  ${what}${detail ? `\n      ${detail}` : ''}`,
++  );
++}
++
++/** The same --user rule as buildContainerArgs in src/container-runner.ts. */
++function userArgs(): string[] {
++  const uid = process.getuid?.();
++  const gid = process.getgid?.();
++  if (uid != null && uid !== 0 && uid !== 1000)
++    return ['--user', `${uid}:${gid}`, '-e', 'HOME=/home/node'];
++  // An image without a USER line (not the agent image) would run as root.
++  return ['--user', `${CHECKOUT_OWNER.uid}:${CHECKOUT_OWNER.gid}`];
++}
++
++/** Async on purpose: check 1 answers from a listener in this process. */
++function inContainer(
++  script: string,
++  mounts: string[] = [],
++): Promise<{ code: number; out: string }> {
++  return new Promise((resolve) => {
++    execFile(
++      CONTAINER_RUNTIME_BIN,
++      [
++        'run',
++        '--rm',
++        '--entrypoint',
++        'sh',
++        ...hostGatewayArgs(),
++        ...userArgs(),
++        ...mounts,
++        CONTAINER_IMAGE,
++        '-c',
++        script,
++      ],
++      { encoding: 'utf8', timeout: 120_000 },
++      (err, stdout, stderr) =>
++        resolve({
++          code: err ? ((err as { code?: number }).code ?? 1) : 0,
++          out: `${stdout}${stderr}`.trim(),
++        }),
++    );
++  });
++}
++
++async function main(): Promise<void> {
++  const mode = containerNetworkMode();
++  console.log(`CONTAINER_NETWORK: ${mode}   image: ${CONTAINER_IMAGE}\n`);
++
++  // 1. The host address the credential proxy binds to. A stand-in listener
++  //    on a free port: the running service may hold the real port.
++  const bindHost = resolveProxyBindHost();
++  const server = http.createServer((_req, res) => res.end('proxy-address-ok'));
++  await new Promise<void>((resolve, reject) => {
++    server.once('error', reject);
++    server.listen(0, bindHost, resolve);
++  });
++  const port = (server.address() as AddressInfo).port;
++  const proxy = await inContainer(
++    `curl -s -m 10 http://${CONTAINER_HOST_GATEWAY}:${port}/`,
++  );
++  server.close();
++  report(
++    proxy.out.includes('proxy-address-ok'),
++    `container reaches the host at ${bindHost} (credential proxy address)`,
++    proxy.out.includes('proxy-address-ok') ? '' : proxy.out,
++  );
++
++  // 2. The outside.
++  const byName = await inContainer(
++    `curl -s -k -m 10 -o /dev/null https://${OUTSIDE_NAME}/ && echo REACHED`,
++  );
++  const byAddress = await inContainer(
++    `curl -s -k -m 10 -o /dev/null https://${OUTSIDE_ADDRESS}/ && echo REACHED`,
++  );
++  const dns = await inContainer(
++    `getent hosts ${OUTSIDE_NAME} >/dev/null 2>&1 && echo RESOLVED`,
++  );
++  if (mode === 'restricted') {
++    report(
++      !byName.out.includes('REACHED'),
++      `outside host by name is unreachable (${OUTSIDE_NAME})`,
++    );
++    report(
++      !byAddress.out.includes('REACHED'),
++      `outside host by address is unreachable (${OUTSIDE_ADDRESS})`,
++    );
++    report(
++      !dns.out.includes('RESOLVED'),
++      `outside name does not resolve (${OUTSIDE_NAME})`,
++      dns.out.includes('RESOLVED')
++        ? 'DNS answers leave the host: data can be sent out inside lookups. A newer Docker does not answer outside names on an internal network (seen on Docker 29).'
++        : '',
++    );
++  } else {
++    console.log(
++      `NOTE  network is open: outside by name ${byName.out.includes('REACHED') ? 'reachable' : 'not reachable'}, ` +
++        `by address ${byAddress.out.includes('REACHED') ? 'reachable' : 'not reachable'}. ` +
++        'Nothing limits what the agent can send out.',
++    );
++  }
++
++  // 3. A commit made in the container reaches the remote through the host.
++  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'egress-check-'));
++  const saved = new Map<string, string | undefined>(
++    [
++      'PROGRAM_REPO',
++      'PROGRAM_HOST_REPO',
++      'PROGRAM_READ_MIRROR',
++      'PROGRAM_ORIGIN_URL',
++      'PROGRAM_ORIGIN_PATTERN',
++    ].map((key) => [key, process.env[key]]),
++  );
++  try {
++    const remote = path.join(tmp, 'remote.git');
++    const checkout = path.join(tmp, 'checkout');
++    // The host's git runs as the checkout owner when the host is root.
++    if (process.getuid?.() === 0)
++      execFileSync('chown', [
++        `${CHECKOUT_OWNER.uid}:${CHECKOUT_OWNER.gid}`,
++        tmp,
++      ]);
++    else fs.chmodSync(tmp, 0o755);
++    // The temporary remote and checkout are made by git inside a container,
++    // and read back the same way: this script starts no git on the host.
++    // The folder is mounted at its own path, so the paths mean the same on
++    // both sides.
++    const setup = await inContainer(
++      `cd ${tmp} && git init -q --bare -b main remote.git && ` +
++        'git clone -q remote.git checkout 2>/dev/null && cd checkout && ' +
++        'git checkout -q -b main && git config user.name check && ' +
++        'git config user.email check@example.org && echo check > README.md && ' +
++        'git add README.md && git commit -q -m start && git push -q -u origin main',
++      ['-v', `${tmp}:${tmp}`, '-e', 'HOME=/tmp'],
++    );
++    if (setup.code !== 0)
++      report(false, 'a temporary remote and checkout could be made', setup.out);
++
++    const commit = await inContainer(
++      'cd /workspace/extra/program-repo && ' +
++        'git config user.name Coordinator && git config user.email bot@example.org && ' +
++        'echo "written in the container" > from-container.md && ' +
++        'git add from-container.md && git commit -q -m "container commit" && git rev-parse HEAD',
++      ['-v', `${checkout}:/workspace/extra/program-repo`],
++    );
++    const sha = commit.out.split('\n').at(-1) || '';
++    report(
++      commit.code === 0 && /^[0-9a-f]{40}$/.test(sha),
++      'the container can commit in the mounted checkout',
++      commit.code === 0 ? '' : commit.out,
++    );
++
++    // The host's own settings, pointed at the temporary repositories. The
++    // host runs no git in the checkout: it fetches the commit out of it.
++    Object.assign(process.env, {
++      PROGRAM_REPO: checkout,
++      PROGRAM_HOST_REPO: path.join(tmp, 'host'),
++      PROGRAM_READ_MIRROR: path.join(tmp, 'mirror.git'),
++      PROGRAM_ORIGIN_URL: remote,
++      PROGRAM_ORIGIN_PATTERN: `^${remote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
++    });
++    const outcome = await syncHostRepo();
++    const onRemote = (
++      await inContainer(`git --git-dir ${remote} show main:from-container.md`, [
++        '-v',
++        `${tmp}:${tmp}:ro`,
++        '-e',
++        'HOME=/tmp',
++      ])
++    ).out;
++    report(
++      outcome.pushed &&
++        outcome.imported >= 1 &&
++        onRemote === 'written in the container',
++      'the host took the container commit out of the checkout and pushed it to the remote',
++      outcome.pushed
++        ? ''
++        : `sync outcome: ${JSON.stringify({ ...outcome })}`.slice(0, 300),
++    );
++  } finally {
++    for (const key of saved.keys()) {
++      const value = saved.get(key);
++      if (value === undefined) delete process.env[key];
++      else process.env[key] = value;
++    }
++    fs.rmSync(tmp, { recursive: true, force: true });
++  }
++
++  console.log(
++    'NOTE  the host credential against the real origin: run npx tsx scripts/check-host-git-trust.ts --network',
++  );
++  console.log(failed ? `\n${failed} check(s) failed.` : '\nAll checks passed.');
++  process.exit(failed ? 1 : 0);
++}
++
++main().catch((err) => {
++  console.error(err);
++  process.exit(1);
++});
 diff --git a/scripts/check-host-git-trust.ts b/scripts/check-host-git-trust.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..526dbdf8aa522bd263399c1251214ba53f3e370e
@@ -4704,6 +5155,336 @@ index c4c5543928a92309d50c25511c4937b287a2f666..5c501b043d9f62d3b49f072187e74395
  
  /**
   * The bot mailbox actually in effect: SEND_FROM_EMAIL from .env or the
+diff --git a/src/container-network.test.ts b/src/container-network.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3772d9843d22af9c02b4bb9628de52efb7538cce
+--- /dev/null
++++ b/src/container-network.test.ts
+@@ -0,0 +1,324 @@
++/**
++ * The container's network setting (CONTAINER_NETWORK): the arguments the
++ * host passes to `docker run` for both values, and the address the
++ * credential proxy binds to. Real container-runtime.ts and
++ * container-runner.ts; only the docker binary is faked.
++ */
++import { EventEmitter } from 'events';
++import { PassThrough } from 'stream';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++const { dockerCalls, state } = vi.hoisted(() => ({
++  dockerCalls: [] as string[][],
++  state: {
++    network: null as null | { internal: boolean; gateway: string },
++    platform: 'linux',
++    wsl: false,
++  },
++}));
++
++vi.mock('./config.js', () => ({
++  CONTAINER_IMAGE: 'nanoclaw-agent:latest',
++  CONTAINER_MAX_OUTPUT_SIZE: 10485760,
++  CONTAINER_TIMEOUT: 1800000,
++  CREDENTIAL_PROXY_PORT: 3001,
++  DATA_DIR: '/tmp/nanoclaw-test-data',
++  GROUPS_DIR: '/tmp/nanoclaw-test-groups',
++  IDLE_TIMEOUT: 1800000,
++  TIMEZONE: 'America/Los_Angeles',
++}));
++vi.mock('./logger.js', () => ({
++  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
++}));
++vi.mock('./env.js', () => ({ readEnvFile: vi.fn(() => ({})) }));
++vi.mock('os', async () => {
++  const actual = await vi.importActual<typeof import('os')>('os');
++  const mocked = {
++    ...actual,
++    platform: () => state.platform,
++    networkInterfaces: () => ({
++      docker0: [{ family: 'IPv4', address: '172.17.0.1' }],
++    }),
++  };
++  return { ...mocked, default: mocked };
++});
++vi.mock('fs', async () => {
++  const actual = await vi.importActual<typeof import('fs')>('fs');
++  return {
++    ...actual,
++    default: {
++      ...actual,
++      existsSync: vi.fn((p: unknown) =>
++        String(p).includes('WSLInterop') ? state.wsl : false,
++      ),
++      mkdirSync: vi.fn(),
++      writeFileSync: vi.fn(),
++      readFileSync: vi.fn(() => ''),
++      readdirSync: vi.fn(() => []),
++      statSync: vi.fn(() => ({ isDirectory: () => false })),
++      copyFileSync: vi.fn(),
++    },
++  };
++});
++vi.mock('./host-fs-safety.js', () => ({
++  chownTreeNoFollow: vi.fn(),
++  copyDirInTree: vi.fn(),
++  ensureDirInTree: vi.fn((root: string) => root),
++  writeFileInTree: vi.fn(),
++}));
++vi.mock('./mount-security.js', () => ({
++  validateAdditionalMounts: vi.fn(() => []),
++}));
++vi.mock('./credential-proxy.js', () => ({
++  detectAuthMode: vi.fn(() => 'api-key'),
++  registerProxyCaller: vi.fn(),
++  revokeProxyCaller: vi.fn(),
++}));
++
++function fakeProcess() {
++  const proc = new EventEmitter() as EventEmitter & {
++    stdin: PassThrough;
++    stdout: PassThrough;
++    stderr: PassThrough;
++    kill: ReturnType<typeof vi.fn>;
++  };
++  proc.stdin = new PassThrough();
++  proc.stdout = new PassThrough();
++  proc.stderr = new PassThrough();
++  proc.kill = vi.fn();
++  return proc;
++}
++let proc: ReturnType<typeof fakeProcess>;
++
++vi.mock('child_process', async () => {
++  const actual =
++    await vi.importActual<typeof import('child_process')>('child_process');
++  return {
++    ...actual,
++    spawn: vi.fn(() => proc),
++    // A fake docker: `network inspect` and `network create` only.
++    execFileSync: vi.fn((bin: string, args: string[]) => {
++      if (bin !== 'docker') throw new Error(`unexpected command ${bin}`);
++      dockerCalls.push(args);
++      if (args[0] === 'network' && args[1] === 'inspect') {
++        if (!state.network) throw new Error('No such network');
++        return `${state.network.internal} ${state.network.gateway}\n`;
++      }
++      if (args[0] === 'network' && args[1] === 'create') {
++        state.network = {
++          internal: args.includes('--internal'),
++          gateway: '172.20.0.1',
++        };
++        return 'id\n';
++      }
++      throw new Error(`unexpected docker ${args.join(' ')}`);
++    }),
++  };
++});
++
++import { spawn } from 'child_process';
++
++import { runContainerAgent } from './container-runner.js';
++import {
++  _resetRestrictedNetworkForTests,
++  hostGatewayArgs,
++  PROXY_BIND_HOST,
++  resolveContainerNetworkMode,
++  resolveProxyBindHost,
++} from './container-runtime.js';
++import { logger } from './logger.js';
++import type { RegisteredGroup } from './types.js';
++
++const group: RegisteredGroup = {
++  name: 'Test Group',
++  folder: 'test-group',
++  trigger: '@Andy',
++  added_at: new Date().toISOString(),
++};
++const input = {
++  prompt: 'Hello',
++  groupFolder: 'test-group',
++  chatJid: 'test@g.us',
++  isMain: false,
++};
++
++/** The argv the host would pass to `docker run` for one agent turn. */
++async function runArgs(): Promise<string[]> {
++  const result = runContainerAgent(group, input, () => {});
++  const args = vi.mocked(spawn).mock.calls.at(-1)?.[1] as string[];
++  proc.emit('close', 0);
++  await result;
++  return args;
++}
++
++beforeEach(() => {
++  vi.clearAllMocks();
++  dockerCalls.length = 0;
++  state.network = null;
++  state.platform = 'linux';
++  state.wsl = false;
++  proc = fakeProcess();
++  _resetRestrictedNetworkForTests();
++  delete process.env.CONTAINER_NETWORK;
++  delete process.env.AGENT_WEB_TOOLS;
++  delete process.env.CREDENTIAL_PROXY_HOST;
++  // The deployment recipe's value. The tests of the warning change it.
++  process.env.WEBHOOK_HOST = '127.0.0.1';
++});
++afterEach(() => {
++  delete process.env.WEBHOOK_HOST;
++  delete process.env.CONTAINER_NETWORK;
++  delete process.env.AGENT_WEB_TOOLS;
++});
++
++describe('CONTAINER_NETWORK value', () => {
++  it('defaults to restricted on Linux and to open on Docker Desktop', () => {
++    expect(resolveContainerNetworkMode(undefined, false)).toBe('restricted');
++    expect(resolveContainerNetworkMode('', false)).toBe('restricted');
++    expect(resolveContainerNetworkMode(undefined, true)).toBe('open');
++  });
++
++  it('accepts the two values on any platform', () => {
++    expect(resolveContainerNetworkMode('open', false)).toBe('open');
++    expect(resolveContainerNetworkMode(' Restricted ', true)).toBe(
++      'restricted',
++    );
++  });
++
++  it('refuses any other value instead of guessing', () => {
++    expect(() => resolveContainerNetworkMode('none', false)).toThrow(
++      /restricted.*open/,
++    );
++  });
++});
++
++describe('docker run arguments', () => {
++  it('restricted (the default): joins the internal network and names its gateway', async () => {
++    const args = await runArgs();
++    const at = args.indexOf('--network');
++    expect(args[at + 1]).toBe('nanoclaw-agents');
++    expect(args).toContain('--add-host=host.docker.internal:172.20.0.1');
++    expect(args).not.toContain('--add-host=host.docker.internal:host-gateway');
++    // The model endpoint is still the host credential proxy.
++    expect(args).toContain(
++      'ANTHROPIC_BASE_URL=http://host.docker.internal:3001',
++    );
++    // The network was created internal, with container-to-container traffic off.
++    expect(dockerCalls).toContainEqual([
++      'network',
++      'create',
++      '--internal',
++      '-o',
++      'com.docker.network.bridge.enable_icc=false',
++      'nanoclaw-agents',
++    ]);
++  });
++
++  it('open: no --network argument, the default bridge and host-gateway', async () => {
++    process.env.CONTAINER_NETWORK = 'open';
++    const args = await runArgs();
++    expect(args).not.toContain('--network');
++    expect(args).toContain('--add-host=host.docker.internal:host-gateway');
++    expect(dockerCalls).toEqual([]);
++  });
++
++  it('restricted reuses an existing internal network without creating one', () => {
++    state.network = { internal: true, gateway: '10.99.0.1' };
++    expect(hostGatewayArgs()).toEqual([
++      '--network',
++      'nanoclaw-agents',
++      '--add-host=host.docker.internal:10.99.0.1',
++    ]);
++    expect(dockerCalls.some((c) => c[1] === 'create')).toBe(false);
++  });
++
++  it('restricted refuses a network of that name that is not internal', () => {
++    state.network = { internal: false, gateway: '10.99.0.1' };
++    expect(() => hostGatewayArgs()).toThrow(/not internal/);
++  });
++
++  it('restricted on Docker Desktop leaves host.docker.internal to the runtime', () => {
++    state.platform = 'darwin';
++    process.env.CONTAINER_NETWORK = 'restricted';
++    expect(hostGatewayArgs()).toEqual(['--network', 'nanoclaw-agents']);
++  });
++
++  it('open on Docker Desktop passes no network arguments', () => {
++    state.platform = 'darwin';
++    expect(hostGatewayArgs()).toEqual([]);
++  });
++
++  it('web tools: NANOCLAW_WEB_TOOLS reaches the container only when AGENT_WEB_TOOLS is on', async () => {
++    expect(await runArgs()).not.toContain('NANOCLAW_WEB_TOOLS=1');
++    proc = fakeProcess();
++    process.env.AGENT_WEB_TOOLS = '1';
++    expect(await runArgs()).toContain('NANOCLAW_WEB_TOOLS=1');
++  });
++});
++
++describe('credential proxy bind address', () => {
++  it('restricted: the internal network gateway, so those containers reach it', () => {
++    expect(resolveProxyBindHost()).toBe('172.20.0.1');
++    expect(logger.warn).not.toHaveBeenCalled();
++  });
++
++  it('open: the address used before this setting existed, with a loud warning', () => {
++    process.env.CONTAINER_NETWORK = 'open';
++    // docker0's address, or CREDENTIAL_PROXY_HOST when the runner sets it.
++    expect(resolveProxyBindHost()).toBe(PROXY_BIND_HOST);
++    expect(vi.mocked(logger.warn).mock.calls[0][0]).toMatch(
++      /CONTAINER_NETWORK is open/,
++    );
++    expect(dockerCalls).toEqual([]);
++  });
++
++  it('restricted ignores a CREDENTIAL_PROXY_HOST the containers could not reach, and says so', () => {
++    process.env.CREDENTIAL_PROXY_HOST = '127.0.0.1';
++    expect(resolveProxyBindHost()).toBe('172.20.0.1');
++    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).toMatch(
++      /CREDENTIAL_PROXY_HOST is ignored/,
++    );
++    process.env.CREDENTIAL_PROXY_HOST = '0.0.0.0';
++    expect(resolveProxyBindHost()).toBe('0.0.0.0');
++  });
++
++  it('restricted warns at start when the webhook listener is not on loopback', () => {
++    const warned = () =>
++      JSON.stringify(vi.mocked(logger.warn).mock.calls).includes(
++        'WEBHOOK_HOST',
++      );
++    // Unset: the listener's default is all interfaces.
++    for (const host of [undefined, '0.0.0.0', '::', '192.0.2.10']) {
++      vi.clearAllMocks();
++      if (host === undefined) delete process.env.WEBHOOK_HOST;
++      else process.env.WEBHOOK_HOST = host;
++      resolveProxyBindHost();
++      expect(warned()).toBe(true);
++    }
++    for (const host of ['127.0.0.1', '127.0.0.53', 'localhost', '::1']) {
++      vi.clearAllMocks();
++      process.env.WEBHOOK_HOST = host;
++      resolveProxyBindHost();
++      expect(warned()).toBe(false);
++    }
++  });
++
++  it('restricted on Docker Desktop gives the same webhook warning', () => {
++    state.platform = 'darwin';
++    process.env.CONTAINER_NETWORK = 'restricted';
++    delete process.env.WEBHOOK_HOST;
++    resolveProxyBindHost();
++    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).toMatch(
++      /WEBHOOK_HOST/,
++    );
++  });
++
++  it('open does not give the webhook warning: the open warning covers it', () => {
++    process.env.CONTAINER_NETWORK = 'open';
++    delete process.env.WEBHOOK_HOST;
++    resolveProxyBindHost();
++    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toMatch(
++      /WEBHOOK_HOST/,
++    );
++  });
++});
 diff --git a/src/container-runner-provider.test.ts b/src/container-runner-provider.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..ab6dd2ade53c3edbe2948638836dd976dbc139cf
@@ -5063,8 +5844,31 @@ index 0000000000000000000000000000000000000000..ab6dd2ade53c3edbe2948638836dd976
 +    expect(env.has('ANTHROPIC_BASE_URL')).toBe(false);
 +  });
 +});
+diff --git a/src/container-runner.test.ts b/src/container-runner.test.ts
+index f6907ab5ca3dcd05043e248a4db9644d35356302..c55d201f472814ef7076b5578a592542a5c9ab61 100644
+--- a/src/container-runner.test.ts
++++ b/src/container-runner.test.ts
+@@ -323,7 +323,17 @@ describe('container agent mode contract', () => {
+     expect(source).toContain(
+       'mcpServers: isDeliveryRepair ? {} : normalMcpServers',
+     );
+-    expect(source).toContain("'mcp__nanoclaw__*'");
++    // The list itself lives in allowed-tools.ts (web tools are a setting).
++    expect(source).toContain(
++      'const NORMAL_ALLOWED_TOOLS = normalAllowedTools(process.env);',
++    );
++    expect(source).toContain('disallowedTools: disallowedTools(process.env)');
++    expect(
++      actualFs.readFileSync(
++        'container/agent-runner/src/allowed-tools.ts',
++        'utf8',
++      ),
++    ).toContain("'mcp__nanoclaw__*'");
+     expect(source).toContain('nanoclaw: {');
+ 
+     const hostSource = actualFs.readFileSync('src/container-runner.ts', 'utf8');
 diff --git a/src/container-runner.ts b/src/container-runner.ts
-index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758ea2fbbc6 100644
+index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..5f8265fc36be2833ffad086de1e18dc8161e05a6 100644
 --- a/src/container-runner.ts
 +++ b/src/container-runner.ts
 @@ -25,6 +25,11 @@ import {
@@ -5079,7 +5883,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
  import { logger } from './logger.js';
  import { getRepoReader } from './repo-reader.js';
  import { runnerSourceNeedsCopy } from './runner-cache.js';
-@@ -44,6 +49,12 @@ import {
+@@ -44,7 +49,14 @@ import {
    registerProxyCaller,
    revokeProxyCaller,
  } from './credential-proxy.js';
@@ -5090,9 +5894,11 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
 +  selectProvider,
 +} from './model-provider.js';
  import { validateAdditionalMounts } from './mount-security.js';
++import { webToolsEnabled } from './web-tools.js';
  import {
    CONTAINER_WORKING_CONTEXT_DIR,
-@@ -351,7 +362,11 @@ function buildVolumeMounts(
+   getWorkingContextDir,
+@@ -351,7 +363,11 @@ function buildVolumeMounts(
        group.name,
        isMain,
      );
@@ -5105,7 +5911,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
    }
  
    return mounts;
-@@ -361,6 +376,7 @@ function buildContainerArgs(
+@@ -361,6 +377,7 @@ function buildContainerArgs(
    mounts: VolumeMount[],
    containerName: string,
    proxyToken: string,
@@ -5113,7 +5919,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
  ): string[] {
    const args: string[] = ['run', '-i', '--rm', '--name', containerName];
  
-@@ -368,24 +384,52 @@ function buildContainerArgs(
+@@ -368,24 +385,52 @@ function buildContainerArgs(
    args.push('-e', `TZ=${TIMEZONE}`);
  
    // Route API traffic through the credential proxy (containers never see real secrets)
@@ -5183,7 +5989,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
    }
  
    // Per-call-site model config: forward the model knobs into the container
-@@ -398,7 +442,8 @@ function buildContainerArgs(
+@@ -398,13 +443,17 @@ function buildContainerArgs(
      'NANOCLAW_GATE_MODEL',
      'NANOCLAW_AGENT_EFFORT',
    ]) {
@@ -5193,7 +5999,17 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
      if (value) {
        args.push('-e', `${key}=${value}`);
      }
-@@ -417,6 +462,11 @@ function buildContainerArgs(
+   }
+ 
+-  // Runtime-specific args for host gateway resolution
++  // Web tools are off unless the host turns them on (AGENT_WEB_TOOLS).
++  if (webToolsEnabled()) args.push('-e', 'NANOCLAW_WEB_TOOLS=1');
++
++  // The container's network (CONTAINER_NETWORK) and host gateway resolution
+   args.push(...hostGatewayArgs());
+ 
+   // Run as host user so bind-mounted files are accessible.
+@@ -417,6 +466,11 @@ function buildContainerArgs(
      args.push('-e', 'HOME=/home/node');
    }
  
@@ -5205,7 +6021,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
    for (const mount of mounts) {
      if (mount.readonly) {
        args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
-@@ -449,13 +499,25 @@ export async function runContainerAgent(
+@@ -449,13 +503,25 @@ export async function runContainerAgent(
    const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
    const containerName = `nanoclaw-${safeName}-${Date.now()}`;
    const proxyToken = randomBytes(32).toString('hex');
@@ -5237,7 +6053,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
      .join(' ');
  
    logger.debug(
-@@ -477,6 +539,7 @@ export async function runContainerAgent(
+@@ -477,6 +543,7 @@ export async function runContainerAgent(
        containerName,
        mountCount: mounts.length,
        isMain: input.isMain,
@@ -5245,7 +6061,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
      },
      'Spawning container agent',
    );
-@@ -486,7 +549,9 @@ export async function runContainerAgent(
+@@ -486,7 +553,9 @@ export async function runContainerAgent(
    ensureDirInTree(groupDir, 'logs');
  
    return new Promise((resolve) => {
@@ -5256,7 +6072,7 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
      const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
        stdio: ['pipe', 'pipe', 'pipe'],
      });
-@@ -674,6 +739,7 @@ export async function runContainerAgent(
+@@ -674,6 +743,7 @@ export async function runContainerAgent(
          `Timestamp: ${new Date().toISOString()}`,
          `Group: ${group.name}`,
          `IsMain: ${input.isMain}`,
@@ -5264,6 +6080,256 @@ index 75cde6951329b2ab4a4dee718b9bb946894ef6bb..65084861654d1480c12f3dd4b3747758
          `Duration: ${duration}ms`,
          `Exit Code: ${code}`,
          `Stdout Truncated: ${stdoutTruncated}`,
+diff --git a/src/container-runtime.ts b/src/container-runtime.ts
+index 2dd01c1c3ea91c3850e160b469caacb7df0db5a5..b57bbf1138deb58e5393b2fd26434eb1e2d9eca7 100644
+--- a/src/container-runtime.ts
++++ b/src/container-runtime.ts
+@@ -6,6 +6,7 @@ import { execFileSync, execSync } from 'child_process';
+ import fs from 'fs';
+ import os from 'os';
+ 
++import { readEnvFile } from './env.js';
+ import { logger } from './logger.js';
+ 
+ /** The container runtime binary name. */
+@@ -28,12 +29,19 @@ export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
+ export const PROXY_BIND_HOST =
+   process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
+ 
+-export function detectProxyBindHost(): string {
+-  if (os.platform() === 'darwin') return '127.0.0.1';
+-
+-  // WSL uses Docker Desktop (same VM routing as macOS) — loopback is correct.
++/**
++ * True where Docker runs in a VM (Docker Desktop on macOS or WSL) and
++ * host.docker.internal is routed to the host's loopback.
++ */
++function usesDockerDesktop(): boolean {
++  if (os.platform() === 'darwin') return true;
+   // Check /proc filesystem, not env vars — WSL_DISTRO_NAME isn't set under systemd.
+-  if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) return '127.0.0.1';
++  return fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop');
++}
++
++export function detectProxyBindHost(): string {
++  // Docker Desktop (same VM routing on macOS and WSL) — loopback is correct.
++  if (usesDockerDesktop()) return '127.0.0.1';
+ 
+   // Bare-metal Linux: bind to the docker0 bridge IP instead of 0.0.0.0
+   const ifaces = os.networkInterfaces();
+@@ -64,8 +72,211 @@ export function detectProxyBindHost(): string {
+   throw new Error('Cannot determine docker0 IPv4 address for credential proxy');
+ }
+ 
+-/** CLI args needed for the container to resolve the host gateway. */
++/**
++ * What the agent container can reach on the network (CONTAINER_NETWORK).
++ *
++ * restricted: the container joins a Docker network created with --internal.
++ *   It has no route beyond the host: no outside host, no git host, and no
++ *   DNS answers for outside names. It reaches the credential proxy on that
++ *   network's gateway address, and any other host service that listens on
++ *   all interfaces (so keep host listeners on loopback).
++ * open: the runtime's default network. The container can open a connection
++ *   to any host.
++ *
++ * Verified with real containers on Docker Engine on Linux, where restricted
++ * is the default. On Docker Desktop (macOS, WSL) the mechanism is not
++ * verified, so the default there is open; `restricted` can be set by hand.
++ */
++export type ContainerNetworkMode = 'restricted' | 'open';
++
++export function resolveContainerNetworkMode(
++  value: string | undefined,
++  dockerDesktop: boolean,
++): ContainerNetworkMode {
++  const v = (value || '').trim().toLowerCase();
++  if (v === 'restricted' || v === 'open') return v;
++  if (v)
++    throw new Error(
++      `CONTAINER_NETWORK must be "restricted" or "open", got "${value}"`,
++    );
++  return dockerDesktop ? 'open' : 'restricted';
++}
++
++/** Process environment first, then `.env`. Read on each call (tests stub it). */
++export function containerNetworkMode(): ContainerNetworkMode {
++  return resolveContainerNetworkMode(
++    process.env.CONTAINER_NETWORK ||
++      readEnvFile(['CONTAINER_NETWORK']).CONTAINER_NETWORK,
++    usesDockerDesktop(),
++  );
++}
++
++/** Name of the internal Docker network used when the network is restricted. */
++export const RESTRICTED_NETWORK_NAME =
++  process.env.CONTAINER_NETWORK_NAME || 'nanoclaw-agents';
++
++let restrictedGateway: string | undefined;
++
++function inspectRestrictedNetwork(): string | null {
++  let out: string;
++  try {
++    out = execFileSync(
++      CONTAINER_RUNTIME_BIN,
++      [
++        'network',
++        'inspect',
++        '-f',
++        '{{.Internal}} {{(index .IPAM.Config 0).Gateway}}',
++        RESTRICTED_NETWORK_NAME,
++      ],
++      { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] },
++    );
++  } catch {
++    return null; // no such network
++  }
++  const [internal, gateway] = out.trim().split(/\s+/);
++  // Never run "restricted" on a network that someone created without
++  // --internal: it would be open under a restricted name.
++  if (internal !== 'true')
++    throw new Error(
++      `Docker network ${RESTRICTED_NETWORK_NAME} exists but is not internal. ` +
++        `Remove it (docker network rm ${RESTRICTED_NETWORK_NAME}) or set CONTAINER_NETWORK_NAME.`,
++    );
++  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(gateway || ''))
++    throw new Error(
++      `Docker network ${RESTRICTED_NETWORK_NAME} has no IPv4 gateway address`,
++    );
++  return gateway;
++}
++
++/**
++ * Create the internal network if it is missing and return its gateway
++ * address (the host's address on that network). Inter-container traffic is
++ * off, so agent containers cannot reach each other either.
++ */
++export function ensureRestrictedNetwork(): string {
++  if (restrictedGateway) return restrictedGateway;
++  let gateway = inspectRestrictedNetwork();
++  if (!gateway) {
++    execFileSync(
++      CONTAINER_RUNTIME_BIN,
++      [
++        'network',
++        'create',
++        '--internal',
++        '-o',
++        'com.docker.network.bridge.enable_icc=false',
++        RESTRICTED_NETWORK_NAME,
++      ],
++      { timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] },
++    );
++    gateway = inspectRestrictedNetwork();
++    if (!gateway)
++      throw new Error(
++        `Could not create Docker network ${RESTRICTED_NETWORK_NAME}`,
++      );
++    logger.info(
++      { network: RESTRICTED_NETWORK_NAME, gateway },
++      'Created the internal network for agent containers',
++    );
++  }
++  restrictedGateway = gateway;
++  return gateway;
++}
++
++/** Test hook: forget the cached gateway address. */
++export function _resetRestrictedNetworkForTests(): void {
++  restrictedGateway = undefined;
++}
++
++/** True for an address only the host itself can reach. */
++export function isLoopbackHost(host: string): boolean {
++  const h = host.trim().toLowerCase();
++  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
++}
++
++/**
++ * The restricted network still routes to the host on the network's gateway
++ * address, so a host service that listens on all interfaces is reachable
++ * from the agent container. The webhook listener does that by default
++ * (WEBHOOK_HOST, src/channels/webhook.ts). The default is not changed here;
++ * the operator is told at each start.
++ */
++export function warnIfWebhookReachableFromContainers(): void {
++  const host = process.env.WEBHOOK_HOST || '0.0.0.0';
++  if (isLoopbackHost(host)) return;
++  logger.warn(
++    { webhookHost: host },
++    'CONTAINER_NETWORK is restricted, but the webhook listener is not on a ' +
++      'loopback address (WEBHOOK_HOST): the agent container can reach it, ' +
++      'and any other host service that listens on all interfaces, on the ' +
++      'network gateway address. Set WEBHOOK_HOST=127.0.0.1 in the process ' +
++      'environment and put a reverse proxy in front.',
++  );
++}
++
++/**
++ * Address the credential proxy must bind to for the current network mode.
++ * Restricted on Linux: the internal network's gateway address, the only host
++ * address those containers can route to. Otherwise PROXY_BIND_HOST.
++ * CREDENTIAL_PROXY_HOST applies to the open network only (0.0.0.0 excepted).
++ */
++export function resolveProxyBindHost(): string {
++  const mode = containerNetworkMode();
++  if (mode === 'open') {
++    logger.warn(
++      'CONTAINER_NETWORK is open: the agent container can reach any host. ' +
++        'What it reads (mail, the knowledge base) can leave without passing ' +
++        'the delivery gate or the audit log. Set CONTAINER_NETWORK=restricted ' +
++        'unless you need the agent to use the network.',
++    );
++    return PROXY_BIND_HOST;
++  }
++  warnIfWebhookReachableFromContainers();
++  if (usesDockerDesktop()) {
++    ensureRestrictedNetwork();
++    logger.warn(
++      'CONTAINER_NETWORK=restricted is not verified on Docker Desktop. ' +
++        'Run scripts/check-container-egress.ts before you rely on it.',
++    );
++    return PROXY_BIND_HOST;
++  }
++  const gateway = ensureRestrictedNetwork();
++  logger.info(
++    { network: RESTRICTED_NETWORK_NAME, gateway },
++    'Agent container network is restricted',
++  );
++  // The gateway is the only host address these containers can route to. An
++  // override that names another address (docker0, loopback) would leave
++  // every agent turn without a model, so it is not used here.
++  const override = process.env.CREDENTIAL_PROXY_HOST;
++  if (override === '0.0.0.0') return override;
++  if (override && override !== gateway) {
++    logger.warn(
++      { override, gateway },
++      'CREDENTIAL_PROXY_HOST is ignored while CONTAINER_NETWORK is restricted: the credential proxy binds to the restricted network gateway',
++    );
++  }
++  return gateway;
++}
++
++/**
++ * CLI args that set the container's network and how it resolves the host
++ * gateway name.
++ */
+ export function hostGatewayArgs(): string[] {
++  if (containerNetworkMode() === 'restricted') {
++    const gateway = ensureRestrictedNetwork();
++    // Docker Desktop resolves host.docker.internal itself.
++    if (usesDockerDesktop()) return ['--network', RESTRICTED_NETWORK_NAME];
++    // `host-gateway` would give the docker0 address, which an internal
++    // network cannot route to. Name this network's own gateway instead.
++    return [
++      '--network',
++      RESTRICTED_NETWORK_NAME,
++      `--add-host=${CONTAINER_HOST_GATEWAY}:${gateway}`,
++    ];
++  }
+   // On Linux, host.docker.internal isn't built-in — add it explicitly
+   if (os.platform() === 'linux') {
+     return ['--add-host=host.docker.internal:host-gateway'];
 diff --git a/src/credential-proxy-providers.test.ts b/src/credential-proxy-providers.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..1372728a436c9c1a4ee241e48a72ff22c52a65e0
@@ -5594,8 +6660,362 @@ index 0000000000000000000000000000000000000000..1372728a436c9c1a4ee241e48a72ff22
 +    expect(selectProvider()).toBe('foundry');
 +  });
 +});
+diff --git a/src/credential-proxy-web-tools.test.ts b/src/credential-proxy-web-tools.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..05b964ca0c43047e9ffc36df5f8ef4595a23935b
+--- /dev/null
++++ b/src/credential-proxy-web-tools.test.ts
+@@ -0,0 +1,305 @@
++/**
++ * Credential proxy with web tools off: the check in src/web-tools.ts applied
++ * to real requests, on the Anthropic route and on the Foundry route. Uses
++ * local fake upstreams.
++ */
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import http from 'http';
++import type { AddressInfo } from 'net';
++import { gzipSync } from 'zlib';
++
++const mockEnv: Record<string, string> = {};
++vi.mock('./env.js', () => ({
++  readEnvFile: vi.fn(() => ({ ...mockEnv })),
++}));
++
++vi.mock('./logger.js', () => ({
++  logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
++}));
++
++import {
++  startCredentialProxy,
++  registerProxyCaller,
++  revokeProxyCaller,
++} from './credential-proxy.js';
++import { logger } from './logger.js';
++import { resetModelProviderState } from './model-provider.js';
++
++const anthropicToken = 'a'.repeat(64);
++const foundryToken = 'f'.repeat(64);
++
++interface Seen {
++  url: string;
++  headers: http.IncomingHttpHeaders;
++  body: string;
++}
++
++function fakeUpstream(seen: Seen[]) {
++  const server = http.createServer((req, res) => {
++    const chunks: Buffer[] = [];
++    req.on('data', (c) => chunks.push(c));
++    req.on('end', () => {
++      seen.push({
++        url: req.url!,
++        headers: { ...req.headers },
++        body: Buffer.concat(chunks).toString(),
++      });
++      res.writeHead(200, { 'content-type': 'application/json' });
++      res.end('{"ok":true}');
++    });
++  });
++  return new Promise<http.Server>((resolve) =>
++    server.listen(0, '127.0.0.1', () => resolve(server)),
++  );
++}
++
++function send(
++  port: number,
++  path: string,
++  body: string | Buffer,
++  headers: Record<string, string> = {},
++  method = 'POST',
++): Promise<{ status: number; body: string }> {
++  return new Promise((resolve, reject) => {
++    const req = http.request(
++      { hostname: '127.0.0.1', port, method, path, headers },
++      (res) => {
++        const chunks: Buffer[] = [];
++        res.on('data', (c) => chunks.push(c));
++        res.on('end', () =>
++          resolve({
++            status: res.statusCode!,
++            body: Buffer.concat(chunks).toString(),
++          }),
++        );
++      },
++    );
++    req.on('error', reject);
++    req.end(body);
++  });
++}
++
++const WEB = { type: 'web_search_20250305', name: 'web_search' };
++const ESCAPED = '{"tools":[{"type":"web\\u005fsearch_20250305","name":"w"}]}';
++
++describe('credential proxy, web tools off', () => {
++  let proxy: http.Server;
++  let anthropicUpstream: http.Server;
++  let foundryUpstream: http.Server;
++  let port: number;
++  let anthropicSeen: Seen[];
++  let foundrySeen: Seen[];
++
++  async function start(env: Record<string, string> = {}) {
++    Object.assign(
++      mockEnv,
++      {
++        MODEL_PROVIDERS: 'anthropic,foundry',
++        ANTHROPIC_API_KEY: 'sk-ant-real-key',
++        ANTHROPIC_BASE_URL: `http://127.0.0.1:${(anthropicUpstream.address() as AddressInfo).port}`,
++        ANTHROPIC_FOUNDRY_BASE_URL: `http://127.0.0.1:${(foundryUpstream.address() as AddressInfo).port}/anthropic`,
++        ANTHROPIC_FOUNDRY_API_KEY: 'foundry-real-key',
++      },
++      env,
++    );
++    registerProxyCaller(anthropicToken);
++    registerProxyCaller(foundryToken, 'foundry');
++    proxy = await startCredentialProxy(0);
++    port = (proxy.address() as AddressInfo).port;
++  }
++
++  /** The same request on each route: header token, and Foundry path token. */
++  const routes = [
++    {
++      name: 'anthropic',
++      path: (p: string) => p,
++      headers: { 'x-nanoclaw-proxy-token': anthropicToken },
++      seen: () => anthropicSeen,
++    },
++    {
++      name: 'foundry (path token)',
++      path: (p: string) => `/_t/${foundryToken}/anthropic${p}`,
++      headers: {} as Record<string, string>,
++      seen: () => foundrySeen,
++    },
++  ];
++
++  beforeEach(async () => {
++    vi.clearAllMocks();
++    resetModelProviderState();
++    anthropicSeen = [];
++    foundrySeen = [];
++    anthropicUpstream = await fakeUpstream(anthropicSeen);
++    foundryUpstream = await fakeUpstream(foundrySeen);
++  });
++
++  afterEach(async () => {
++    revokeProxyCaller(anthropicToken);
++    revokeProxyCaller(foundryToken);
++    await new Promise<void>((r) => (proxy ? proxy.close(() => r()) : r()));
++    await new Promise<void>((r) => anthropicUpstream.close(() => r()));
++    await new Promise<void>((r) => foundryUpstream.close(() => r()));
++    for (const key of Object.keys(mockEnv)) delete mockEnv[key];
++    resetModelProviderState();
++  });
++
++  for (const route of routes) {
++    describe(route.name, () => {
++      const refusedCases: [string, string, string | Buffer, object?][] = [
++        ['a web search tool', '/v1/messages', JSON.stringify({ tools: [WEB] })],
++        ['a tool type written with an escape', '/v1/messages', ESCAPED],
++        ['a body that is not JSON', '/v1/messages', '{"tools":[{"type":"web'],
++        [
++          'a web tool inside a batch',
++          '/v1/messages/batches',
++          JSON.stringify({ requests: [{ params: { tools: [WEB] } }] }),
++        ],
++        [
++          'a gzip body',
++          '/v1/messages',
++          gzipSync(JSON.stringify({ tools: [WEB] })),
++          { 'content-encoding': 'gzip' },
++        ],
++        [
++          'a remote MCP server',
++          '/v1/messages',
++          JSON.stringify({
++            mcp_servers: [
++              { type: 'url', name: 'x', url: 'https://example.org/mcp' },
++            ],
++          }),
++        ],
++        [
++          'a URL the provider would download',
++          '/v1/messages',
++          JSON.stringify({
++            messages: [
++              {
++                role: 'user',
++                content: [
++                  {
++                    type: 'image',
++                    source: { type: 'url', url: 'https://example.org/a' },
++                  },
++                ],
++              },
++            ],
++          }),
++        ],
++        ['the managed agents API', '/v1/sessions', '{}'],
++        ['a path with dot segments', '/api/../v1/messages', '{}'],
++      ];
++
++      for (const [what, path, body, extra] of refusedCases) {
++        it(`refuses ${what} and does not contact the provider`, async () => {
++          await start();
++          const res = await send(port, route.path(path), body, {
++            ...route.headers,
++            ...(extra as Record<string, string>),
++          });
++          expect(res.status).toBe(403);
++          expect(res.body).toContain('web tools are off');
++          expect(anthropicSeen).toEqual([]);
++          expect(foundrySeen).toEqual([]);
++          // The token prefix of a path is never logged.
++          expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toMatch(
++            /[af]{64}/,
++          );
++        });
++      }
++
++      it('forwards an ordinary request as the JSON it checked', async () => {
++        await start();
++        const res = await send(
++          port,
++          route.path('/v1/messages?beta=true'),
++          '{"max_tokens": 5, "messages": [], "max_tokens": 7}',
++          route.headers,
++        );
++        expect(res.status).toBe(200);
++        const seen = route.seen();
++        expect(seen).toHaveLength(1);
++        expect(seen[0].body).toBe('{"max_tokens":7,"messages":[]}');
++        expect(seen[0].headers['content-length']).toBe(
++          String(seen[0].body.length),
++        );
++      });
++
++      it('forwards every one of these when AGENT_WEB_TOOLS is on, byte for byte', async () => {
++        await start({ AGENT_WEB_TOOLS: '1' });
++        const res = await send(
++          port,
++          route.path('/v1/messages'),
++          ESCAPED,
++          route.headers,
++        );
++        expect(res.status).toBe(200);
++        expect(route.seen()[0].body).toBe(ESCAPED);
++      });
++    });
++  }
++
++  it('reports a tool type it does not know once, and still forwards', async () => {
++    await start();
++    const body = JSON.stringify({
++      tools: [{ type: 'unit_test_new_tool_20990101', name: 'n' }],
++    });
++    const headers = { 'x-nanoclaw-proxy-token': anthropicToken };
++    expect((await send(port, '/v1/messages', body, headers)).status).toBe(200);
++    expect((await send(port, '/v1/messages', body, headers)).status).toBe(200);
++    const calls = vi
++      .mocked(logger.warn)
++      .mock.calls.filter((c) =>
++        JSON.stringify(c[0]).includes('unit_test_new_tool_20990101'),
++      );
++    expect(calls).toHaveLength(1);
++    expect(anthropicSeen).toHaveLength(2);
++  });
++
++  it('refuses a path that is not on the list, and logs it once without the token', async () => {
++    await start();
++    for (let i = 0; i < 2; i++) {
++      const byHeader = await send(port, '/v1/code/sessions', '{}', {
++        'x-nanoclaw-proxy-token': anthropicToken,
++        authorization: 'Bearer placeholder',
++      });
++      expect(byHeader.status).toBe(403);
++      const byPath = await send(
++        port,
++        `/_t/${foundryToken}/anthropic/v1/files`,
++        '--b\r\n',
++      );
++      expect(byPath.status).toBe(403);
++    }
++    expect(anthropicSeen).toEqual([]);
++    expect(foundrySeen).toEqual([]);
++    const logged = vi
++      .mocked(logger.warn)
++      .mock.calls.map((c) => (c[0] as { pathClass?: string }).pathClass);
++    expect(logged).toEqual(['/v1/code/sessions', '/anthropic/v1/files']);
++  });
++
++  it('keeps the OAuth key exchange and requests with no body working', async () => {
++    await start({
++      ANTHROPIC_API_KEY: '',
++      CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth-token',
++    });
++    const headers = {
++      'x-nanoclaw-proxy-token': anthropicToken,
++      authorization: 'Bearer placeholder',
++    };
++    const exchange = await send(
++      port,
++      '/api/oauth/claude_cli/create_api_key',
++      '',
++      headers,
++    );
++    expect(exchange.status).toBe(200);
++    expect(anthropicSeen[0].headers.authorization).toBe(
++      'Bearer real-oauth-token',
++    );
++    const models = await send(port, '/v1/models', '', headers, 'GET');
++    expect(models.status).toBe(200);
++    expect(anthropicSeen).toHaveLength(2);
++  });
++});
+diff --git a/src/credential-proxy.test.ts b/src/credential-proxy.test.ts
+index b46bbd8cfe1ca28bbe60456580a0a66fd4a00caa..b3214a228e03ba8f5129aec1a34d7811cfe1cbb2 100644
+--- a/src/credential-proxy.test.ts
++++ b/src/credential-proxy.test.ts
+@@ -91,6 +91,38 @@ describe('credential-proxy', () => {
+     return (proxyServer.address() as AddressInfo).port;
+   }
+ 
++  it('refuses a web tool request while AGENT_WEB_TOOLS is off, and forwards it when on', async () => {
++    const webSearch = JSON.stringify({
++      messages: [],
++      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
++    });
++    const post = (port: number) =>
++      makeRequest(
++        port,
++        {
++          method: 'POST',
++          path: '/v1/messages',
++          headers: { 'content-type': 'application/json' },
++        },
++        webSearch,
++      );
++
++    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
++    const refused = await post(proxyPort);
++    expect(refused.statusCode).toBe(403);
++    expect(refused.body).toContain('web tools are off');
++    expect(lastUpstreamHeaders).toEqual({});
++
++    await new Promise<void>((r) => proxyServer.close(() => r()));
++    proxyPort = await startProxy({
++      ANTHROPIC_API_KEY: 'sk-ant-real-key',
++      AGENT_WEB_TOOLS: '1',
++    });
++    const allowed = await post(proxyPort);
++    expect(allowed.statusCode).toBe(200);
++    expect(lastUpstreamHeaders['x-api-key']).toBe('sk-ant-real-key');
++  });
++
+   it('API-key mode injects x-api-key and strips placeholder', async () => {
+     proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+ 
 diff --git a/src/credential-proxy.ts b/src/credential-proxy.ts
-index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743acd7caaba7 100644
+index 5990016ef0c61fde23168aaba7b004d41574a259..057da9e7dd5ffdb4bd268fb2332befdef1375238 100644
 --- a/src/credential-proxy.ts
 +++ b/src/credential-proxy.ts
 @@ -9,6 +9,10 @@
@@ -5609,7 +7029,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743ac
   */
  import { createServer, Server } from 'http';
  import { request as httpsRequest } from 'https';
-@@ -17,6 +21,12 @@ import { timingSafeEqual } from 'crypto';
+@@ -17,6 +21,13 @@ import { timingSafeEqual } from 'crypto';
  
  import { readEnvFile } from './env.js';
  import { logger } from './logger.js';
@@ -5619,10 +7039,11 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743ac
 +  ModelProvider,
 +  recordProviderResult,
 +} from './model-provider.js';
++import { checkProxyRequest, webToolsEnabled } from './web-tools.js';
  
  export type AuthMode = 'api-key' | 'oauth';
  
-@@ -26,26 +36,54 @@ export interface ProxyConfig {
+@@ -26,26 +37,72 @@ export interface ProxyConfig {
  
  const PROXY_TOKEN_HEADER = 'x-nanoclaw-proxy-token';
  const MAX_PROXY_BODY_BYTES = 20 * 1024 * 1024;
@@ -5634,6 +7055,24 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743ac
 + * token is rejected. A path with this prefix must never be logged.
 + */
 +const PATH_TOKEN_RE = /^\/_t\/([0-9a-f]{64})(\/.*)?$/;
++
++/**
++ * One log line per key for the life of the process. Each kind of key has
++ * its own cap, so a caller that makes up paths cannot use up the room for
++ * tool type warnings.
++ */
++const warned = { path: new Set<string>(), tool: new Set<string>() };
++function warnOnce(
++  kind: keyof typeof warned,
++  key: string,
++  fields: Record<string, unknown>,
++  message: string,
++): void {
++  const seen = warned[kind];
++  if (seen.has(key) || seen.size >= 100) return;
++  seen.add(key);
++  logger.warn(fields, message);
++}
  
  /** Tokens are generated by the host for one container run, never persisted. */
 -export function registerProxyCaller(token: string): void {
@@ -5685,7 +7124,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743ac
  }
  
  export function startCredentialProxy(
-@@ -69,17 +107,37 @@ export function startCredentialProxy(
+@@ -69,17 +126,39 @@ export function startCredentialProxy(
    const upstreamUrl = new URL(
      secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
    );
@@ -5696,6 +7135,8 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743ac
 +  const anthropicPrefix = basePath(upstreamUrl);
 +  // Throws on a listed provider with missing settings: a startup error.
 +  const foundry = getModelProviderConfig().foundry;
++  // Read once at start: changing AGENT_WEB_TOOLS needs a restart.
++  const webTools = webToolsEnabled();
  
    return new Promise((resolve, reject) => {
      const server = createServer((req, res) => {
@@ -5726,7 +7167,57 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743ac
  
        const rejectOversize = () => {
          res.writeHead(413);
-@@ -110,7 +168,7 @@ export function startCredentialProxy(
+@@ -106,11 +185,56 @@ export function startCredentialProxy(
+       });
+       req.on('end', () => {
+         if (tooLarge) return;
+-        const body = Buffer.concat(chunks);
++        let body: Buffer = Buffer.concat(chunks);
++        // Web tools off (AGENT_WEB_TOOLS): refuse a request that would make
++        // the provider contact an outside host. Both providers pass here.
++        // See checkProxyRequest in src/web-tools.ts.
++        if (!webTools) {
++          const verdict = checkProxyRequest({
++            path: requestPath,
++            contentEncoding: req.headers['content-encoding'],
++            body,
++          });
++          if (!verdict.allow) {
++            // The reason is fixed text. The path is logged only as the
++            // first segments of a plain path, with the token prefix gone.
++            if (verdict.pathClass)
++              warnOnce(
++                'path',
++                verdict.pathClass,
++                { provider, pathClass: verdict.pathClass },
++                'Credential proxy refused a path that is not on its list (AGENT_WEB_TOOLS is off; logged once per path)',
++              );
++            else
++              logger.warn(
++                { provider, reason: verdict.reason },
++                'Credential proxy refused a request (AGENT_WEB_TOOLS is off)',
++              );
++            res.writeHead(403, { 'content-type': 'application/json' });
++            res.end(
++              JSON.stringify({
++                type: 'error',
++                error: {
++                  type: 'permission_error',
++                  message: `Refused by this deployment (web tools are off): ${verdict.reason}.`,
++                },
++              }),
++            );
++            return;
++          }
++          body = verdict.body;
++          for (const type of verdict.unknownToolTypes)
++            warnOnce(
++              'tool',
++              type,
++              { provider, toolType: type },
++              'Credential proxy forwarded a tool type it does not know while AGENT_WEB_TOOLS is off; check that it does not reach outside hosts',
++            );
++        }
          const headers: Record<string, string | number | string[] | undefined> =
            {
              ...(req.headers as Record<string, string>),
@@ -5735,7 +7226,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743ac
              'content-length': body.length,
            };
  
-@@ -120,7 +178,14 @@ export function startCredentialProxy(
+@@ -120,7 +244,14 @@ export function startCredentialProxy(
          delete headers['transfer-encoding'];
          delete headers[PROXY_TOKEN_HEADER];
  
@@ -5751,7 +7242,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..f6118254331108b20f1bce1d0cb743ac
            // API key mode: inject x-api-key on every request
            delete headers['x-api-key'];
            headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
-@@ -139,21 +204,28 @@ export function startCredentialProxy(
+@@ -139,21 +270,28 @@ export function startCredentialProxy(
  
          const upstream = makeRequest(
            {
@@ -8978,7 +10469,7 @@ index 0000000000000000000000000000000000000000..8d5ed4ff95e4e60490caee25e48a6e1e
 +  );
 +}
 diff --git a/src/index.ts b/src/index.ts
-index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..73a4d17ed804911d029cd65326f0ce345ae680f4 100644
+index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..edb5f31ba861826a43d323e6556011dab2598b49 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -13,6 +13,12 @@ import {
@@ -8994,6 +10485,15 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..73a4d17ed804911d029cd65326f0ce34
  import { startCredentialProxy } from './credential-proxy.js';
  import './channels/index.js';
  import {
+@@ -28,7 +34,7 @@ import {
+ import {
+   cleanupOrphans,
+   ensureContainerRuntimeRunning,
+-  PROXY_BIND_HOST,
++  resolveProxyBindHost,
+ } from './container-runtime.js';
+ import {
+   getAllChats,
 @@ -48,6 +54,7 @@ import {
    storeMessage,
  } from './db.js';
@@ -9084,6 +10584,15 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..73a4d17ed804911d029cd65326f0ce34
    ensureContainerSystemRunning();
    initDatabase();
    logger.info('Database initialized');
+@@ -875,7 +911,7 @@ async function main(): Promise<void> {
+   // Start credential proxy (containers route API calls through this)
+   const proxyServer = await startCredentialProxy(
+     CREDENTIAL_PROXY_PORT,
+-    PROXY_BIND_HOST,
++    resolveProxyBindHost(),
+   );
+ 
+   // Graceful shutdown handlers
 @@ -1028,7 +1064,10 @@ async function main(): Promise<void> {
    // fire-and-forget catch it themselves; the shortfall-alert replay layer needs
    // the rejection, because a swallowed failure there reads as a confirmed
@@ -12320,6 +13829,689 @@ index 0000000000000000000000000000000000000000..5930dc8a8a62e7ecb414851c1cf10ef4
 +      vi.unstubAllEnvs();
 +      fs.rmSync(root, { recursive: true, force: true });
 +    },
++  };
++}
+diff --git a/src/web-tools.test.ts b/src/web-tools.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..1ae65686fd41359284c5837953039e9145334d16
+--- /dev/null
++++ b/src/web-tools.test.ts
+@@ -0,0 +1,418 @@
++import { gzipSync } from 'zlib';
++
++import { afterEach, describe, expect, it, vi } from 'vitest';
++
++const mockEnv: Record<string, string> = {};
++vi.mock('./env.js', () => ({
++  readEnvFile: vi.fn(() => ({ ...mockEnv })),
++}));
++
++import {
++  checkProxyRequest,
++  classifyProxyPath,
++  type ProxyRequestVerdict,
++  webToolsEnabled,
++} from './web-tools.js';
++
++const runnerTools = (await import(
++  new URL('../container/agent-runner/src/allowed-tools.ts', import.meta.url)
++    .href
++)) as {
++  normalAllowedTools: (env: Record<string, string | undefined>) => string[];
++  disallowedTools: (env: Record<string, string | undefined>) => string[];
++};
++
++afterEach(() => {
++  delete process.env.AGENT_WEB_TOOLS;
++  delete mockEnv.AGENT_WEB_TOOLS;
++});
++
++describe('AGENT_WEB_TOOLS on the host', () => {
++  it('is off when unset', () => {
++    expect(webToolsEnabled()).toBe(false);
++  });
++
++  it('is on for 1, true and on, from the process environment or .env', () => {
++    for (const v of ['1', 'true', 'ON']) {
++      process.env.AGENT_WEB_TOOLS = v;
++      expect(webToolsEnabled()).toBe(true);
++    }
++    delete process.env.AGENT_WEB_TOOLS;
++    mockEnv.AGENT_WEB_TOOLS = '1';
++    expect(webToolsEnabled()).toBe(true);
++  });
++
++  it('stays off for any other value', () => {
++    for (const v of ['0', 'false', 'off', 'yes please']) {
++      process.env.AGENT_WEB_TOOLS = v;
++      expect(webToolsEnabled()).toBe(false);
++    }
++  });
++});
++
++describe('the tool list in the container', () => {
++  it('leaves the web tools out, and removes them, by default', () => {
++    const allowed = runnerTools.normalAllowedTools({});
++    expect(allowed).not.toContain('WebSearch');
++    expect(allowed).not.toContain('WebFetch');
++    expect(allowed).toContain('Bash');
++    expect(allowed).toContain('mcp__nanoclaw__*');
++    expect(runnerTools.disallowedTools({})).toEqual(['WebSearch', 'WebFetch']);
++  });
++
++  it('includes them only when NANOCLAW_WEB_TOOLS is exactly 1', () => {
++    const on = { NANOCLAW_WEB_TOOLS: '1' };
++    expect(runnerTools.normalAllowedTools(on)).toEqual(
++      expect.arrayContaining(['WebSearch', 'WebFetch', 'Bash']),
++    );
++    expect(runnerTools.disallowedTools(on)).toEqual([]);
++    expect(
++      runnerTools.normalAllowedTools({ NANOCLAW_WEB_TOOLS: 'true' }),
++    ).not.toContain('WebSearch');
++  });
++
++  it('does not change the other tools', () => {
++    const off = runnerTools.normalAllowedTools({});
++    const on = runnerTools.normalAllowedTools({ NANOCLAW_WEB_TOOLS: '1' });
++    expect(on.filter((t) => !t.startsWith('Web'))).toEqual(off);
++  });
++});
++
++describe('checkProxyRequest (the proxy check while web tools are off)', () => {
++  const json = (o: unknown) => Buffer.from(JSON.stringify(o));
++  const web = { type: 'web_search_20250305', name: 'web_search' };
++  const check = (
++    body: Buffer,
++    path = '/v1/messages?beta=true',
++    contentEncoding?: string,
++  ) => checkProxyRequest({ path, body, contentEncoding });
++  const refused = (v: ProxyRequestVerdict) =>
++    v.allow ? 'allowed' : `refused: ${v.reason}`;
++
++  it('refuses a provider-side web search or web fetch tool', () => {
++    expect(refused(check(json({ tools: [web] })))).toMatch(/web search/);
++    expect(
++      refused(
++        check(
++          json({ tools: [{ name: 'Bash' }, { type: 'web_fetch_20260309' }] }),
++        ),
++      ),
++    ).toMatch(/web search or web fetch/);
++    // A version this code has never seen.
++    expect(
++      refused(check(json({ tools: [{ type: 'web_search_20990101' }] }))),
++    ).toMatch(/^refused/);
++  });
++
++  it('refuses a tool type written with a JSON escape', () => {
++    const body = Buffer.from(
++      '{"tools":[{"type":"web\\u005fsearch_20250305","name":"w"}]}',
++    );
++    expect(body.includes('web_search')).toBe(false);
++    expect(refused(check(body))).toMatch(/web search/);
++  });
++
++  it('refuses a model request whose body is not UTF-8 JSON', () => {
++    for (const body of [
++      Buffer.from('{"tools":[{"type":"web_search_20250305"}'),
++      Buffer.from('web_search not json'),
++      Buffer.from([0xff, 0xfe, 0x7b, 0x00, 0x7d, 0x00]),
++      json([{ tools: [web] }]),
++      json('text'),
++    ]) {
++      expect(refused(check(body))).toMatch(/not UTF-8 JSON|not a JSON object/);
++      expect(refused(check(body, '/v1/messages/count_tokens'))).toMatch(
++        /^refused/,
++      );
++      expect(refused(check(body, '/anthropic/v1/messages'))).toMatch(
++        /^refused/,
++      );
++    }
++  });
++
++  it('refuses a web tool nested in a batch, or deeper', () => {
++    const batch = json({
++      requests: [{ custom_id: 'a', params: { messages: [], tools: [web] } }],
++    });
++    expect(refused(check(batch, '/v1/messages/batches'))).toMatch(/web search/);
++    expect(
++      refused(check(json({ a: [{ b: { c: { tools: [web] } } }] }))),
++    ).toMatch(/web search/);
++  });
++
++  it('refuses a body with a content encoding, on any path', () => {
++    const gz = gzipSync(json({ tools: [web] }));
++    for (const path of ['/v1/messages', '/api/hello', '/v1/models']) {
++      expect(refused(check(gz, path, 'gzip'))).toMatch(/content encoding/);
++      expect(refused(check(json({}), path, 'br'))).toMatch(/content encoding/);
++    }
++    // Compressed bytes with no header are not JSON.
++    expect(refused(check(gz))).toMatch(/not UTF-8 JSON/);
++    expect(refused(check(json({}), '/v1/messages', 'identity'))).toBe(
++      'allowed',
++    );
++  });
++
++  it('sends on what it checked: a duplicate key cannot hide a tool', () => {
++    const first = check(
++      Buffer.from('{"tools":[{"type":"web_search_20250305"}],"tools":[]}'),
++    );
++    // The parser keeps the last value, and only that value is sent on.
++    expect(first.allow && first.body.toString()).toBe('{"tools":[]}');
++    const last = check(
++      Buffer.from('{"tools":[],"tools":[{"type":"web_search_20250305"}]}'),
++    );
++    expect(refused(last)).toMatch(/web search/);
++    const bom = check(Buffer.from('﻿{"max_tokens": 1}'));
++    expect(bom.allow && bom.body.toString()).toBe('{"max_tokens":1}');
++  });
++
++  it('refuses the remote MCP connector', () => {
++    const server = { type: 'url', name: 'x', url: 'https://example.org/mcp' };
++    expect(refused(check(json({ mcp_servers: [server] })))).toMatch(
++      /mcp_servers/,
++    );
++    expect(
++      refused(
++        check(
++          json({ requests: [{ params: { mcp_servers: [server] } }] }),
++          '/v1/messages/batches',
++        ),
++      ),
++    ).toMatch(/mcp_servers/);
++    expect(
++      refused(
++        check(json({ tools: [{ type: 'mcp_toolset', mcp_server_name: 'x' }] })),
++      ),
++    ).toMatch(/mcp_toolset/);
++    expect(refused(check(json({ mcp_servers: [] })))).toBe('allowed');
++  });
++
++  it('refuses an image or document the provider would download', () => {
++    for (const type of ['image', 'document']) {
++      const body = json({
++        messages: [
++          {
++            role: 'user',
++            content: [
++              { type, source: { type: 'url', url: 'https://example.org/a' } },
++            ],
++          },
++        ],
++      });
++      expect(refused(check(body))).toMatch(/download a URL/);
++    }
++    const inline = json({
++      messages: [
++        {
++          role: 'user',
++          content: [
++            {
++              type: 'image',
++              source: { type: 'base64', media_type: 'image/png', data: 'AA==' },
++            },
++          ],
++        },
++      ],
++    });
++    expect(refused(check(inline))).toBe('allowed');
++  });
++
++  it('refuses the managed agents API by path, in any letter case', () => {
++    for (const path of [
++      '/v1/agents',
++      '/v1/sessions/abc/events?beta=true',
++      '/v1/environments',
++      '/V1/Sessions',
++      '/anthropic/v1/agents/',
++    ]) {
++      expect(refused(check(json({}), path))).toMatch(/managed agents/);
++      expect(refused(check(Buffer.alloc(0), path))).toMatch(/managed agents/);
++    }
++    expect(
++      refused(check(json({ tools: [{ type: 'agent_toolset_20260401' }] }))),
++    ).toMatch(/managed agent tool set/);
++  });
++
++  it('refuses a path that is not in plain form', () => {
++    for (const path of [
++      '/api/../v1/messages',
++      '/v1//messages',
++      '/v1/%6dessages',
++      '/v1/./messages',
++      '/v1/messages;x=1',
++      '/v1\\messages',
++      'http://example.org/v1/messages',
++      '',
++    ]) {
++      expect(refused(check(json({}), path))).toMatch(/plain form/);
++    }
++  });
++
++  it('allows an ordinary agent request and sends the same JSON on', () => {
++    const request = {
++      model: 'claude-x',
++      max_tokens: 1024,
++      stream: true,
++      system: [{ type: 'text', text: 'web_search mcp_servers' }],
++      messages: [
++        { role: 'user', content: 'what is web_search? 😀' },
++        {
++          role: 'assistant',
++          content: [
++            {
++              type: 'tool_use',
++              id: 't1',
++              name: 'mcp__nanoclaw__send_message',
++              // Arguments are data: none of this is read by the provider.
++              input: {
++                tools: [web],
++                mcp_servers: [{ url: 'https://example.org' }],
++                source: { type: 'url', url: 'https://example.org' },
++              },
++            },
++          ],
++        },
++        {
++          role: 'user',
++          content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }],
++        },
++      ],
++      tools: [
++        {
++          name: 'web_search_notes',
++          description: 'a client tool',
++          input_schema: {
++            type: 'object',
++            properties: {
++              mcp_servers: { type: 'array', default: [{ type: 'url' }] },
++              source: { type: 'object', default: { type: 'url' } },
++            },
++          },
++        },
++        { type: 'bash_20250124', name: 'bash' },
++        { type: 'custom', name: 'x', input_schema: { type: 'object' } },
++      ],
++    };
++    const verdict = check(json(request));
++    expect(verdict.allow).toBe(true);
++    if (!verdict.allow) return;
++    expect(JSON.parse(verdict.body.toString())).toEqual(request);
++    expect(verdict.unknownToolTypes).toEqual([]);
++  });
++
++  it('keeps web search results in the history of a session that had web tools on', () => {
++    const body = json({
++      messages: [
++        {
++          role: 'assistant',
++          content: [
++            {
++              type: 'server_tool_use',
++              id: 's1',
++              name: 'web_search',
++              input: {},
++            },
++            {
++              type: 'web_search_tool_result',
++              tool_use_id: 's1',
++              content: [
++                {
++                  type: 'web_search_result',
++                  url: 'https://example.org',
++                  title: 't',
++                  encrypted_content: 'x',
++                },
++              ],
++            },
++          ],
++        },
++      ],
++      tools: [],
++    });
++    expect(refused(check(body))).toBe('allowed');
++  });
++
++  it('allows a tool type it does not know, and names it', () => {
++    const verdict = check(
++      json({
++        tools: [
++          { type: 'code_execution_20260120', name: 'code_execution' },
++          { type: 'something_new_20990101', name: 'n' },
++          { type: 'bash_20250124', name: 'bash' },
++        ],
++      }),
++    );
++    expect(verdict.allow && verdict.unknownToolTypes).toEqual([
++      'code_execution_20260120',
++      'something_new_20990101',
++    ]);
++  });
++
++  it('forwards the listed paths that are not model paths', () => {
++    expect(refused(check(Buffer.alloc(0), '/v1/models'))).toBe('allowed');
++    expect(refused(check(Buffer.alloc(0), '/v1/models/claude-x'))).toBe(
++      'allowed',
++    );
++    expect(refused(check(Buffer.alloc(0), '/api/hello'))).toBe('allowed');
++    expect(
++      refused(
++        check(json({ raw: 'x' }), '/api/oauth/claude_cli/create_api_key'),
++      ),
++    ).toBe('allowed');
++    // A JSON body on a listed path is still checked.
++    expect(
++      refused(
++        check(json({ tools: [web] }), '/api/oauth/claude_cli/create_api_key'),
++      ),
++    ).toMatch(/web search/);
++  });
++
++  it('refuses every path that is not on the list, and names it for the log', () => {
++    for (const path of [
++      '/',
++      '/v1/files',
++      '/v1/skills',
++      '/v1/code/sessions',
++      '/v1/unknown?x=1',
++      '/api/oauth/profile',
++      '/api/hello/more',
++      '/anthropic/api/hello',
++      '/v2/messages',
++      '/messages',
++    ]) {
++      for (const body of [Buffer.alloc(0), json({}), Buffer.from('--b\r\n')]) {
++        const verdict = check(body, path);
++        expect(refused(verdict)).toMatch(/not one an agent turn uses/);
++        expect(!verdict.allow && verdict.pathClass).toBe(
++          path.split('?')[0].split('/').slice(0, 4).join('/'),
++        );
++      }
++    }
++  });
++
++  it('refuses a body nested too deeply to check', () => {
++    let deep = '{"tools":[{"type":"web_search_20250305"}]}';
++    for (let i = 0; i < 400; i++) deep = `{"a":${deep}}`;
++    expect(refused(check(Buffer.from(deep)))).toMatch(/^refused/);
++  });
++});
++
++describe('classifyProxyPath', () => {
++  it('names model paths with or without a base path', () => {
++    expect(classifyProxyPath('/v1/messages')).toBe('model');
++    expect(classifyProxyPath('/v1/messages?beta=true')).toBe('model');
++    expect(classifyProxyPath('/v1/messages/batches/b1/cancel')).toBe('model');
++    expect(classifyProxyPath('/anthropic/v1/messages/count_tokens')).toBe(
++      'model',
++    );
++    expect(classifyProxyPath('/v1/complete')).toBe('model');
++    expect(classifyProxyPath('/api/hello')).toBe('listed');
++    expect(classifyProxyPath('/v1/models/claude-x:latest')).toBe('listed');
++    expect(classifyProxyPath('/api/oauth/claude_cli/create_api_key')).toBe(
++      'listed',
++    );
++    expect(classifyProxyPath('/')).toBe('unlisted');
++    expect(classifyProxyPath('/v1/files')).toBe('unlisted');
++  });
++});
+diff --git a/src/web-tools.ts b/src/web-tools.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f90683f5079ccb503bf566cd7007663c6b2dbd06
+--- /dev/null
++++ b/src/web-tools.ts
+@@ -0,0 +1,253 @@
++/**
++ * The web tools setting (AGENT_WEB_TOOLS), off by default.
++ *
++ * WebSearch runs at the model provider: the agent's query leaves through the
++ * credential proxy even when the container's network is restricted. WebFetch
++ * needs the container's own network. Both carry text the agent chose, and
++ * neither passes the delivery gate or the audit log.
++ *
++ * Off means two things: the container is not told to offer the tools
++ * (container/agent-runner/src/allowed-tools.ts), and the credential proxy
++ * refuses a request that would make the provider contact an outside host
++ * (checkProxyRequest below). The second check is the boundary: it holds even
++ * if the agent rewrites its own runner or calls the proxy directly.
++ */
++import { readEnvFile } from './env.js';
++
++/** Process environment first, then `.env`. Read on each call. */
++export function webToolsEnabled(): boolean {
++  const value = (
++    process.env.AGENT_WEB_TOOLS ||
++    readEnvFile(['AGENT_WEB_TOOLS']).AGENT_WEB_TOOLS ||
++    ''
++  )
++    .trim()
++    .toLowerCase();
++  return value === '1' || value === 'true' || value === 'on';
++}
++
++/**
++ * The proxy's check of one request while web tools are off.
++ *
++ * The container holds its run's proxy token and can write any request it
++ * likes, so the check trusts nothing the caller controls:
++ *
++ * - The body is always parsed. There is no search of the raw bytes: JSON
++ *   allows escapes, so a tool type can be written without its plain text.
++ * - A body that parsed is sent on re-serialised from the parsed value, never
++ *   as the caller's bytes. What was checked is what the provider reads
++ *   (duplicate keys, escapes and a byte order mark are gone).
++ * - On a model path a body that is not one UTF-8 JSON object is refused.
++ * - A body with a content encoding is refused: the proxy does not decode it.
++ * - The path must be in plain form, so that the path the proxy classified is
++ *   the path the provider routes.
++ *
++ * Refused, each because the provider would contact an outside host for the
++ * caller (read from the type definitions of @anthropic-ai/sdk 0.93.0, the
++ * version container/agent-runner pins; no live endpoint was called):
++ *
++ * - a web search or web fetch tool, in a `tools` list at any depth (a batch
++ *   request nests whole message requests);
++ * - the remote MCP connector: a non-empty `mcp_servers` list at any depth,
++ *   and an `mcp_toolset` tool;
++ * - an image or document the provider is asked to download
++ *   (`source: {type: "url"}`);
++ * - the managed agents API (`/v1/agents`, `/v1/sessions`,
++ *   `/v1/environments`): the provider runs an agent in its own container
++ *   with its own network and web tools, and its `agent_toolset` tool.
++ *
++ * Paths are an allowlist. The provider's host serves far more than model
++ * requests (the CLI in the agent image names well over a hundred paths), and
++ * the proxy adds the host's credential to whatever it forwards. Real agent
++ * containers run against a local fake provider on 2026-11-20, in API-key
++ * mode and in OAuth mode, sent only `POST /v1/messages`. Forwarded: the model
++ * paths, the model list, and the OAuth key exchange. Everything else is
++ * refused and logged once per path.
++ *
++ * Tool types are not an allowlist. A tool type that is not known here is
++ * allowed and reported once, so an operator can see it. An allowlist would
++ * be stronger; it is not used because a wrong entry would refuse every agent
++ * turn, and no turn against a live provider has been run to draw it from.
++ */
++export interface ProxyRequestInput {
++  /** Path and query as the proxy will send them (no token prefix). */
++  path: string;
++  /** The content-encoding request header, if any. */
++  contentEncoding?: string | string[];
++  body: Buffer;
++}
++
++export type ProxyRequestVerdict =
++  | {
++      allow: true;
++      /** The bytes to send upstream. */
++      body: Buffer;
++      /** Tool types that are not known to this check. */
++      unknownToolTypes: string[];
++    }
++  | {
++      allow: false;
++      reason: string;
++      /** Set when the path is not on the list: its first segments. */
++      pathClass?: string;
++    };
++
++const WEB_TOOL_TYPE = /^web_(search|fetch)/;
++/** Tools the caller runs itself, or that stay inside the provider. */
++const KNOWN_TOOL_TYPE =
++  /^(custom$|bash_|text_editor_|computer_|memory_|tool_search_tool_|advisor_)/;
++const MANAGED_AGENT_PATHS = new Set(['agents', 'sessions', 'environments']);
++const MODEL_PATHS = new Set(['messages', 'complete']);
++const PLAIN_SEGMENT = /^[A-Za-z0-9._~:@-]+$/;
++const MAX_DEPTH = 256;
++
++type PathKind =
++  | 'model'
++  | 'listed'
++  | 'managed-agents'
++  | 'unlisted'
++  | 'malformed';
++
++/** Classify the path part of a request URL. The query is ignored. */
++export function classifyProxyPath(url: string): PathKind {
++  const q = url.indexOf('?');
++  const path = q === -1 ? url : url.slice(0, q);
++  if (!path.startsWith('/')) return 'malformed';
++  const segments = path.slice(1).split('/');
++  // One trailing slash is plain; an empty or dot segment anywhere else, or
++  // a percent escape, is not: the provider may route it differently.
++  if (segments.length > 1 && segments[segments.length - 1] === '')
++    segments.pop();
++  if (segments.length === 1 && segments[0] === '') return 'unlisted';
++  for (const s of segments) {
++    if (!PLAIN_SEGMENT.test(s) || s === '.' || s === '..') return 'malformed';
++  }
++  const lower = segments.map((s) => s.toLowerCase());
++  // The OAuth key exchange (see the header of src/credential-proxy.ts) and
++  // the connectivity check, at the root of the Anthropic host only.
++  const head = lower.slice(0, 3).join('/');
++  let kind: PathKind =
++    head === 'api/oauth/claude_cli' || lower.join('/') === 'api/hello'
++      ? 'listed'
++      : 'unlisted';
++  // A base path may come first (ANTHROPIC_BASE_URL, Foundry), so `v1` is
++  // looked for at any position.
++  for (let i = 0; i + 1 < lower.length; i++) {
++    if (lower[i] !== 'v1') continue;
++    if (MANAGED_AGENT_PATHS.has(lower[i + 1])) return 'managed-agents';
++    if (MODEL_PATHS.has(lower[i + 1])) kind = 'model';
++    else if (lower[i + 1] === 'models' && kind !== 'model') kind = 'listed';
++  }
++  return kind;
++}
++
++/** The first segments of a plain path, for the log. */
++function pathClassOf(url: string): string {
++  return url.split('?')[0].split('/').slice(0, 4).join('/').slice(0, 120);
++}
++
++function isObject(v: unknown): v is Record<string, unknown> {
++  return typeof v === 'object' && v !== null && !Array.isArray(v);
++}
++
++/** Walk a parsed body. Returns a refusal reason, or null. */
++function findOutsideReach(root: unknown, unknown: Set<string>): string | null {
++  const stack: { value: unknown; depth: number }[] = [
++    { value: root, depth: 0 },
++  ];
++  while (stack.length) {
++    const { value, depth } = stack.pop()!;
++    if (depth > MAX_DEPTH) return 'the body is nested too deeply to check';
++    if (Array.isArray(value)) {
++      for (const item of value) stack.push({ value: item, depth: depth + 1 });
++      continue;
++    }
++    if (!isObject(value)) continue;
++    const blockType = value.type;
++    const isToolUse =
++      typeof blockType === 'string' && /(^|_)tool_use$/.test(blockType);
++    for (const [key, child] of Object.entries(value)) {
++      if (key === 'mcp_servers' && Array.isArray(child) && child.length)
++        return 'it names a remote MCP server (mcp_servers)';
++      if (key === 'source' && isObject(child) && child.type === 'url')
++        return 'it asks the provider to download a URL (source type url)';
++      if (key === 'tools' && Array.isArray(child)) {
++        for (const tool of child) {
++          const type = isObject(tool) ? tool.type : undefined;
++          if (typeof type !== 'string') continue;
++          if (WEB_TOOL_TYPE.test(type))
++            return 'it declares a web search or web fetch tool';
++          if (type === 'mcp_toolset')
++            return 'it declares a remote MCP tool set (mcp_toolset)';
++          if (type.startsWith('agent_toolset'))
++            return 'it declares a managed agent tool set';
++          if (!KNOWN_TOOL_TYPE.test(type)) unknown.add(type.slice(0, 80));
++        }
++      }
++      // Data the provider does not read as a request: a tool's JSON schema,
++      // and the arguments of a tool call in the conversation history.
++      if (key === 'input_schema') continue;
++      if (key === 'input' && isToolUse) continue;
++      stack.push({ value: child, depth: depth + 1 });
++    }
++  }
++  return null;
++}
++
++function parseJson(body: Buffer): { ok: true; value: unknown } | { ok: false } {
++  try {
++    const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
++    return { ok: true, value: JSON.parse(text) };
++  } catch {
++    return { ok: false };
++  }
++}
++
++/** Decide one request for the credential proxy while web tools are off. */
++export function checkProxyRequest(
++  input: ProxyRequestInput,
++): ProxyRequestVerdict {
++  const kind = classifyProxyPath(input.path);
++  if (kind === 'malformed')
++    return { allow: false, reason: 'the request path is not in plain form' };
++  if (kind === 'managed-agents')
++    return {
++      allow: false,
++      reason: 'the managed agents API runs tools with their own network',
++    };
++  if (kind === 'unlisted')
++    return {
++      allow: false,
++      reason: 'the path is not one an agent turn uses',
++      pathClass: pathClassOf(input.path),
++    };
++  const encoding = ([] as string[])
++    .concat(input.contentEncoding ?? [])
++    .join(',')
++    .trim()
++    .toLowerCase();
++  if (encoding && encoding !== 'identity')
++    return {
++      allow: false,
++      reason: 'the body has a content encoding the proxy does not read',
++    };
++  if (input.body.length === 0)
++    return { allow: true, body: input.body, unknownToolTypes: [] };
++  const parsed = parseJson(input.body);
++  if (!parsed.ok) {
++    if (kind === 'model')
++      return { allow: false, reason: 'the body is not UTF-8 JSON' };
++    // A listed path that is not a model path. Sent on as it came.
++    return { allow: true, body: input.body, unknownToolTypes: [] };
++  }
++  if (kind === 'model' && !isObject(parsed.value))
++    return { allow: false, reason: 'the body is not a JSON object' };
++  const unknown = new Set<string>();
++  const reason = findOutsideReach(parsed.value, unknown);
++  if (reason) return { allow: false, reason };
++  return {
++    allow: true,
++    body: Buffer.from(JSON.stringify(parsed.value), 'utf8'),
++    unknownToolTypes: [...unknown],
 +  };
 +}
 diff --git a/start.sh b/start.sh

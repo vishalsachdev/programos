@@ -54,11 +54,11 @@ You need: a host that can run Docker, a mail address for the bot, a git host for
 
 ## How it is kept safe
 
-- The agent runs in a container. It sees only the folders you mount and is set to reach the model through a proxy on the host, which holds your credentials.
+- The agent runs in a container. It sees only the folders you mount and reaches the model through a proxy on the host, which holds your credentials. On Docker Engine on Linux the container's network is restricted by default: it reaches that proxy and no outside host. Web search and web fetch are off by default. The container holds no git credential; the host pushes the agent's commits and tells the operator when a push fails.
 - On email and Telegram, only allowlisted senders get an answer. The allowlist is a file in your knowledge-base repo. Web chat is different: anyone who has its shared secret can ask. Keep web chat off if you need a check per person.
 - The agent's replies and outbound mail pass a delivery gate on the host. A reply that fails the gate is not sent, and the operator is told. Operator alerts go to Telegram by default; a setting sends them by email to the operator's address, or both ways. [`AGENTS.md`](./AGENTS.md) lists the limits of each route.
 - Accepted inbound messages and replies are written to an audit log in your knowledge-base repo. Some paths are not logged; `SPEC.md` section 6 lists them.
-- Mail, replies and knowledge-base text reach outside services (the model provider, the mail provider, Telegram, your git host) and are stored in your knowledge-base repo, which the code never prunes. The container's network is not restricted. [`docs/data-handling.md`](./docs/data-handling.md) lists what goes where and what to decide before real users.
+- Mail, replies and knowledge-base text reach outside services (the model provider, the mail provider, Telegram, your git host) and are stored in your knowledge-base repo, which the code never prunes. [`docs/data-handling.md`](./docs/data-handling.md) lists what goes where and what to decide before real users.
 - These rules do not hold equally on every channel. [`SPEC.md`](./SPEC.md) section 11 lists where each one stops. Read it before you rely on one.
 - Role and access changes are made by the admin only, never because a message asked.
 - Numbered rules cover the rest. [`docs/12-governance.md`](./docs/12-governance.md) gives each rule and the failure it prevents.

@@ -323,7 +323,17 @@ describe('container agent mode contract', () => {
     expect(source).toContain(
       'mcpServers: isDeliveryRepair ? {} : normalMcpServers',
     );
-    expect(source).toContain("'mcp__nanoclaw__*'");
+    // The list itself lives in allowed-tools.ts (web tools are a setting).
+    expect(source).toContain(
+      'const NORMAL_ALLOWED_TOOLS = normalAllowedTools(process.env);',
+    );
+    expect(source).toContain('disallowedTools: disallowedTools(process.env)');
+    expect(
+      actualFs.readFileSync(
+        'container/agent-runner/src/allowed-tools.ts',
+        'utf8',
+      ),
+    ).toContain("'mcp__nanoclaw__*'");
     expect(source).toContain('nanoclaw: {');
 
     const hostSource = actualFs.readFileSync('src/container-runner.ts', 'utf8');

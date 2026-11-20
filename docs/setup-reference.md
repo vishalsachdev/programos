@@ -56,9 +56,10 @@ The Foundry path and the failover were tested against fake servers only. [`model
 | Key | Read from | When nothing is set | Meaning | Choice |
 |---|---|---|---|---|
 | `WEBHOOK_SECRET` | .env or process | The HTTP listener does not start: no inbound mail, no web chat, no optional webhooks | Shared secret that the inbound mail intake service sends. Marked REQUIRED for email | 3, 5 |
-| `WEBHOOK_HOST` | process | All interfaces | The listener address. Set `127.0.0.1` and use a reverse proxy | 3, 8 |
+| `WEBHOOK_HOST` | process | All interfaces | The listener address. Set `127.0.0.1` and use a reverse proxy. Left unset, the agent container can reach the listener even on the restricted network; the host warns at each start | 3, 8, 17 |
 | `WEBHOOK_PORT` | process | `3003` | The listener port | 8 |
 | `CREDENTIAL_PROXY_PORT` | process | `3001` | The port of the credential proxy that containers call | 8 |
+| `CREDENTIAL_PROXY_HOST` | process | The Docker bridge address | The address the credential proxy binds to. Used on the open container network only; on the restricted network the proxy binds to that network's gateway address and this key is ignored with a warning (`0.0.0.0` excepted) | 17 |
 | `TELEGRAM_BOT_TOKEN` | .env | No Telegram channel, and no alerts on the Telegram route | The Telegram bot's token | 3, 4 |
 | `TELEGRAM_ADMIN_CHAT_ID` | .env | None | The admin's Telegram chat, for alerts | 3, 4 |
 | `WEBCHAT_SECRET` | .env | No web chat | The web chat's shared secret. Anyone who holds it is answered. Web chat is reachable only when `WEBHOOK_SECRET` is set too, because that channel starts the one HTTP listener | 3 |
@@ -86,6 +87,16 @@ The caps count in memory and reset when the process restarts. They apply to emai
 | `PROGRAM_HOST_REPO` | process | `program-repo-host` in the folder of the read mirror (`/srv/repos/program-repo-host`) | Path of the host's own repository: the audit log is committed there and every fetch and push runs there (`src/host-repo.ts`). The host creates it. It must not be inside `PROGRAM_REPO`, and no container may mount it | 7 |
 | `GITHUB_PUSH_WEBHOOK_SECRET` | .env, then process | `/api/github-push` answers 503 | Secret of the push webhook on the program repo | 7, 13 |
 | `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID`, `CHECKOUT_OWNER_HOME` | process | `1000`, `1000`, `/home/ubuntu` | Used only when the host process runs as root: host git and file operations in the program repo run as this user. The supported recipe does not run as root | 8 |
+
+### The agent container: network and web tools
+
+| Key | Read from | When nothing is set | Meaning | Choice |
+|---|---|---|---|---|
+| `CONTAINER_NETWORK` | process, then .env | `restricted` on Docker Engine on Linux; `open` on Docker Desktop (macOS, WSL) | What the agent container can reach. `restricted`: an internal Docker network; the credential proxy on the host and no outside host, git host or outside name. `open`: any host, with a warning at each start. Any other value stops the start. Read at start | 17 |
+| `CONTAINER_NETWORK_NAME` | process | `nanoclaw-agents` | Name of the internal Docker network the host creates for `restricted`. Change it only if the name is taken. An existing network of that name that is not internal is refused | 17 |
+| `AGENT_WEB_TOOLS` | process, then .env | Off | `1`, `true` or `on` gives the agent web search and web fetch. Off: the tools are removed, and the credential proxy refuses a request that would make the model provider contact an outside host (a web search or fetch tool, a remote MCP server, an image or document given as a URL, the managed agents API), a model request it cannot read as JSON, and every path except the model paths, the model list and the OAuth key exchange. Read at start | 17 |
+
+**On the restricted network the container still reaches host services that listen on all interfaces**, on the network's gateway address. The webhook listener's code default is all interfaces: set `WEBHOOK_HOST=127.0.0.1`. The host logs a warning at each start while the network is restricted and `WEBHOOK_HOST` is not a loopback address. Not tested: an agent turn against a real provider on the restricted network (real containers completed a turn against a local stand-in on 2026-11-20); `restricted` on Docker Desktop; the proxy's refusals against a live provider. `npx tsx scripts/check-container-egress.ts` checks the network on the machine in use.
 
 Two files are not in `.env`: `~/.config/nanoclaw/mount-allowlist.json` (which folders a container may mount) and `~/.config/nanoclaw/sender-allowlist.json` (which chat senders may trigger the agent; missing or invalid means nobody). `AGENTS.md`, "First start", steps 2 and 3, sets them up.
 

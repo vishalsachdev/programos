@@ -1,10 +1,12 @@
 ---
 name: agent-browser
-description: Use when a task needs a page that WebFetch cannot read because it requires JavaScript, login or forms, and the admin has authorized opening any URL from inbound mail or an attachment.
+description: Use when a task needs a page that WebFetch cannot read because it requires JavaScript, login or forms, and the admin has authorized opening any URL from inbound mail or an attachment. Works only when the operator has opened the container's network (it is restricted by default, and then no page loads).
 allowed-tools: Bash(agent-browser:*)
 ---
 
 # Browser Automation with agent-browser
+
+The container's network is restricted by default: no outside page loads, and `agent-browser open` fails. That is expected. Do not look for another route; tell the user the operator has not opened the network.
 
 ## Quick start
 

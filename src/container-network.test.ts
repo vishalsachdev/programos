@@ -122,7 +122,7 @@ import { runContainerAgent } from './container-runner.js';
 import {
   _resetRestrictedNetworkForTests,
   hostGatewayArgs,
-  PROXY_BIND_HOST,
+  proxyBindHost,
   resolveContainerNetworkMode,
   resolveProxyBindHost,
 } from './container-runtime.js';
@@ -265,7 +265,7 @@ describe('credential proxy bind address', () => {
   it('open: the address used before this setting existed, with a loud warning', () => {
     process.env.CONTAINER_NETWORK = 'open';
     // docker0's address, or CREDENTIAL_PROXY_HOST when the runner sets it.
-    expect(resolveProxyBindHost()).toBe(PROXY_BIND_HOST);
+    expect(resolveProxyBindHost()).toBe(proxyBindHost());
     expect(vi.mocked(logger.warn).mock.calls[0][0]).toMatch(
       /CONTAINER_NETWORK is open/,
     );

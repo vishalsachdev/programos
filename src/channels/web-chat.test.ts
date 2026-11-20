@@ -26,6 +26,25 @@ describe('web chat session helpers', () => {
     expect(normalizeWebChatSessionId('')).toMatch(/^[a-z0-9]{10}$/);
   });
 
+  // Math.random().toString(36).slice(2, 12) is shorter than ten characters
+  // for a short fraction; CI failed on it (comment on PR 29).
+  it('a generated session id has ten characters whatever Math.random returns', () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      for (let i = 0; i < 200; i++)
+        expect(normalizeWebChatSessionId(undefined)).toMatch(/^[a-z0-9]{10}$/);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('generated session ids differ', () => {
+    const ids = new Set(
+      Array.from({ length: 200 }, () => normalizeWebChatSessionId('')),
+    );
+    expect(ids.size).toBe(200);
+  });
+
   it('derives the chat jid from the session id', () => {
     const chatJid = deriveWebChatChatJid('session-123');
     expect(chatJid).toBe('web-chat:session-123');

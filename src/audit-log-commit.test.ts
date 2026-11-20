@@ -22,6 +22,7 @@ import {
   type SyncOptions,
   type SyncResult,
 } from './host-repo.js';
+import { logger } from './logger.js';
 import {
   git,
   makeKbFixture,
@@ -156,6 +157,31 @@ describe('commitAuditLog (awaitable, retry-safe)', () => {
     const sync = vi.fn(async () => OK);
     await commitAuditLog(sync);
     expect(sync).not.toHaveBeenCalled();
+  });
+
+  // Review finding on PR 49 (Bugbot): the success line was written whenever
+  // the run did not fail, whatever it had committed or pushed.
+  it('the log line says committed and pushed only when the run did both', async () => {
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const lines = () => info.mock.calls.map((c) => String(c[c.length - 1]));
+    try {
+      for (const result of [
+        { committed: false, imported: 0, pushed: false }, // waiting for history
+        { committed: true, imported: 0, pushed: false }, // no origin set
+        { committed: false, imported: 0, pushed: true }, // an earlier commit
+      ]) {
+        _setPendingWritesForTests(1);
+        await commitAuditLog(async () => result);
+      }
+      expect(lines().join('\n')).not.toMatch(/committed and pushed/);
+      expect(lines()).toHaveLength(3);
+
+      _setPendingWritesForTests(1);
+      await commitAuditLog(async () => OK);
+      expect(lines()[3]).toBe('Audit log: committed and pushed');
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it('keeps the entries pending after a failure, so the next cycle retries', async () => {

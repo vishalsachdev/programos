@@ -10,15 +10,16 @@ Fixes, adapters and doc corrections are welcome. This page says how the repo tak
 
 ## The patch-file rule
 
-A change to exported code is lost at the next export unless it is recorded. So a pull request that changes exported code must also add a patch file:
+A change to exported code is lost at the next export unless it is recorded. This repo records all such changes in one file, `scripts/upstream-sync/repo-changes-2026-11-20.patch`. You never edit that file by hand. The rule is one command:
 
 1. Make the change and get the checks green.
-2. Write the diff of the exported paths you changed to a new file:
-   `git diff main -- <exported paths> > scripts/upstream-sync/<topic>-<date>.patch`
-3. Check that it applies to a clean checkout of `main`: `git apply --check scripts/upstream-sync/<topic>-<date>.patch`.
-4. Leave owned paths out of the patch.
+2. Run `python3 scripts/upstream-sync/repo_patch.py` and commit the patch file it rewrites, in the same pull request.
 
-After each export the maintainer reapplies every patch file in name order ([`scripts/upstream-sync/README.md`](./scripts/upstream-sync/README.md)). A patch that the source later takes is deleted here. The source repo is private; you do not need access to it, and you must not copy from it.
+The command writes the difference between the last export and your working tree, on exported paths only. It needs the full git history (a shallow clone: `git fetch --unshallow`). Do not add a patch file of your own.
+
+CI runs `python3 scripts/upstream-sync/repo_patch.py --check` and fails when the patch file does not reproduce the exported code in the pull request. When `main` has moved and the patch file conflicts, merge `main`, keep either side of that one file, and run the command again.
+
+After each export the maintainer reapplies the patch files ([`scripts/upstream-sync/README.md`](./scripts/upstream-sync/README.md)). The source repo is private; you do not need access to it, and you must not copy from it.
 
 A change to owned files only needs no patch.
 
@@ -30,9 +31,10 @@ npm run format:check
 npx tsc --noEmit
 npx vitest run
 python3 -B -m unittest discover scripts/upstream-sync
+python3 scripts/upstream-sync/repo_patch.py --check
 ```
 
-CI runs the same five and a secret scan. The baseline is 1,761 passing tests. One timing test in `src/channels/webhook-ingest-context.test.ts` can fail on a busy machine; run it alone before you treat it as real. Do not skip, delete or weaken a test to get green. Placeholders live in code and tests together, so a renamed placeholder needs both.
+CI runs the same six, the tests of `inbound/` and a secret scan. The baseline is 1,761 passing tests. One timing test in `src/channels/webhook-ingest-context.test.ts` can fail on a busy machine; run it alone before you treat it as real. Do not skip, delete or weaken a test to get green. Placeholders live in code and tests together, so a renamed placeholder needs both.
 
 ## Docs
 

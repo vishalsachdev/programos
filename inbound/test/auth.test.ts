@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseAuthenticationResults, type AuthTrust } from '../src/auth.js';
-import { buildIntake, fromAddressCount } from '../src/mail.js';
+import {
+  buildIntake,
+  fromAddressCount,
+  fromMailboxCount,
+} from '../src/mail.js';
 import { authTrust } from '../src/settings.js';
 import { MemoryKV, testEnv } from './helpers.js';
 
@@ -193,6 +197,69 @@ describe('which headers are read', () => {
     expect(payload.auth.results).toEqual([]);
   });
 
+  it('drops a header whose comment is still open at its end', async () => {
+    // Input class: sender text in a comment opens more comments than the
+    // server closes, so the server's own dmarc=fail is inside a comment.
+    const envelope =
+      '"x) ; dmarc=pass header.from=example.edu (y (z"@attacker.example.net';
+    const { payload } = await auth(
+      [
+        `${AR}${PLATFORM}; spf=pass (domain of ${envelope} designates 192.0.2.1 as permitted sender) smtp.mailfrom=attacker.example.net; dmarc=fail header.from=example.edu`,
+      ],
+      { envelopeFrom: envelope },
+    );
+    expect(payload.auth.results).toEqual([]);
+    expect(
+      parseAuthenticationResults(`${PLATFORM}; dmarc=pass (p=none`),
+    ).toBeNull();
+  });
+
+  it('drops a header in which one result carries a property twice', async () => {
+    // Input class: sender text closes a comment, adds a property and opens
+    // the comment again; parentheses pair and each method appears once.
+    const envelope =
+      '"x) smtp.mailfrom=campus.example.edu (y"@attacker.example.net';
+    const { payload } = await auth(
+      [
+        `${AR}${PLATFORM}; spf=pass (domain of ${envelope} designates 192.0.2.1 as permitted sender) smtp.mailfrom=attacker.example.net; dmarc=fail header.from=example.edu`,
+        // Written by the sender: must not be read as the forwarder's.
+        `${AR}${CAMPUS}; dmarc=pass header.from=example.edu`,
+      ],
+      { envelopeFrom: envelope },
+    );
+    expect(payload.auth.results).toEqual([]);
+    expect(
+      parseAuthenticationResults(
+        `${PLATFORM}; dmarc=pass header.from=example.edu header.from=attacker.example.net`,
+      ),
+    ).toBeNull();
+    // The same property name in two results is how a server writes it.
+    expect(
+      parseAuthenticationResults(
+        `${PLATFORM}; dkim=pass header.d=example.edu; dkim=fail header.d=example.org; dmarc=pass`,
+      )?.methods,
+    ).toHaveLength(3);
+  });
+
+  it('does not read a forwarder header below one that cannot be relied on', async () => {
+    // Input class: the forwarder's own header is made unusable (unclosed
+    // quote, open comment), and a planted one with its name sits below it.
+    for (const broken of [
+      `${CAMPUS}; spf=fail smtp.mailfrom="a; dmarc=fail header.from=example.edu`,
+      `${CAMPUS}; spf=fail (sender said (x) smtp.mailfrom=example.edu; dmarc=fail header.from=example.edu`,
+    ]) {
+      const { payload } = await auth(
+        [
+          `${AR}${PLATFORM}; spf=pass; dkim=fail; dmarc=fail`,
+          `${AR}${broken}`,
+          `${AR}${CAMPUS}; dmarc=pass header.from=example.edu`,
+        ],
+        { envelopeFrom: 'srs0=ab=cd=example.edu=dlee@campus.example.edu' },
+      );
+      expect(payload.auth.results.map((r) => r.source)).toEqual(['platform']);
+    }
+  });
+
   it('does not read a result out of a quoted string', async () => {
     const { payload } = await auth(
       [
@@ -329,6 +396,61 @@ describe('the From header', () => {
     // The Kelvin sign lower-cases to "k".
     expect(fromAddressCount('dlee@Kent.example.edu')).toBe(2);
     expect(fromAddressCount('')).toBe(0);
+  });
+
+  it('never counts 1 for a header a reader could take as more than one mailbox', () => {
+    // Input class: a second mailbox the address pattern does not see, or a
+    // form in which readers disagree about where a mailbox ends.
+    for (const header of [
+      // A comment or a space next to "@".
+      '<dlee@example.edu>, <a(x)@attacker.example.net>',
+      'a(x)@attacker.example.net <dlee@example.edu>',
+      '<dlee@example.edu> a @attacker.example.net',
+      'a@ attacker.example.net <dlee@example.edu>',
+      'dlee@example.edu@attacker.example.net',
+      // More than one address in angle brackets; brackets that do not pair.
+      '<dlee@example.edu> <dlee@example.edu>',
+      '<dlee@example.edu> <>',
+      'dlee@example.edu>',
+      // A group, a route, a comma outside a quoted display name.
+      'x:;, dlee@example.edu',
+      'team: dlee@example.edu;',
+      '<@attacker.example.net:dlee@example.edu>',
+      'Lee, Dana <dlee@example.edu>',
+      'dlee@example.edu,',
+      // A quote or a comment left open, a backslash, a control character.
+      '"Dana <dlee@example.edu>',
+      'Dana (Lee <dlee@example.edu>',
+      'Dana) <dlee@example.edu>',
+      'Dana\\ <dlee@example.edu>',
+      'dlee@example.edu\u0001',
+      'dlee@example.edu\u0000',
+      // A comment inside the brackets, or beside an address without them.
+      '<dl(x)ee@example.edu>',
+      'dl(x)ee@example.edu',
+      'dlee@example.edu (Dana Lee)',
+    ]) {
+      expect(fromAddressCount(header), header).not.toBe(1);
+    }
+    // Still one mailbox: a quoted display name may hold these characters,
+    // and a comment may stand beside an address in angle brackets.
+    expect(fromAddressCount('"Lee, Dana: Finance" <dlee@example.edu>')).toBe(1);
+    expect(fromAddressCount('Dana Lee (Finance) <dlee@example.edu>')).toBe(1);
+    expect(fromAddressCount('dlee@example.edu')).toBe(1);
+  });
+
+  it('counts 2 when the one address in the header is not the address sent as from', () => {
+    // Input class: the mail parser and the count read different addresses.
+    expect(
+      fromMailboxCount('Dana Lee <dlee@example.edu>', 'dlee@example.edu'),
+    ).toBe(1);
+    expect(fromMailboxCount('<DLee@Example.EDU>', 'dlee@example.edu')).toBe(1);
+    expect(fromMailboxCount('a@attacker.example.net', 'dlee@example.edu')).toBe(
+      2,
+    );
+    // No address was read from the header: `from` is the envelope sender.
+    expect(fromMailboxCount('a@attacker.example.net', null)).toBe(2);
+    expect(fromMailboxCount('', null)).toBe(0);
   });
 });
 

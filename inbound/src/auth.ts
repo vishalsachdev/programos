@@ -21,7 +21,10 @@
 //    the forwarder is ignored: anyone can send a message straight to the
 //    bot's address with that header in it.
 // 3. A header that is read must hold exactly one DMARC result and at most
-//    one SPF result. Otherwise it is dropped whole (see `toResult`).
+//    one SPF result (see `toResult`), no comment that is still open at its
+//    end, and no property twice in one result (see `readHeader`). Otherwise
+//    it is dropped whole. A dropped header keeps its place: no header
+//    below it is read in its stead.
 // 4. Nothing else is read: no `ARC-*` header (this worker checks no
 //    signature), no `Received-SPF`, no header below the ones above.
 //
@@ -88,8 +91,14 @@ export function hostNameList(value: string | undefined, key: string): string[] {
   return out;
 }
 
-/** Remove RFC 5322 comments (nested parentheses) outside quoted strings. */
-function stripComments(value: string): string {
+/**
+ * Remove RFC 5322 comments (nested parentheses) outside quoted strings.
+ * `open` is true when a comment is still open at the end of the value: the
+ * text after it was removed with it, and that text may hold the server's
+ * real results (sender text copied into a comment can open one more comment
+ * than the server closes).
+ */
+function stripComments(value: string): { text: string; open: boolean } {
   let out = '';
   let depth = 0;
   let quoted = false;
@@ -111,7 +120,7 @@ function stripComments(value: string): string {
       if (ch === '"') quoted = true;
     }
   }
-  return out;
+  return { text: out, open: depth > 0 };
 }
 
 function domainOf(value: string): string {
@@ -128,22 +137,35 @@ interface Parsed {
 }
 
 /**
- * Read one `Authentication-Results` value (RFC 8601). Returns null when the
- * value has no authserv-id: such a header cannot be tied to a named server.
+ * One header as `readAuth` uses it. `authservId` is the server the header
+ * names ('' when it names none). `parsed` is null when the header names no
+ * server, or names one and cannot be relied on. The two are kept apart
+ * because a header that cannot be relied on still holds its place: it is
+ * still "the first header that names the forwarder", and the next one below
+ * it, which the sender may have written, must not be read in its stead.
  */
-export function parseAuthenticationResults(value: string): Parsed | null {
+interface Header {
+  authservId: string;
+  parsed: Parsed | null;
+}
+
+function readHeader(value: string): Header {
   // A quoted string can hold text the sender chose (an envelope address
   // such as "a; dmarc=pass"@example.net). Replace each with a plain word
   // before splitting, so nothing inside quotes can look like a result. An
-  // unclosed quote makes the whole header unusable.
-  const unquoted = stripComments(value).replace(/"(?:[^"\\]|\\.)*"/g, 'q');
-  if (unquoted.includes('"')) return null;
+  // unclosed quote makes the whole header unusable, and so does a comment
+  // that is still open at the end.
+  const stripped = stripComments(value);
+  const unquoted = stripped.text.replace(/"(?:[^"\\]|\\.)*"/g, 'q');
   const parts = unquoted.split(';').map((p) => p.replace(/\s+/g, ' ').trim());
   // "authserv-id" or "authserv-id 1". A first part with "=" in it is a
   // result with no server name in front.
   const head = parts.shift() ?? '';
   const id = head.split(' ')[0].toLowerCase();
-  if (!id || head.includes('=') || !HOST_NAME.test(id)) return null;
+  if (!id || head.includes('=') || !HOST_NAME.test(id))
+    return { authservId: '', parsed: null };
+  const unusable: Header = { authservId: id, parsed: null };
+  if (stripped.open || unquoted.includes('"')) return unusable;
   const methods: Parsed['methods'] = [];
   for (const part of parts) {
     const tokens = part.split(' ').filter(Boolean);
@@ -154,7 +176,12 @@ export function parseAuthenticationResults(value: string): Parsed | null {
       const eq = token.indexOf('=');
       if (eq <= 0) continue;
       const name = token.slice(0, eq).toLowerCase();
-      if (!props.has(name)) props.set(name, token.slice(eq + 1));
+      // A server writes each property of a result once. A second
+      // `smtp.mailfrom` or `header.from` means text was added (sender text
+      // in a comment that closes the comment and opens it again), and
+      // neither position says which of the two is the server's.
+      if (props.has(name)) return unusable;
+      props.set(name, token.slice(eq + 1));
     }
     methods.push({
       method: first[1].toLowerCase(),
@@ -162,7 +189,17 @@ export function parseAuthenticationResults(value: string): Parsed | null {
       props,
     });
   }
-  return { authservId: id, methods };
+  return { authservId: id, parsed: { authservId: id, methods } };
+}
+
+/**
+ * Read one `Authentication-Results` value (RFC 8601). Returns null when the
+ * value has no authserv-id (such a header cannot be tied to a named
+ * server), and when the header cannot be relied on: an unclosed quote, a
+ * comment still open at the end, a property given twice in one result.
+ */
+export function parseAuthenticationResults(value: string): Parsed | null {
+  return readHeader(value).parsed;
 }
 
 /** '' when the property is absent, 'invalid' when it is not a host name. */
@@ -257,21 +294,15 @@ export function readAuth(
   };
   const all = headers
     .filter((h) => h.key === 'authentication-results')
-    .map((h) => ({
-      value: h.value,
-      parsed: parseAuthenticationResults(h.value),
-    }));
+    .map((h) => ({ value: h.value, ...readHeader(h.value) }));
   if (!trust.platformAuthservId || all.length === 0) return record;
 
   const top = all[0];
-  if (!top.parsed || top.parsed.authservId !== trust.platformAuthservId)
-    return record;
+  if (!top.parsed || top.authservId !== trust.platformAuthservId) return record;
   // The platform's name on a second header: one of the two is planted, and
-  // position alone should not decide which.
-  if (
-    all.filter((h) => h.parsed?.authservId === trust.platformAuthservId)
-      .length !== 1
-  )
+  // position alone should not decide which. A second header that cannot be
+  // relied on counts too.
+  if (all.filter((h) => h.authservId === trust.platformAuthservId).length !== 1)
     return record;
   // The first header in the raw bytes must be the one the platform's API
   // reports first. If the platform did not put its header into the raw
@@ -284,12 +315,11 @@ export function readAuth(
 
   if (!cameThroughForwarder(platform, trust)) return record;
   for (const header of all.slice(1)) {
-    if (
-      !header.parsed ||
-      !trust.forwarderAuthservIds.includes(header.parsed.authservId)
-    )
-      continue;
-    const forwarder = toResult(header.parsed, 'forwarder', envelopeDomain);
+    if (!trust.forwarderAuthservIds.includes(header.authservId)) continue;
+    // The first header that names the forwarder is the only candidate,
+    // also when it cannot be relied on: the search stops at it.
+    const forwarder =
+      header.parsed && toResult(header.parsed, 'forwarder', envelopeDomain);
     if (forwarder) record.results.push(forwarder);
     break;
   }

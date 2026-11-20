@@ -176,6 +176,64 @@ describe('MIME parsing', () => {
     );
     expect(a.payload.filename).not.toBe(b.payload.filename);
   });
+
+  it('does not report one From mailbox when from is the envelope sender', async () => {
+    // Input class: a From header the parser reads no address from (an empty
+    // group first, a control character), with one address in its text. The
+    // envelope sender, which the sender chooses, becomes `from`.
+    for (const from of [
+      'From: x:;, a@attacker.example.net',
+      'From: a@attacker.example.net\u0001',
+    ]) {
+      const { payload } = await buildIntake(
+        eml([from, 'Subject: Approve', '', 'Approved.', '']),
+        { from: 'dlee@example.edu', to: 'program@example.org' },
+        receivedAt,
+        'discussions/raw',
+      );
+      expect(payload.from).toBe('dlee@example.edu');
+      expect(payload.auth.from_headers).toBe(1);
+      expect(payload.auth.from_mailboxes).not.toBe(1);
+    }
+  });
+
+  it('does not report one From mailbox when the parser read another address than the one counted', async () => {
+    // Input class: a quoted local part; the parser keeps the quotes, the
+    // count drops one.
+    const quoted = await buildIntake(
+      eml(['From: <"dlee"@example.edu>', 'Subject: s', '', 'Body.', '']),
+      { from: 'a@attacker.example.net', to: 'program@example.org' },
+      receivedAt,
+      'discussions/raw',
+    );
+    expect(quoted.payload.from).toBe('"dlee"@example.edu');
+    expect(quoted.payload.auth.from_mailboxes).toBe(2);
+    // Input class: a comment inside the address; the parser drops what is
+    // before it.
+    const comment = await buildIntake(
+      eml(['From: <dl(x)ee@example.edu>', 'Subject: s', '', 'Body.', '']),
+      { from: 'a@attacker.example.net', to: 'program@example.org' },
+      receivedAt,
+      'discussions/raw',
+    );
+    expect(comment.payload.from).toBe('ee@example.edu');
+    expect(comment.payload.auth.from_mailboxes).toBe(2);
+    // An ordinary header still counts 1.
+    const { payload } = await buildIntake(
+      eml([
+        'From: "Lee, Dana" <DLee@example.edu>',
+        'Subject: s',
+        '',
+        'Body.',
+        '',
+      ]),
+      { from: 'bounce@mail.example.edu', to: 'program@example.org' },
+      receivedAt,
+      'discussions/raw',
+    );
+    expect(payload.from).toBe('dlee@example.edu');
+    expect(payload.auth.from_mailboxes).toBe(1);
+  });
 });
 
 describe('slug', () => {

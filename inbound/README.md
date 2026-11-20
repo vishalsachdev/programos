@@ -214,7 +214,7 @@ The worker checks no signature itself. It reads what named mail servers wrote in
 | `FORWARDER_AUTHSERV_IDS` | empty | For a mailbox elsewhere that forwards to this address: the server name(s) that mail system writes. Comma-separated |
 | `FORWARDER_DOMAINS` | empty | The domain(s) that system's servers send forwarded mail as (the envelope sender after forwarding). Set together with the line above |
 
-With all three empty nothing is read: the payload carries `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`). A header with two DMARC results or two SPF results is dropped whole. A wrong value (not a host name, a forwarder without a platform, one of the two forwarder settings alone) is a settings error: the message waits in the buffer until it is fixed.
+With all three empty nothing is read: the payload carries `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`). A header is dropped whole when it holds two DMARC results or two SPF results, a comment that is still open at its end, or the same property twice in one result; a dropped forwarder header keeps its place, so no header below it is read in its stead. A wrong value (not a host name, a forwarder without a platform, one of the two forwarder settings alone) is a settings error: the message waits in the buffer until it is fixed.
 
 To find the names, send yourself a message through the real path, open the committed `.eml`, and read the `Authentication-Results` headers from the top: the text before the first `;` is the server name. Put the same names in the host's `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`.
 
@@ -233,7 +233,7 @@ The payload field, for a message the platform checked:
 }
 ```
 
-`from_mailboxes` counts the different addresses in the From header, display name included (a character outside ASCII in an address counts as one more). A display name that holds another address than the mailbox makes it 2, and the host then never calls the message authenticated; the same address written twice counts once.
+`from_mailboxes` counts the different addresses in the From header, display name included (a character outside ASCII in an address counts as one more). A display name that holds another address than the mailbox makes it 2, and the host then never calls the message authenticated; the same address written twice counts once. It is 1 only for a header every reader takes as the same single mailbox, and only when that mailbox is the `from` of the payload. It is 2 when `from` is the envelope sender (the parser read no address from the From header) or another address than the one counted, and for any form two readers can take differently: a comma, colon, semicolon or backslash outside a quoted display name, more than one address in angle brackets, a space or a comment next to `@`, a comment inside the brackets or beside an address without brackets, an unclosed quote or comment, a control character. So `Lee, Dana <dlee@example.edu>` (comma, no quotes) and `dlee@example.edu (Dana Lee)` count 2; `"Lee, Dana" <dlee@example.edu>` counts 1.
 
 ## Limits
 

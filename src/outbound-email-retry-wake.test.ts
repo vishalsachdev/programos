@@ -444,6 +444,85 @@ describe('a send that throws counts against the attempt budget', () => {
     expect(mockFetch.mock.calls.length).toBe(calls);
   });
 
+  it('a store read that fails right after the throw on the last attempt still dead-letters, with no sixth send', async () => {
+    await sendThrows();
+    const realGet = store.get.bind(store);
+    let armed = false;
+    vi.spyOn(store, 'get').mockImplementation((id: string) => {
+      if (armed) {
+        armed = false;
+        throw new Error('database is locked');
+      }
+      return realGet(id);
+    });
+    // The send throws; on the final permitted attempt the queue's catch block
+    // then reads the row, and that read fails.
+    mockFetch.mockImplementation(() => {
+      if (realGet('throw:read')?.attempts === MAX_OUTBOX_ATTEMPTS - 1) {
+        armed = true;
+      }
+      throw new Error('bad payload');
+    });
+    await sendOutboundEmailResult(EMAIL, {
+      ...OPTIONS,
+      deliveryId: 'throw:read',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    for (let n = 1; n < MAX_OUTBOX_ATTEMPTS; n++) {
+      await vi.advanceTimersByTimeAsync(retryBackoffMs(n));
+    }
+    expect(armed).toBe(false); // the read really did fail
+    expect(store.get('throw:read')).toMatchObject({
+      status: 'dead-letter',
+      attempts: MAX_OUTBOX_ATTEMPTS,
+    });
+    const calls = mockFetch.mock.calls.length;
+    expect(calls).toBe(MAX_OUTBOX_ATTEMPTS);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(mockFetch.mock.calls.length).toBe(calls);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a store that cannot record the last throw leaves no sixth send and raises the alert', async () => {
+    await sendThrows();
+    const { reportDeliveryShortfall } = await import('./delivery-gate.js');
+    const realGet = store.get.bind(store);
+    const realFinalize = store.finalize.bind(store);
+    let failing = false;
+    vi.spyOn(store, 'get').mockImplementation((id: string) => {
+      if (failing) throw new Error('database is locked');
+      return realGet(id);
+    });
+    vi.spyOn(store, 'finalize').mockImplementation((...a) => {
+      if (failing) throw new Error('database is locked');
+      return realFinalize(...a);
+    });
+    mockFetch.mockImplementation(() => {
+      if (realGet('throw:store')?.attempts === MAX_OUTBOX_ATTEMPTS - 1) {
+        failing = true;
+      }
+      throw new Error('bad payload');
+    });
+    await sendOutboundEmailResult(EMAIL, {
+      ...OPTIONS,
+      deliveryId: 'throw:store',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    for (let n = 1; n < MAX_OUTBOX_ATTEMPTS; n++) {
+      await vi.advanceTimersByTimeAsync(retryBackoffMs(n));
+    }
+    expect(mockFetch.mock.calls.length).toBe(MAX_OUTBOX_ATTEMPTS);
+    expect(reportDeliveryShortfall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: expect.stringContaining('dead letter not recorded'),
+      }),
+    );
+    // The store comes back: the row is not sent again.
+    failing = false;
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(mockFetch.mock.calls.length).toBe(MAX_OUTBOX_ATTEMPTS);
+  });
+
   it('a send that throws once and then succeeds is delivered on the second attempt after the first backoff', async () => {
     await sendThrows(1);
     const first = await sendOutboundEmailResult(EMAIL, {

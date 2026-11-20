@@ -100,7 +100,7 @@ The program repo is a separate git repository that you own. It MUST contain:
 | `discussions/audit-log/` | The audit trail (§6) |
 | `skills/` | Optional. Skills the team wants the agent to follow. |
 
-Optional: `sync/` for generated snapshots of outside systems (never hand-edited), and other `program/` files your project needs.
+Optional: `sync/` for generated snapshots of outside systems (never hand-edited), and other `program/` files your project needs. Two optional `program/` files are read by name when they exist: `program/course_names.md` (the reply sensor adds its course codes to those in `curriculum.md`; the ingestion cross-check searches it) and `program/target_profile.md` (the ingestion cross-check searches it). Both are plain prose with no required format. The template does not ship them, and the code skips a missing one.
 
 The allowlist table has five columns with the email address in the second; approval routing and outreach ignore shorter rows. [`templates/program-repo/`](./templates/program-repo/) is a skeleton with the names and formats this code reads.
 
@@ -119,6 +119,8 @@ Operator alerts sent by email (`ADMIN_ALERT_ROUTE` includes `email`) are logged 
 Not in the log in the current code: Telegram messages from a handle that is not allowed, messages dropped by the chat sender filter, remote-control commands, scheduled and direct chat sends, operator notices on Telegram, and web chat's automatic timeout reply.
 
 The audit log is what survives when a container is destroyed, and it is what a reviewer reads.
+
+The log and the mail copies are files in the program repo: anyone who can read that repo can read them, the code never deletes them, and git history keeps what a later commit removes. [`docs/data-handling.md`](./docs/data-handling.md) covers access, retention, and every outside service that message text reaches.
 
 ## 6.5. Governance
 
@@ -153,7 +155,7 @@ A test (`src/channel-claude-sync.test.ts`) checks that the required phrases are 
 - [ ] Replace the bot's name, the program name, the operator, the mail domains.
 - [ ] Create the program repo, the allowlist and the governance file.
 - [ ] Fill in `.env` from [`config/instance.env.example`](./config/instance.env.example).
-- [ ] Create the chat sender allowlist before enabling a chat channel.
+- [ ] Create the chat sender allowlist before enabling a chat channel. Without the file, no chat sender can trigger the agent.
 - [ ] Bind the listener to loopback; put a reverse proxy in front.
 - [ ] List every scheduled job in the reminder registry.
 - [ ] Adapt the academic examples, or turn the reply sensor off and say so.
@@ -165,6 +167,8 @@ A test (`src/channel-claude-sync.test.ts`) checks that the required phrases are 
 - Autonomous skill creation or self-modification of runtime code.
 - Grade or learning-system integration.
 - Serving several programs from one instance.
+
+Leaving out student-facing channels does not keep student information out of the record: staff mail that mentions a student is stored and sent on like any other mail, and the code has no filter for kinds of data. [`docs/data-handling.md`](./docs/data-handling.md) says where it goes and gives a conservative default for a first pilot.
 
 ## 10. Reference implementation
 

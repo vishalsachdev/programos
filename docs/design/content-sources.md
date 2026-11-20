@@ -82,7 +82,7 @@ The fastest concrete setup, useful for most UIUC units.
 
 - Box Drive installed on the laptop. On macOS this mounts under `~/Library/CloudStorage/Box-Box/`.
 - A Box folder for this bot, e.g. `Box/<unit>/bot-content/`. Populate it only with files the bot is allowed to cite. Keep the curated set small at first (a dozen policies + the current syllabi).
-- ProgramOS deployed at Tier 1 ([`08-deployment-tiers.md`](../../SPEC.md)).
+- ProgramOS deployed on a laptop (the "Trial" stage in [`docs/deployment.md`](../deployment.md); this note calls it Tier 1).
 
 ### Mount it
 
@@ -118,11 +118,11 @@ Box Drive uses the *user's* credentials (whoever logged into the Box Drive clien
 
 ## Bot-proposed mount additions
 
-Once the bot is running, stakeholders will ask about content the bot can't see — a SharePoint site that wasn't mounted at launch, a new Box folder a partner started using, a shared drive someone forgot to add. The bot can't add a mount itself: that's a host-side change to the container-runner config, deliberately outside the agent's reach (security model — see [`08-deployment-tiers.md`](../../SPEC.md)).
+Once the bot is running, stakeholders will ask about content the bot can't see — a SharePoint site that wasn't mounted at launch, a new Box folder a partner started using, a shared drive someone forgot to add. The bot can't add a mount itself: that's a host-side change to the container-runner config, deliberately outside the agent's reach (see the "Mounts" safety item in [`AGENTS.md`](../../AGENTS.md)).
 
-What the bot CAN do is **propose** the addition through the same agent-proposes / human-approves mechanism that backs the learning loop ([`07-learning-loop.md`](../../SPEC.md)):
+What the bot CAN do is **propose** the addition through the same agent-proposes / human-approves mechanism that backs the learning loop ([`learning-loop.md`](./learning-loop.md)):
 
-- The agent detects the gap ("user asked about the FY27 partnership documents three times this week; I have no source containing them") and, in status-update mode, opens a PR against the program repo's `MOUNTS.md` proposing the new mount: source name, host path, container target path, suggested service identity, and the audit-log entries that motivated the proposal.
+- The agent detects the gap ("user asked about the FY27 partnership documents three times this week; I have no source containing them") and, in status-update mode, opens a PR against a `MOUNTS.md` file in the program repo (a file this design proposes; the template does not have it and no code reads it) proposing the new mount: source name, host path, container target path, suggested service identity, and the audit-log entries that motivated the proposal.
 - A human reviewer evaluates the proposal — is this the right folder, who owns it, what's the privacy posture — and either merges or rejects.
 - On merge, the human (or a deploy script) makes the host-side change: install/configure the sync (Box Drive, rclone, etc.), update the container-runner bind mounts, restart the container.
 - The bot picks up the new mount on next invocation and starts citing it per the standard precedence + source-labeling rules.
@@ -138,5 +138,5 @@ In effect: the bot can detect *that* a content gap exists and propose *what* to 
 ## What this is NOT
 
 - It is not a sync layer. The bot doesn't write back to Box. If a decision needs to land in a Box document, a human edits the Box doc.
-- It is not a full-text search index. If the bot needs to search across hundreds of Box files quickly, layer an FTS5 index on top of a periodic snapshot of the mount (same pattern as the audit-log search in [`07-learning-loop.md`](../../SPEC.md)). The mount itself is for reading specific files the agent has decided to cite.
+- It is not a full-text search index. If the bot needs to search across hundreds of Box files quickly, layer an FTS5 index on top of a periodic snapshot of the mount (same pattern as the audit-log search in [`learning-loop.md`](./learning-loop.md)). The mount itself is for reading specific files the agent has decided to cite.
 - It is not a substitute for the program repo. The program repo holds what the team has agreed on, what the bot has captured, and what the audit log records. The external mount holds work-in-progress content. They serve different jobs.

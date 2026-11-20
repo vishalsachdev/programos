@@ -1,10 +1,8 @@
+import { ADMIN_AUTHOR_EMAILS } from './instance-identity.js';
+
 export type ProtectedGovernanceRule = 'G11' | 'G39';
 
-const ADMIN_AUTHOR_EMAILS = new Set([
-  'avery.personal@gmail.com',
-  'avery@example.edu',
-  '1000001+example-org@users.noreply.github.com',
-]);
+const ADMIN_AUTHORS = new Set(ADMIN_AUTHOR_EMAILS);
 
 // Must stay in sync with PROTECTED_FILES in
 // container/agent-runner/src/protected-write-guard.ts (container deny hook) —
@@ -16,7 +14,7 @@ export const PROTECTED_PATH_RULES = new Map<string, ProtectedGovernanceRule>([
 ]);
 
 export function isAdminAuthorEmail(email: string | undefined): boolean {
-  return Boolean(email && ADMIN_AUTHOR_EMAILS.has(email.toLowerCase()));
+  return Boolean(email && ADMIN_AUTHORS.has(email.toLowerCase()));
 }
 
 export function protectedGovernanceRule(

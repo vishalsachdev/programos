@@ -69,7 +69,7 @@ The cost of that choice is visible: some values that should be settings are writ
 4. The agent chooses the mode. In question mode it reads and cites. In status-update mode it runs the entry gate and the conflict check, then commits one change at a time.
 5. The agent returns a reply inside a reply block, with a self-evaluation.
 6. The delivery gate checks the reply. If it passes, the outbox sends it and records the result. If it fails, nothing is sent and the operator is told.
-7. The host writes the outbound audit entry and the gate result. The reply sensor checks the reply against the ground-truth files and files a report if it finds a problem.
+7. The host writes the outbound audit entry and the gate result. The reply sensor then checks the reply against the ground-truth files and files a report if it finds a problem. By default it does this for chat replies (Telegram and web chat) only. An email reply is checked only when `SENSOR_EMAIL_REPLIES` is on. The check runs after the send and never delays or blocks it.
 
 ## What the host enforces and what the agent is asked to do
 

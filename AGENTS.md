@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,156 passing tests (1,761 from the source, 395 added here). One timing test
+   is 2,170 passing tests (1,761 from the source, 409 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -143,7 +143,9 @@ move up without starting again. "First start" means part 14.
   single sign-on; no retention or deletion of old mail (the code never deletes
   from the program repo); no second mail provider; no web search, web fetch or
   browsing for the agent unless you turn them on (choice 17). Sender caps are in
-  memory and reset on restart.
+  memory and reset on restart. No second check of email replies by the reply
+  sensor: it is off in the pilot, and when on it checks chat replies only unless
+  `SENSOR_EMAIL_REPLIES=1` (choice 2).
 - **Steps that apply:** all of part 13, all of First start, "Inbound mail", and
   the supported hosting recipe in `docs/deployment.md`. Add the two optional
   webhooks when the machine has its public HTTPS name.
@@ -246,7 +248,9 @@ matching choice in part 5.
    subscription token cannot call it); with no usable key it does nothing. The
    host logs the provider and host it sends to. Still keep
    `BEHAVIOUR_SENSOR_DISABLED=1` unless the user confirms that destination is
-   approved. Not tested against a live endpoint.
+   approved. Not tested against a live endpoint. By default the sensor checks
+   chat replies only; `SENSOR_EMAIL_REPLIES=1` makes it check email replies
+   too, which sends their text to that destination (choice 2).
 2. **Who may approve records and access changes?** (the admin and any approvers)
 3. **Which address does the bot send from?** And which mail provider delivers it.
 4. **Where does the data live?** The host for the bot, and the git host for the program repo.
@@ -306,9 +310,20 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   provider chosen on its own.
 - *Code default:* on, when a key and the ground-truth file exist. It checks chat
   replies (Telegram and web chat), not email replies (`docs/data-handling.md`).
-- *First pilot:* off. Turn it on only when its destination is approved for your
-  data and the ground-truth files fit your project (part 8).
-- *Settings:* `BEHAVIOUR_SENSOR_DISABLED=1` (process), `SENSOR_PROVIDER`
+- *Email replies:* a second switch, `SENSOR_EMAIL_REPLIES`, off by default. With
+  it off, no email reply is checked, and email is where most replies go. With
+  `SENSOR_EMAIL_REPLIES=1` the sensor also checks each email reply once, after
+  it has been sent; it never delays or stops a reply. ASK before turning it on:
+  it sends the text of every email reply, the start of the mail it answers and
+  knowledge-base excerpts to the sensor's AI service, which is a new place for
+  mail text to go. It does not check mail the bot sends on its own (the
+  `send_email` tool, scheduled mail, operator alerts). `BEHAVIOUR_SENSOR_DISABLED=1`
+  turns both off. Tested with the AI service stubbed, not against a live one.
+- *First pilot:* off, and `SENSOR_EMAIL_REPLIES` unset. Turn it on only when
+  its destination is approved for your data and the ground-truth files fit your
+  project (part 8).
+- *Settings:* `BEHAVIOUR_SENSOR_DISABLED=1` (process), `SENSOR_EMAIL_REPLIES`
+  (`1` to check email replies; .env or process; unset is off), `SENSOR_PROVIDER`
   (`anthropic` or `foundry`; .env or process; unset follows the first entry of
   `MODEL_PROVIDERS`), `SENSOR_MODEL` (process). It also reads
   `ANTHROPIC_BASE_URL` and `MODEL_PROVIDERS` (.env).
@@ -629,8 +644,8 @@ domain: courses, faculty, curriculum, cohort. This text is kept because it is th
 tested text. Adapt the vocabulary to the user's project. The logic that knows about
 courses is in:
 
-- `src/behaviour-sensor.ts` (the reply checker: ground-truth files such as
-  `program/curriculum.md`, course-code patterns)
+- `src/behaviour-sensor.ts` (the reply checker, for chat replies by default:
+  ground-truth files such as `program/curriculum.md`, course-code patterns)
 - `src/open-questions-scan.ts`
 - `container/skills/kb-conflict-check/check-ingestion-crosscheck.mjs` and
   `container/skills/kb-entry-gate/check-kb-entry.mjs`

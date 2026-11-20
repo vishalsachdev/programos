@@ -89,6 +89,9 @@ const GENERIC_TOKENS = new Set([
   'capstones', 'semesters', 'schedules', 'leads',
 ]);
 
+// course_names.md and target_profile.md are OPTIONAL: listTargetFiles() scans
+// only the files that exist, so a program repo without them (the ProgramOS
+// template ships neither) is cross-checked against curriculum.md and courses/.
 const PROGRAM_FILES = ['curriculum.md', 'course_names.md', 'target_profile.md'];
 
 const MAX_MATCHES_PER_FILE = 8;

@@ -13,12 +13,14 @@
 //
 // What it cannot know, and takes from options instead:
 // - the envelope sender (`--envelope-from`). A stored `.eml` does not hold
-//   it. Without the option the `Return-Path` header is used when there is
-//   one, else the envelope sender is empty;
+//   it. Without the option it is empty. A `Return-Path` header is shown as
+//   a hint and never used: the sender of a message can write that header;
 // - what the platform's API reports for `Authentication-Results`
 //   (`--platform-header`). Without the option it is every such header of
 //   the message joined with ", ", which is what a `Headers` object returns
-//   for a name that occurs more than once.
+//   for a name that occurs more than once. So the worker's check that the
+//   first raw header is the one the platform reports always passes here;
+//   only a live message shows what the platform really reports.
 
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -55,9 +57,18 @@ export interface CheckOptions {
 export interface CheckResult {
   from: string;
   envelopeFrom: string;
-  envelopeFromSource: 'option' | 'Return-Path header' | 'none';
+  envelopeFromGiven: boolean;
+  /** The `Return-Path` header, when there is one. A hint only. */
+  returnPath: string | null;
   /** Every `Authentication-Results` header, first header first. */
   headers: string[];
+  /**
+   * The name of the header right below the first `Authentication-Results`
+   * header, or null. When that one is the platform's, a header the
+   * platform wrote itself should stand here (a `Received` line, an `ARC-`
+   * line): then no line of the sender's can continue the platform's header.
+   */
+  headerBelowFirst: string | null;
   record: AuthRecord;
   decision: EmailAuthDecision;
   /** What EMAIL_AUTH_MODE=enforce would do with this message. */
@@ -89,19 +100,15 @@ export async function checkMessage(
   });
 
   const email = await PostalMime.parse(raw);
-  const headers = email.headers
-    .filter((h) => h.key === 'authentication-results')
-    .map((h) => h.value);
-  const returnPath = email.headers.find((h) => h.key === 'return-path')?.value;
-  let envelopeFrom = '';
-  let envelopeFromSource: CheckResult['envelopeFromSource'] = 'none';
-  if (options.envelopeFrom !== undefined) {
-    envelopeFrom = options.envelopeFrom;
-    envelopeFromSource = 'option';
-  } else if (returnPath !== undefined) {
-    envelopeFrom = returnPath.replace(/^\s*<|>\s*$/g, '').trim();
-    envelopeFromSource = 'Return-Path header';
-  }
+  // The same headers the worker looks at (`readAuth`).
+  const isAuthResults = (h: { key: string }) =>
+    h.key.trim() === 'authentication-results';
+  const headers = email.headers.filter(isAuthResults).map((h) => h.value);
+  const first = email.headers.findIndex(isAuthResults);
+  const below = first < 0 ? undefined : email.headers[first + 1];
+  const returnPath =
+    email.headers.find((h) => h.key === 'return-path')?.value ?? null;
+  const envelopeFrom = options.envelopeFrom ?? '';
   const platformHeader =
     options.platformHeader ?? (headers.length ? headers.join(', ') : null);
 
@@ -121,8 +128,10 @@ export async function checkMessage(
   return {
     from: payload.from,
     envelopeFrom,
-    envelopeFromSource,
+    envelopeFromGiven: options.envelopeFrom !== undefined,
+    returnPath,
     headers,
+    headerBelowFirst: below ? (below.originalKey ?? below.key) : null,
     record: payload.auth,
     decision,
     enforceWouldDrop: emailAuthBlocks(settings, decision.verdict),
@@ -133,9 +142,10 @@ export async function checkMessage(
 export function report(result: CheckResult): string {
   const lines = [
     `From address the allowlist is matched against: ${result.from || '(none)'}`,
-    `Envelope sender used: ${result.envelopeFrom || '(empty)'} (from: ${result.envelopeFromSource})`,
+    `Envelope sender used: ${result.envelopeFrom || '(empty)'}${result.envelopeFromGiven ? '' : ' (not given)'}`,
     `Authentication-Results headers in the message: ${result.headers.length}`,
     ...result.headers.map((h, i) => `  ${i + 1}. ${h.replace(/\s+/g, ' ')}`),
+    `Header right below the first of them: ${result.headerBelowFirst ?? '(none)'}`,
     `What the worker says of the platform's result: ${result.record.platform_status}`,
     `From headers: ${result.record.from_headers}; addresses counted in the first: ${result.record.from_mailboxes}${result.record.from_display_commas ? ' (commas in the display name only)' : ''}`,
   ];
@@ -149,10 +159,13 @@ export function report(result: CheckResult): string {
     `Reason: ${result.decision.reason}`,
     `With EMAIL_AUTH_MODE=enforce this message would be ${result.enforceWouldDrop ? 'DROPPED' : 'processed'}.`,
   );
-  if (result.envelopeFromSource !== 'option')
+  if (!result.envelopeFromGiven)
     lines.push(
-      'Note: the envelope sender was not given (--envelope-from). The worker gets it from the mail platform; a wrong one here can change the SPF part of the result.',
+      `Note: the envelope sender was not given (--envelope-from), so it was taken as empty. The worker gets it from the mail platform, and the result above can differ from the worker's: a platform SPF result that names a sender is refused against an empty one, and the forwarder rule cannot apply.${result.returnPath ? ` The message has a Return-Path header (${result.returnPath.replace(/\s+/g, ' ')}); it is not used, because the sender of a message can write that header. Pass the address with --envelope-from only if you know the platform reported it.` : ''}`,
     );
+  lines.push(
+    'Note: this check takes what the platform reports for Authentication-Results from the message itself, so it cannot show a difference between the two. It also cannot tell who wrote the header below the first one: if that is not a header the mail platform adds, read SPEC.md section 11 on sender authentication before enforcing.',
+  );
   return lines.join('\n');
 }
 

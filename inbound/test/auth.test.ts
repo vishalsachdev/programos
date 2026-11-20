@@ -547,6 +547,21 @@ describe('what the record says became of the platform result', () => {
           `${AR}${PLATFORM}; dmarc=fail header.from=example.edu header.from=example.org`,
         ],
       ],
+      [
+        'a comment inside a comment, closed by a line of the sender',
+        [
+          `${AR}${PLATFORM}; spf=pass (domain of "x) ; dmarc=pass header.from=example.edu; arc=none (("@attacker.example.net designates 192.0.2.1 as permitted sender) smtp.mailfrom=attacker.example.net; dkim=none; dmarc=fail (p=reject) header.from=example.edu`,
+          ' )',
+        ],
+        {
+          envelopeFrom:
+            '"x) ; dmarc=pass header.from=example.edu; arc=none (("@attacker.example.net',
+        },
+      ],
+      [
+        'a comment inside a comment',
+        [`${AR}${PLATFORM}; dmarc=fail (p=reject (strict)) header.from=example.edu`],
+      ],
       ['two DMARC results', [`${AR}${PLATFORM}; dmarc=fail; dmarc=pass`]],
       ['no DMARC result', [`${AR}${PLATFORM}; spf=pass; dkim=pass`]],
       [
@@ -599,8 +614,8 @@ describe('more than one SPF result in one header', () => {
     for (const top of [
       `${AR}${PLATFORM}; dkim=pass header.d=example.edu; spf=none (no record) smtp.helo=out.example.edu; spf=pass (permitted sender) smtp.mailfrom=bounce@mail.example.edu; dmarc=pass header.from=example.edu`,
       `${AR}${PLATFORM}; spf=pass smtp.mailfrom=mail.example.edu; spf=none smtp.helo=out.example.edu; dmarc=pass header.from=example.edu`,
-      // A result with neither property is the one for the envelope sender.
-      `${AR}${PLATFORM}; spf=none smtp.helo=out.example.edu; spf=pass; dmarc=pass header.from=example.edu`,
+      // Angle brackets around the address.
+      `${AR}${PLATFORM}; spf=none smtp.helo=out.example.edu; spf=pass smtp.mailfrom=<bounce@mail.example.edu>; dmarc=pass header.from=example.edu`,
     ]) {
       const { payload } = await auth([top]);
       expect(payload.auth.platform_status, top).toBe('read');
@@ -618,6 +633,10 @@ describe('more than one SPF result in one header', () => {
       `${AR}${PLATFORM}; spf=fail smtp.mailfrom=mail.example.edu; spf=pass smtp.mailfrom=mail.example.edu; dmarc=fail`,
       `${AR}${PLATFORM}; spf=fail; spf=pass smtp.mailfrom=mail.example.edu; dmarc=fail`,
       `${AR}${PLATFORM}; spf=fail; spf=pass; dmarc=fail`,
+      // A result that names no identity beside one that does: a server
+      // that names the identity in one result names it in all.
+      `${AR}${PLATFORM}; spf=none smtp.helo=out.example.edu; spf=pass; dmarc=fail`,
+      `${AR}${PLATFORM}; spf=pass; spf=none smtp.helo=out.example.edu; dmarc=fail`,
       `${AR}${PLATFORM}; spf=none smtp.helo=a.example.edu; spf=pass smtp.helo=b.example.edu; dmarc=fail`,
       // One result that names both identities is the envelope sender's.
       `${AR}${PLATFORM}; spf=fail smtp.mailfrom=mail.example.edu; spf=pass smtp.helo=a.example.edu smtp.mailfrom=mail.example.edu; dmarc=fail`,
@@ -652,6 +671,19 @@ describe('more than one SPF result in one header', () => {
       { envelopeFrom: '' },
     );
     expect(bounce.payload.auth.results).toEqual([]);
+    // An added result that names no identity, beside the platform's HELO
+    // result, with an envelope sender the attacker chose in the forwarder's
+    // domain.
+    const bare = await auth(
+      [
+        `${AR}${PLATFORM}; spf=pass smtp.helo=mail.attacker.example.net; dmarc=fail header.from=example.edu`,
+        ' ; spf=pass',
+        `${AR}${CAMPUS}; dmarc=pass header.from=example.edu`,
+      ],
+      { envelopeFrom: 'x@campus.example.edu' },
+    );
+    expect(bare.payload.auth.platform_status).toBe('rejected');
+    expect(bare.payload.auth.results).toEqual([]);
     // A forwarder names the sender it saw, which is not this envelope.
     const forwarded = await auth(
       [

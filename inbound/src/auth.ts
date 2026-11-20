@@ -23,8 +23,8 @@
 // 3. A header that is read must hold exactly one DMARC result, at most one
 //    SPF result for each identity (the envelope sender, the HELO name; see
 //    `toResult`), no part that is not a result, no comment that is still
-//    open at its end, and no property twice in one result (see
-//    `readHeader`). Otherwise it is dropped whole. A dropped header keeps
+//    open at its end or that holds another comment, and no property twice
+//    in one result (see `readHeader`). Otherwise it is dropped whole. A dropped header keeps
 //    its place: no header below it is read in its stead.
 // 4. Nothing else is read: no `ARC-*` header (this worker checks no
 //    signature), no `Received-SPF`, no header below the ones above.
@@ -131,12 +131,20 @@ export function hostNameList(value: string | undefined, key: string): string[] {
  * `open` is true when a comment is still open at the end of the value: the
  * text after it was removed with it, and that text may hold the server's
  * real results (sender text copied into a comment can open one more comment
- * than the server closes).
+ * than the server closes). `nested` is true when a comment held another
+ * comment. A server has no reason to write one, and it is the only way
+ * sender text inside a comment can keep a comment open past the server's
+ * own closing bracket, to be closed further on.
  */
-function stripComments(value: string): { text: string; open: boolean } {
+function stripComments(value: string): {
+  text: string;
+  open: boolean;
+  nested: boolean;
+} {
   let out = '';
   let depth = 0;
   let quoted = false;
+  let nested = false;
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
     if (ch === '\\' && i + 1 < value.length) {
@@ -147,6 +155,7 @@ function stripComments(value: string): { text: string; open: boolean } {
       if (ch === '"') quoted = false;
     } else if (ch === '(') {
       depth++;
+      if (depth > 1) nested = true;
     } else if (ch === ')' && depth > 0) {
       depth--;
       if (depth === 0) out += ' ';
@@ -155,11 +164,16 @@ function stripComments(value: string): { text: string; open: boolean } {
       if (ch === '"') quoted = true;
     }
   }
-  return { text: out, open: depth > 0 };
+  return { text: out, open: depth > 0, nested };
 }
 
 function domainOf(value: string): string {
-  const cleaned = value.replace(/^"|"$/g, '').trim().toLowerCase();
+  // Quotes, or the angle brackets some servers put around an address.
+  const cleaned = value
+    .replace(/^"|"$/g, '')
+    .replace(/^<(.*)>$/, '$1')
+    .trim()
+    .toLowerCase();
   const domain = cleaned.includes('@')
     ? cleaned.slice(cleaned.lastIndexOf('@') + 1)
     : cleaned;
@@ -200,7 +214,8 @@ function readHeader(value: string): Header {
   if (!id || head.includes('=') || !HOST_NAME.test(id))
     return { authservId: '', parsed: null };
   const unusable: Header = { authservId: id, parsed: null };
-  if (stripped.open || unquoted.includes('"')) return unusable;
+  if (stripped.open || stripped.nested || unquoted.includes('"'))
+    return unusable;
   const methods: Parsed['methods'] = [];
   for (const [index, part] of parts.entries()) {
     const tokens = part.split(' ').filter(Boolean);
@@ -259,8 +274,10 @@ function domainProp(value: string | undefined): string {
  * for the envelope sender and one for the HELO name, as RFC 8601 section
  * 2.7.2 registers them (`smtp.mailfrom`, `smtp.helo`): a server that checks
  * both identities writes two results. An SPF result with neither property
- * is taken as the one for the envelope sender. More than one result for the
- * same identity means text was added to the header: by a continuation line
+ * is taken as the one for the envelope sender, and then it must be the only
+ * SPF result: a server that names the identity in one result names it in
+ * all. More than one result for the same identity means text was added to
+ * the header: by a continuation line
  * at the top of the sender's own headers, or by sender text that a server
  * copied into a comment and that closed the comment early. Such a header
  * is dropped whole, whichever of the two results came first.
@@ -271,6 +288,9 @@ function domainProp(value: string | undefined): string {
  * added "spf=pass smtp.mailfrom=<a forwarder's domain>" from opening the
  * forwarder rule when the platform itself wrote a HELO result only.
  */
+const hasIdentity = (m: Parsed['methods'][number]) =>
+  m.props.has('smtp.mailfrom') || m.props.has('smtp.helo');
+
 function toResult(
   parsed: Parsed,
   source: AuthResult['source'],
@@ -289,6 +309,7 @@ function toResult(
     (m) => m.props.has('smtp.helo') && !m.props.has('smtp.mailfrom'),
   );
   if (forSender.length > 1 || forHelo.length > 1) return null;
+  if (spfs.length > 1 && spfs.some((m) => !hasIdentity(m))) return null;
   // The result the host is told about is the one for the envelope sender.
   // A HELO result alone is reported with no domain, so it can never stand
   // for the envelope sender.

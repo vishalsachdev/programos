@@ -214,7 +214,7 @@ The worker checks no signature itself. It reads what named mail servers wrote in
 | `FORWARDER_AUTHSERV_IDS` | empty | For a mailbox elsewhere that forwards to this address: the server name(s) that mail system writes. Comma-separated |
 | `FORWARDER_DOMAINS` | empty | The domain(s) that system's servers send forwarded mail as (the envelope sender after forwarding). Set together with the line above |
 
-With all three empty nothing is read: the payload carries `"platform_status": "unset"` and `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`). A header is dropped whole when it holds no DMARC result or two, two SPF results for the same identity (one for the envelope sender and one for the HELO name is the form RFC 8601 allows, and is read), a platform SPF result for another domain than the envelope sender, a part that is not a result, a comment that is still open at its end, or the same property twice in one result; a dropped forwarder header keeps its place, so no header below it is read in its stead.
+With all three empty nothing is read: the payload carries `"platform_status": "unset"` and `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`). A header is dropped whole when it holds no DMARC result or two, two SPF results for the same identity (one for the envelope sender and one for the HELO name is the form RFC 8601 allows, and is read), a platform SPF result for another domain than the envelope sender, an SPF result that names no identity beside another SPF result, a part that is not a result, a comment that is still open at its end or that holds another comment, or the same property twice in one result; a dropped forwarder header keeps its place, so no header below it is read in its stead.
 
 `platform_status` says what became of the platform's result: `unset` (no platform named), `absent` (no header in the message carries the platform's name, or its header is the `none` form), `read`, `rejected` (a header with the platform's name is in the message and no result was taken from it). The host calls `unset` and `absent` `unknown`, and `rejected` `unauthenticated`: nothing a sender does to the header moves a message into `unknown`. A wrong value (not a host name, a forwarder without a platform, one of the two forwarder settings alone) is a settings error: the message waits in the buffer until it is fixed.
 
@@ -256,14 +256,16 @@ It reads the file, runs the worker's reader (`src/auth.ts`, `src/mail.ts`) and t
 | Option | Meaning |
 |---|---|
 | `--platform` | Required. The value you would set as `PLATFORM_AUTHSERV_ID` |
-| `--envelope-from` | The envelope sender. A stored `.eml` does not hold it; without the option the `Return-Path` header is used when there is one, and the output says so. The platform's SPF result must be for this domain |
+| `--envelope-from` | The envelope sender, as the platform reported it. A stored `.eml` does not hold it; without the option it is empty and the output says so. A `Return-Path` header is shown and never used, because the sender of a message can write that header. The platform's SPF result must be for this domain, and the forwarder rule needs it |
 | `--forwarder-ids`, `--forwarder-domains` | The two forwarder settings, together |
 | `--trusted` | The host's `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`. Default: every name given above |
 | `--require-from-domain` | The host's `EMAIL_AUTH_REQUIRE_FROM_DOMAIN` (`true` by default) |
 | `--unknown` | The host's `EMAIL_AUTH_UNKNOWN` (`block` by default) |
 | `--platform-header` | What `message.headers` reports for `Authentication-Results`. Default: every such header of the message joined with `, ` |
 
-What to look for: `platform_status` is `read`; the SPF line is for the envelope sender's domain; the DMARC line names a From domain (if it says `no From domain named`, see `EMAIL_AUTH_REQUIRE_FROM_DOMAIN` in `docs/setup-reference.md`); the verdict for a message you sent yourself is `authenticated`. A `rejected` status on genuine mail means the platform writes a form this code does not read: do not enforce, and report the header layout with the addresses replaced.
+What to look for: the header right below the platform's is one the platform adds itself (a `Received` or `ARC-` line), not the first header of the sender's own message; `platform_status` is `read`; the SPF line is for the envelope sender's domain; the DMARC line names a From domain (if it says `no From domain named`, see `EMAIL_AUTH_REQUIRE_FROM_DOMAIN` in `docs/setup-reference.md`); the verdict for a message you sent yourself is `authenticated`. A `rejected` status on genuine mail means the platform writes a form this code does not read: do not enforce, and report the header layout with the addresses replaced.
+
+What it cannot show: what `message.headers` really reports (it is taken from the message itself here), and who wrote the header below the platform's.
 
 A real message holds real names and addresses. Keep the file and the output out of the repo, issues and pull requests. `test/check-message.test.ts` runs the script's code on synthetic messages.
 

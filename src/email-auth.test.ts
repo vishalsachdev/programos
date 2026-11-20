@@ -56,13 +56,44 @@ describe('emailAuthVerdict', () => {
     // The worker has no platform set; the platform wrote no header.
     expect(verdict(record([], { platform_status: 'unset' }))).toBe('unknown');
     expect(verdict(record([], { platform_status: 'absent' }))).toBe('unknown');
-    // Only servers the host was not told to believe (names from the
-    // worker's settings, not from the message).
-    expect(
-      verdict(
-        record([result({ authserv_id: 'mx.other.example', dmarc: 'pass' })]),
-      ),
-    ).toBe('unknown');
+  });
+
+  it('is "unauthenticated" when the worker read results and none is from a server the host trusts', () => {
+    const decision = emailAuthVerdict(
+      'dlee@example.edu',
+      record([
+        result({
+          authserv_id: 'mx.other.example',
+          dmarc: 'pass',
+          dmarc_from: 'example.edu',
+        }),
+      ]),
+      trusted,
+    );
+    expect(decision.verdict).toBe('unauthenticated');
+    expect(decision.reason).toMatch(/EMAIL_AUTH_TRUSTED_AUTHSERV_IDS/);
+    // The host trusts the forwarder only. Mail sent straight to the bot
+    // carries the platform's result alone and must not come out "unknown"
+    // where the forwarded copy is "unauthenticated".
+    const forwarderOnly = new Set([CAMPUS]);
+    const direct = record([
+      result({ dmarc: 'fail', dmarc_from: 'example.edu' }),
+    ]);
+    const forwarded = record([
+      result({ dmarc: 'fail', dmarc_from: 'example.edu' }),
+      result({
+        source: 'forwarder',
+        authserv_id: CAMPUS,
+        dmarc: 'fail',
+        dmarc_from: 'example.edu',
+      }),
+    ]);
+    expect(verdict(direct, 'dlee@example.edu', forwarderOnly)).toBe(
+      'unauthenticated',
+    );
+    expect(verdict(forwarded, 'dlee@example.edu', forwarderOnly)).toBe(
+      'unauthenticated',
+    );
   });
 
   it('is "unauthenticated", not "unknown", when a header with the platform name was there and was not read', () => {

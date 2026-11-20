@@ -44,17 +44,43 @@ describe('offline check of one message', () => {
     expect(text).toContain('VERDICT: authenticated');
     expect(text).toContain('would be processed');
     expect(text).not.toContain('Note: the envelope sender was not given');
+    expect(text).toContain('Header right below the first of them: From');
   });
 
-  it('takes the envelope sender from Return-Path when it is not given, and says so', async () => {
+  it('never takes the envelope sender from Return-Path, which the sender can write', async () => {
+    // A message sent straight to the bot that claims to come through the
+    // forwarder: only the platform knows the envelope sender.
+    const forged = message([
+      'Return-Path: <x@campus.example.edu>',
+      `Authentication-Results: ${PLATFORM}; spf=pass smtp.mailfrom=campus.example.edu; dmarc=fail header.from=example.edu`,
+      `Authentication-Results: ${CAMPUS}; dmarc=pass header.from=example.edu`,
+    ]);
+    const result = await checkMessage(forged, {
+      platform: PLATFORM,
+      forwarderIds: CAMPUS,
+      forwarderDomains: 'campus.example.edu',
+    });
+    expect(result.envelopeFrom).toBe('');
+    expect(result.envelopeFromGiven).toBe(false);
+    expect(result.returnPath).toBe('<x@campus.example.edu>');
+    expect(result.decision.verdict).toBe('unauthenticated');
+    const text = report(result);
+    expect(text).toContain('Note: the envelope sender was not given');
+    expect(text).toContain('it is not used');
+  });
+
+  it('counts the same headers as the worker, and names the header below the first', async () => {
     const result = await checkMessage(
-      message(['Return-Path: <bounce@mail.example.edu>', twoSpf]),
-      { platform: PLATFORM },
+      message([
+        twoSpf,
+        'Received: from mail.example.edu by mx.platform.example; Fri, 20 Nov 2026 15:00:00 +0000',
+        `Authentication-Results : ${PLATFORM}; dmarc=pass header.from=example.edu`,
+      ]),
+      { platform: PLATFORM, envelopeFrom: 'bounce@mail.example.edu' },
     );
-    expect(result.envelopeFrom).toBe('bounce@mail.example.edu');
-    expect(result.envelopeFromSource).toBe('Return-Path header');
-    expect(result.decision.verdict).toBe('authenticated');
-    expect(report(result)).toContain('Note: the envelope sender was not given');
+    expect(result.headers).toHaveLength(2);
+    expect(result.headerBelowFirst).toBe('Received');
+    expect(result.record.platform_status).toBe('rejected');
   });
 
   it('the bare form: unauthenticated unless the From domain is not required', async () => {

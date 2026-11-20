@@ -121,9 +121,8 @@ const unauthenticated = (reason: string): EmailAuthDecision => ({
  *
  * - "unknown" has two causes and no other: nobody was asked, or the mail
  *   platform said nothing. Nobody was asked: the host trusts no server, the
- *   payload has no `auth` field (an intake that does not report), the
- *   worker has no platform set, or the worker read only servers the host
- *   was not told to believe. The platform said nothing: no header in the
+ *   payload has no `auth` field (an intake that does not report), or the
+ *   worker has no platform set. The platform said nothing: no header in the
  *   message carries its name. None of these is something the sender of a
  *   message can bring about.
  * - "authenticated": a trusted server reports a DMARC pass and names the
@@ -134,7 +133,8 @@ const unauthenticated = (reason: string): EmailAuthDecision => ({
  * - "unauthenticated": everything else. A trusted server reported and no
  *   DMARC pass covers the From domain; or a header with the platform's name
  *   was in the message and could not be relied on (twice, extended, not
- *   the first, malformed); or the record itself is not in the form this
+ *   the first, malformed); or the worker read results and none is from a
+ *   server this host trusts; or the record itself is not in the form this
  *   code knows.
  *
  * `requireFromDomain` false lets a pass from the platform (never from a
@@ -219,11 +219,14 @@ export function emailAuthVerdict(
     trusted.has(text(r.authserv_id)),
   );
   if (counted.length === 0) {
-    // The names come from the worker's own settings, not from the message.
-    return {
-      verdict: 'unknown',
-      reason: 'the intake read no server that this host trusts',
-    };
+    // The worker read a result and this host trusts none of the servers it
+    // read. Not "unknown": with a forwarder trusted and the platform not,
+    // whether a forwarder result is in the list depends on the route the
+    // sender chose, and mail sent straight to the bot would get out of a
+    // check the forwarded copy fails.
+    return unauthenticated(
+      'the intake read a result, and from no server this host trusts (EMAIL_AUTH_TRUSTED_AUTHSERV_IDS must name the mail platform the intake reads)',
+    );
   }
   const ids = counted.map((r) => text(r.authserv_id)).join(', ');
   const fromDomain = domainOfAddress(text(from));

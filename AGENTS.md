@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,562 passing tests (1,761 from the source, 801 added here). One timing test
+   is 2,563 passing tests (1,761 from the source, 802 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -835,7 +835,9 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   writes; Cloudflare documents `mx.cloudflare.net`), and, only when a mailbox
   elsewhere forwards to the bot's address, `FORWARDER_AUTHSERV_IDS` and
   `FORWARDER_DOMAINS`. On the host: `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`, the same
-  names. Read the names off a real message with the person's mail administrator;
+  names, and always the platform's name among them (a list with only the
+  forwarder's name makes every message read as not confirmed). Read the names
+  off a real message with the person's mail administrator;
   do not guess them. An intake service you wrote yourself must send the `auth`
   field, or every verdict stays `unknown`.
 - *Settings:* `EMAIL_AUTH_MODE`, `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`,

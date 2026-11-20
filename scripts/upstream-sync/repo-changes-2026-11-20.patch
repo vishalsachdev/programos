@@ -14218,10 +14218,10 @@ index 0000000000000000000000000000000000000000..ed8afc0b93c4b6a34c51b2dd0308083e
 +}
 diff --git a/src/email-auth.test.ts b/src/email-auth.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..04d8de9ed408180f90865b735be6ddda1c5cbfda
+index 0000000000000000000000000000000000000000..fe52e966c3eed7037f328d2ad7a8fd69daff6f7b
 --- /dev/null
 +++ b/src/email-auth.test.ts
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,409 @@
 +import { describe, expect, it } from 'vitest';
 +
 +import {
@@ -14280,13 +14280,44 @@ index 0000000000000000000000000000000000000000..04d8de9ed408180f90865b735be6ddda
 +    // The worker has no platform set; the platform wrote no header.
 +    expect(verdict(record([], { platform_status: 'unset' }))).toBe('unknown');
 +    expect(verdict(record([], { platform_status: 'absent' }))).toBe('unknown');
-+    // Only servers the host was not told to believe (names from the
-+    // worker's settings, not from the message).
-+    expect(
-+      verdict(
-+        record([result({ authserv_id: 'mx.other.example', dmarc: 'pass' })]),
-+      ),
-+    ).toBe('unknown');
++  });
++
++  it('is "unauthenticated" when the worker read results and none is from a server the host trusts', () => {
++    const decision = emailAuthVerdict(
++      'dlee@example.edu',
++      record([
++        result({
++          authserv_id: 'mx.other.example',
++          dmarc: 'pass',
++          dmarc_from: 'example.edu',
++        }),
++      ]),
++      trusted,
++    );
++    expect(decision.verdict).toBe('unauthenticated');
++    expect(decision.reason).toMatch(/EMAIL_AUTH_TRUSTED_AUTHSERV_IDS/);
++    // The host trusts the forwarder only. Mail sent straight to the bot
++    // carries the platform's result alone and must not come out "unknown"
++    // where the forwarded copy is "unauthenticated".
++    const forwarderOnly = new Set([CAMPUS]);
++    const direct = record([
++      result({ dmarc: 'fail', dmarc_from: 'example.edu' }),
++    ]);
++    const forwarded = record([
++      result({ dmarc: 'fail', dmarc_from: 'example.edu' }),
++      result({
++        source: 'forwarder',
++        authserv_id: CAMPUS,
++        dmarc: 'fail',
++        dmarc_from: 'example.edu',
++      }),
++    ]);
++    expect(verdict(direct, 'dlee@example.edu', forwarderOnly)).toBe(
++      'unauthenticated',
++    );
++    expect(verdict(forwarded, 'dlee@example.edu', forwarderOnly)).toBe(
++      'unauthenticated',
++    );
 +  });
 +
 +  it('is "unauthenticated", not "unknown", when a header with the platform name was there and was not read', () => {
@@ -14602,10 +14633,10 @@ index 0000000000000000000000000000000000000000..04d8de9ed408180f90865b735be6ddda
 +});
 diff --git a/src/email-auth.ts b/src/email-auth.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..474222e04d184c351a7b2a5194481dd0ca5f44ea
+index 0000000000000000000000000000000000000000..d7cf469a915b8250bf4558488a55db6d28604276
 --- /dev/null
 +++ b/src/email-auth.ts
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,290 @@
 +// Sender authentication for inbound email: one verdict per message.
 +//
 +// The allowlist names people by the address in the From header, and anyone
@@ -14729,9 +14760,8 @@ index 0000000000000000000000000000000000000000..474222e04d184c351a7b2a5194481dd0
 + *
 + * - "unknown" has two causes and no other: nobody was asked, or the mail
 + *   platform said nothing. Nobody was asked: the host trusts no server, the
-+ *   payload has no `auth` field (an intake that does not report), the
-+ *   worker has no platform set, or the worker read only servers the host
-+ *   was not told to believe. The platform said nothing: no header in the
++ *   payload has no `auth` field (an intake that does not report), or the
++ *   worker has no platform set. The platform said nothing: no header in the
 + *   message carries its name. None of these is something the sender of a
 + *   message can bring about.
 + * - "authenticated": a trusted server reports a DMARC pass and names the
@@ -14742,7 +14772,8 @@ index 0000000000000000000000000000000000000000..474222e04d184c351a7b2a5194481dd0
 + * - "unauthenticated": everything else. A trusted server reported and no
 + *   DMARC pass covers the From domain; or a header with the platform's name
 + *   was in the message and could not be relied on (twice, extended, not
-+ *   the first, malformed); or the record itself is not in the form this
++ *   the first, malformed); or the worker read results and none is from a
++ *   server this host trusts; or the record itself is not in the form this
 + *   code knows.
 + *
 + * `requireFromDomain` false lets a pass from the platform (never from a
@@ -14827,11 +14858,14 @@ index 0000000000000000000000000000000000000000..474222e04d184c351a7b2a5194481dd0
 +    trusted.has(text(r.authserv_id)),
 +  );
 +  if (counted.length === 0) {
-+    // The names come from the worker's own settings, not from the message.
-+    return {
-+      verdict: 'unknown',
-+      reason: 'the intake read no server that this host trusts',
-+    };
++    // The worker read a result and this host trusts none of the servers it
++    // read. Not "unknown": with a forwarder trusted and the platform not,
++    // whether a forwarder result is in the list depends on the route the
++    // sender chose, and mail sent straight to the bot would get out of a
++    // check the forwarded copy fails.
++    return unauthenticated(
++      'the intake read a result, and from no server this host trusts (EMAIL_AUTH_TRUSTED_AUTHSERV_IDS must name the mail platform the intake reads)',
++    );
 +  }
 +  const ids = counted.map((r) => text(r.authserv_id)).join(', ');
 +  const fromDomain = domainOfAddress(text(from));

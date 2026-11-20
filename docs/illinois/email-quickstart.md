@@ -109,9 +109,9 @@ Start with option A. Move to option B only with a written answer from the centra
 
 If a step fails, fix it before the next one.
 
-## Open design point: is the sender who they say they are?
+## Is the sender who they say they are?
 
-The allowlist matches the `From` address. Neither the host nor the worker checks the mail's authentication (SPF, DKIM, DMARC) today, and a redirected message is passed on by the university's mail system, so the authentication results the bot's domain sees are not those of the original sender. How the bot should judge forwarded mail is an open design point: issue 15. Until it is settled, the allowlist is not proof of who wrote a message; [`../data-handling.md`](../data-handling.md), "What the allowlist does and does not protect", says what follows from that.
+The allowlist matches the `From` address, which a sender can forge. Since 2026-11-20 the host records a sender-authentication verdict for each message and can be set to drop mail that is not authenticated (`EMAIL_AUTH_MODE`; [`../setup-reference.md`](../setup-reference.md), "Sender authentication for inbound mail"). By default it only records, and with no mail server named every verdict is `unknown`. A redirected message is passed on by the university's mail system, so the results the bot's domain sees are not those of the original sender; the intake worker can read the university system's own result instead, when it is told that system's names. Those names are not known: [`mail-authentication.md`](./mail-authentication.md) has the steps to read them off a real message, and what to ask first. Until that is done and `enforce` is set, the allowlist is not proof of who wrote a message; [`../data-handling.md`](../data-handling.md), "What the allowlist does and does not protect", says what follows from that.
 
 ## Questions for the central IT office (not verified)
 

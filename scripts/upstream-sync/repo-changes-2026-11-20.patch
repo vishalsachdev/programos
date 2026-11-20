@@ -5478,10 +5478,10 @@ index 0000000000000000000000000000000000000000..4b1495b913cafefd20f6e372507ddbf1
 +  return report;
 +}
 diff --git a/src/audit-log-commit.test.ts b/src/audit-log-commit.test.ts
-index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a444083d654 100644
+index e178b09238c0ad72fb487ebb6a09be2637d94e0b..1d55cbcb49b1cd7a19e1c49490f1876af573b72c 100644
 --- a/src/audit-log-commit.test.ts
 +++ b/src/audit-log-commit.test.ts
-@@ -1,93 +1,140 @@
+@@ -1,93 +1,171 @@
 -import { describe, expect, it } from 'vitest';
 -
 -import { runAuditCommit } from './audit-log.js';
@@ -5529,6 +5529,7 @@ index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a44
 +  commitAuditLog,
 +  flushAuditLog,
 +  logDroppedEmail,
++  logEmailAuthentication,
 +  syncKnowledgeBase,
 +} from './audit-log.js';
 +import {
@@ -5571,8 +5572,12 @@ index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a44
 +    await flushAuditLog();
 +    _setPendingWritesForTests(0);
 +    kb.cleanup();
-+  });
-+
+   });
+ 
+-  it('aborts a failed rebase and reports failure', async () => {
+-    const r = recorder((a) => a[0] === 'push' || a[0] === 'pull');
+-    await expect(runAuditCommit(1, r.run)).rejects.toThrow();
+-    expect(r.calls.at(-1)).toEqual(['rebase', '--abort']);
 +  it('writes the entry in the host repo, not in the checkout, and commits and pushes it as the bot', async () => {
 +    logDroppedEmail('stranger@example.org', 'hello');
 +    await flushAuditLog();
@@ -5593,12 +5598,38 @@ index e178b09238c0ad72fb487ebb6a09be2637d94e0b..52e3f0a27ad4f2f8809ee69f91238a44
 +      fs.existsSync(path.join(kb.checkout, 'discussions', 'audit-log')),
 +    ).toBe(false);
 +    expect(git(kb.checkout, ['status', '--porcelain'])).toBe('');
-   });
- 
--  it('aborts a failed rebase and reports failure', async () => {
--    const r = recorder((a) => a[0] === 'push' || a[0] === 'pull');
--    await expect(runAuditCommit(1, r.run)).rejects.toThrow();
--    expect(r.calls.at(-1)).toEqual(['rebase', '--abort']);
++  });
++
++  it('keeps sender text on one line, so it cannot start a second audit entry', async () => {
++    const forged =
++      'hi\n---\n### 00:00:00 — email — sender authentication\n**[EMAIL AUTH]** authenticated';
++    logDroppedEmail('stranger@example.org\n### x', forged, 'unknown — none');
++    logEmailAuthentication({
++      from: 'listed@example.org',
++      subject: forged,
++      messageId: 'm1@example.org\n### y',
++      verdict: 'unauthenticated',
++      reason: 'no DMARC pass covers example.org',
++      mode: 'flag',
++    });
++    await flushAuditLog();
++    const file = git(kb.origin, [
++      'ls-tree',
++      '-r',
++      '--name-only',
++      'main',
++      'discussions/audit-log/',
++    ]).trim();
++    const text = kb.originFile(file) ?? '';
++    // Two entries were written; no line of sender text became a heading.
++    expect(text.match(/^### /gm)).toHaveLength(2);
++    expect(text.match(/^\*\*\[EMAIL AUTH\]\*\*/gm)).toHaveLength(1);
++    expect(text).toContain(
++      '**[EMAIL AUTH]** unauthenticated — no DMARC pass covers example.org (mode: flag)',
++    );
++    expect(text).toContain('**Sender authentication:** unknown — none');
++  });
++
 +  it('on a rejected push, rebases onto origin and pushes again', async () => {
 +    await syncKnowledgeBase({ fetchOrigin: true });
 +    kb.personCommit('notes/person.md', 'pushed first\n');
@@ -6027,7 +6058,7 @@ index a17e57f62621e4dd387983b5f793e790640a80f1..4425df2e980134028d9987211d31e76c
      expect(
        logReplySuppressedOnce({
 diff --git a/src/audit-log.ts b/src/audit-log.ts
-index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..3f71cef3b5118b780d5677856091faf9f804a22d 100644
+index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..5ef2f0b848d65a9c1504ab46fccd596061f1300e 100644
 --- a/src/audit-log.ts
 +++ b/src/audit-log.ts
 @@ -4,21 +4,32 @@
@@ -6125,7 +6156,73 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..3f71cef3b5118b780d5677856091faf9
          target,
          [...lines, marker, '---', ''].join('\n'),
        );
-@@ -345,15 +356,55 @@ function outboundEmailLines(args: OutboundEmailAuditArgs): string[] {
+@@ -208,18 +219,62 @@ export async function logInboundEmailReceiptOnce(args: {
+  * blocked — the only record otherwise is an ephemeral PM2 console warning.
+  * Intentionally NOT called for transient "allowlist unavailable" failures.
+  */
+-export function logDroppedEmail(from: string, subject: string): void {
++export function logDroppedEmail(
++  from: string,
++  subject: string,
++  senderAuthentication?: string,
++): void {
+   appendAuditEntry(
+     [
+       `### ${localTimeHms(TIMEZONE)} — email — dropped (not on allowlist)`,
+-      `**From:** ${from}`,
+-      `**Subject:** ${subject}`,
++      // One line each: a decoded subject can hold line breaks, and a second
++      // line could be written to look like another entry.
++      `**From:** ${singleLine(from)}`,
++      `**Subject:** ${singleLine(subject)}`,
++      ...(senderAuthentication
++        ? [`**Sender authentication:** ${singleLine(senderAuthentication)}`]
++        : []),
+       '',
+     ],
+     'dropped-email',
+   );
+ }
+ 
++/**
++ * The sender-authentication verdict for one inbound email
++ * (`src/email-auth.ts`). Written for every message that passes the
++ * allowlist, in both modes. `[EMAIL AUTH]` is the marker to search for;
++ * "unauthenticated" means the From address may be forged.
++ */
++export function logEmailAuthentication(args: {
++  from: string;
++  subject: string;
++  messageId?: string;
++  verdict: string;
++  reason: string;
++  mode: string;
++  /** enforce mode only: the message was dropped for this verdict. */
++  blocked?: boolean;
++}): void {
++  appendAuditEntry(
++    [
++      `### ${localTimeHms(TIMEZONE)} — email — ${
++        args.blocked
++          ? 'dropped (sender not authenticated)'
++          : 'sender authentication'
++      }`,
++      `**[EMAIL AUTH]** ${args.verdict} — ${singleLine(args.reason)} (mode: ${args.mode})`,
++      `**From:** ${singleLine(args.from || 'unknown')}`,
++      `**Subject:** ${singleLine(args.subject || 'unknown')}`,
++      ...(args.messageId
++        ? [`**Message-ID:** ${singleLine(args.messageId, 200)}`]
++        : []),
++      '',
++    ],
++    'email-auth',
++  );
++}
++
+ /**
+  * Log a CC-as-context ack suppression (G56). The message was
+  * processed and filed normally; only the outbound ack was withheld because
+@@ -345,15 +400,55 @@ function outboundEmailLines(args: OutboundEmailAuditArgs): string[] {
    ];
  }
  
@@ -6184,7 +6281,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..3f71cef3b5118b780d5677856091faf9
  }
  
  export function logOutboundEmail(args: OutboundEmailAuditArgs): void {
-@@ -686,97 +737,68 @@ export function logTerminalCommit(args: {
+@@ -686,97 +781,68 @@ export function logTerminalCommit(args: {
    );
  }
  
@@ -7829,6 +7926,501 @@ index 0000000000000000000000000000000000000000..d3d36ac3089d4e8015231793677e443d
 +    ).resolves.toMatchObject({ status: 'failed', retryable: false });
 +  });
 +});
+diff --git a/src/channels/webhook-email-auth.test.ts b/src/channels/webhook-email-auth.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c91061f25de351a2423024e1b387314dfaf904e8
+--- /dev/null
++++ b/src/channels/webhook-email-auth.test.ts
+@@ -0,0 +1,489 @@
++import { execFileSync } from 'child_process';
++import fs from 'fs';
++import http from 'http';
++import os from 'os';
++import path from 'path';
++
++import {
++  afterAll,
++  afterEach,
++  beforeAll,
++  beforeEach,
++  describe,
++  expect,
++  it,
++  vi,
++} from 'vitest';
++
++// Sender authentication on the email path: the verdict from
++// `src/email-auth.ts`, the audit entry, and what EMAIL_AUTH_MODE=enforce
++// changes. The messages are the synthetic fixtures of `inbound/`; the `auth`
++// field is what the intake worker would send (`inbound/src/auth.ts`).
++
++const TEST_PORT = 39348;
++
++const hoisted = vi.hoisted(() => {
++  const dir = `${process.env.TMPDIR || '/tmp'}/programos-email-auth-${process.pid}`;
++  process.env.WEBHOOK_PORT = '39348';
++  process.env.WEBHOOK_HOST = '127.0.0.1';
++  process.env.INSTITUTION_DOMAIN = 'example.edu';
++  // The real reader is used, pointed at a mirror this test creates.
++  process.env.PROGRAM_READ_MIRROR = `${dir}/mirror.git`;
++  return { dir };
++});
++
++const mocks = vi.hoisted(() => ({
++  sendOutboundEmail: vi.fn(async (..._args: unknown[]) => true),
++  telegramFetch: vi.fn(
++    async (_input: string | URL | Request, _init?: RequestInit) =>
++      new Response('{}', { status: 200 }),
++  ),
++  sendOutboundEmailResult: vi.fn(
++    async (..._args: unknown[]) =>
++      ({ status: 'sent', resendId: 're_relay' }) as const,
++  ),
++}));
++
++vi.mock('../env.js', () => ({
++  readEnvFile: () => ({
++    WEBHOOK_SECRET: 'test-secret',
++    RESEND_API_KEY: 're_test',
++    TELEGRAM_BOT_TOKEN: 'telegram-test-token',
++    TELEGRAM_ADMIN_CHAT_ID: 'telegram-admin',
++    GITHUB_PUSH_WEBHOOK_SECRET: 'push-secret',
++  }),
++}));
++
++vi.mock('../program-repo.js', () => ({
++  CHECKOUT_OWNER: { uid: 1000, gid: 1000 },
++  checkoutGitOptions: () => ({
++    cwd: process.env.PROGRAM_REPO,
++    env: process.env,
++    timeout: 30_000,
++  }),
++  getProgramRepoPath: () => process.env.PROGRAM_REPO || '/tmp/missing',
++}));
++
++vi.mock('../outbound-email.js', async (importOriginal) => {
++  const actual = await importOriginal<typeof import('../outbound-email.js')>();
++  return {
++    ...actual,
++    sendOutboundEmailResult: mocks.sendOutboundEmailResult,
++    sendOutboundEmail: mocks.sendOutboundEmail,
++    peekOutboundEmailResult: () => ({ state: 'none' as const }),
++  };
++});
++
++const audit = vi.hoisted(() => ({
++  logEmailAuthentication: vi.fn(),
++  logDroppedEmail: vi.fn(),
++}));
++
++vi.mock('../audit-log.js', async (importOriginal) => ({
++  ...(await importOriginal<typeof import('../audit-log.js')>()),
++  logEmailAuthentication: audit.logEmailAuthentication,
++  logDroppedEmail: audit.logDroppedEmail,
++}));
++
++import './webhook.js';
++import { flushAuditLog } from '../audit-log.js';
++import { _closeDatabase, _initTestDatabase } from '../db.js';
++import { getChannelFactory } from './registry.js';
++
++const FIXTURES = path.join(process.cwd(), 'inbound', 'fixtures');
++
++interface Contract {
++  gitAuthorName: string;
++  gitAuthorEmail: string;
++  cases: string[];
++}
++
++interface WorkerPayload {
++  filename: string;
++  subject: string;
++  from: string;
++  message_id: string;
++  raw_file_path: string;
++  eml_file_path: string;
++  auth?: unknown;
++}
++
++const contract: Contract = JSON.parse(
++  fs.readFileSync(path.join(FIXTURES, 'contract.json'), 'utf-8'),
++);
++
++function payloadOf(name: string): WorkerPayload {
++  return JSON.parse(
++    fs.readFileSync(path.join(FIXTURES, `${name}.expected.json`), 'utf-8'),
++  );
++}
++
++function git(cwd: string, ...args: string[]): string {
++  return execFileSync(
++    'git',
++    ['-C', cwd, '-c', 'commit.gpgsign=false', ...args],
++    { encoding: 'utf-8' },
++  );
++}
++
++const upstream = path.join(hoisted.dir, 'upstream');
++
++/** Both files in one commit by the intake author: what the worker does. */
++function commitAsWorker(
++  name: string,
++  authorEmail = contract.gitAuthorEmail,
++): WorkerPayload {
++  const payload = payloadOf(name);
++  for (const [rel, source] of [
++    [payload.eml_file_path, `${name}.eml`],
++    [payload.raw_file_path, `${name}.expected.md`],
++  ]) {
++    fs.mkdirSync(path.dirname(path.join(upstream, rel)), { recursive: true });
++    fs.copyFileSync(path.join(FIXTURES, source), path.join(upstream, rel));
++  }
++  git(upstream, 'add', '-A');
++  git(
++    upstream,
++    '-c',
++    `user.name=${contract.gitAuthorName}`,
++    '-c',
++    `user.email=${authorEmail}`,
++    'commit',
++    // Two tests here file the same fixture.
++    '--allow-empty',
++    '-m',
++    `Inbound email: ${payload.filename}`,
++  );
++  return payload;
++}
++
++/**
++ * A new message from an allowlisted sender, filed as the worker files it.
++ * The host remembers a handled Message-ID for the life of the process, so a
++ * test that expects a model turn needs a message no other test delivered.
++ */
++function commitNew(tag: string): WorkerPayload {
++  const base = `discussions/raw/2026-11-20-${tag}`;
++  const headers = [
++    'From: Priya Raman <praman@example.edu>',
++    'To: program@example.org',
++    'Date: Fri, 20 Nov 2026 09:00:00 -0600',
++    `Subject: Question ${tag}`,
++    `Message-ID: <${tag}@example.edu>`,
++  ];
++  fs.mkdirSync(path.join(upstream, 'discussions/raw'), { recursive: true });
++  fs.writeFileSync(
++    path.join(upstream, `${base}.eml`),
++    [...headers, '', 'Is the form due on Friday?', ''].join('\r\n'),
++  );
++  fs.writeFileSync(
++    path.join(upstream, `${base}.md`),
++    [
++      ...headers,
++      '',
++      `# Question ${tag}`,
++      '',
++      'Is the form due on Friday?',
++      '',
++    ].join('\n'),
++  );
++  git(upstream, 'add', '-A');
++  git(
++    upstream,
++    '-c',
++    `user.name=${contract.gitAuthorName}`,
++    '-c',
++    `user.email=${contract.gitAuthorEmail}`,
++    'commit',
++    '-m',
++    `Inbound email: 2026-11-20-${tag}.md`,
++  );
++  return {
++    filename: `2026-11-20-${tag}.md`,
++    subject: `Question ${tag}`,
++    from: 'praman@example.edu',
++    message_id: `<${tag}@example.edu>`,
++    raw_file_path: `${base}.md`,
++    eml_file_path: `${base}.eml`,
++  };
++}
++
++function post(
++  urlPath: string,
++  body: string,
++  headers: Record<string, string>,
++): Promise<{ status: number; body: string }> {
++  return new Promise((resolve, reject) => {
++    const req = http.request(
++      {
++        hostname: '127.0.0.1',
++        port: TEST_PORT,
++        path: urlPath,
++        method: 'POST',
++        headers: { 'content-type': 'application/json', ...headers },
++      },
++      (res) => {
++        const chunks: Buffer[] = [];
++        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
++        res.on('end', () =>
++          resolve({
++            status: res.statusCode ?? 0,
++            body: Buffer.concat(chunks).toString(),
++          }),
++        );
++      },
++    );
++    req.on('error', reject);
++    req.end(body);
++  });
++}
++
++const deliver = (payload: WorkerPayload) =>
++  post('/', JSON.stringify(payload), { authorization: 'Bearer test-secret' });
++
++const PLATFORM = 'mx.platform.example';
++
++/** The worker's record with one platform result. */
++function authFrom(result: Record<string, unknown>) {
++  return {
++    version: 1,
++    envelope_from_domain: 'mail.example.edu',
++    from_headers: 1,
++    from_mailboxes: 1,
++    results: [
++      {
++        source: 'platform',
++        authserv_id: PLATFORM,
++        spf: '',
++        spf_domain: '',
++        dkim: [],
++        dmarc: '',
++        dmarc_from: '',
++        arc: '',
++        ...result,
++      },
++    ],
++  };
++}
++
++describe('sender authentication on inbound email', () => {
++  const onMessage = vi.fn();
++  let checkout: string;
++  let disconnect: (() => Promise<void>) | undefined;
++
++  beforeAll(async () => {
++    fs.rmSync(hoisted.dir, { recursive: true, force: true });
++    fs.mkdirSync(path.join(upstream, 'program'), { recursive: true });
++    fs.mkdirSync(path.join(upstream, 'discussions'), { recursive: true });
++    git(upstream, 'init', '-b', 'main');
++    // The allowlist is a protected file: its commit needs an admin author.
++    git(upstream, 'config', 'user.email', 'avery.personal@gmail.com');
++    git(upstream, 'config', 'user.name', 'Avery Morgan');
++    fs.writeFileSync(
++      path.join(upstream, 'program', 'EMAIL_ALLOWLIST.md'),
++      [
++        '| Name | Email | Role | Access | Notes |',
++        '|---|---|---|---|---|',
++        '| Avery Morgan | avery@example.edu | Director | read-write | Program Director · **coordinator-cohort: founding** |',
++        '| Omar Haddad | ohaddad@example.edu | Staff | read-write | Oversight · **coordinator-cohort: founding** |',
++        '| Priya Raman | praman@example.edu | Faculty | read-write | Teaching · **coordinator-cohort: founding** |',
++        '| Zoë Müller | zmuller@example.edu | Faculty | read-write | Teaching · **coordinator-cohort: founding** |',
++        '| June Hale | jhl@example.edu | Admissions | read-only | Admissions. Any updates she sends route to **Omar Haddad (ohaddad)** for approval · **coordinator-cohort: team-expansion** |',
++        '',
++      ].join('\n'),
++    );
++    fs.writeFileSync(
++      path.join(upstream, 'discussions', 'OPEN_QUESTIONS.md'),
++      '# Open questions\n\n## Routed Approvals\n',
++    );
++    git(upstream, 'add', '-A');
++    git(upstream, 'commit', '-m', 'init');
++    execFileSync('git', [
++      'clone',
++      '--mirror',
++      upstream,
++      process.env.PROGRAM_READ_MIRROR!,
++    ]);
++
++    vi.stubGlobal('fetch', mocks.telegramFetch);
++    const channel = getChannelFactory('webhook')?.({
++      onMessage,
++      onChatMetadata: vi.fn(),
++      registeredGroups: () => ({}),
++    });
++    if (!channel) throw new Error('webhook channel not registered');
++    disconnect = () => channel.disconnect();
++    await channel.connect();
++  });
++
++  beforeEach(() => {
++    _initTestDatabase();
++    checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'email-auth-'));
++    fs.mkdirSync(path.join(checkout, '.git'));
++    vi.stubEnv('PROGRAM_REPO', checkout);
++    onMessage.mockClear();
++    mocks.telegramFetch.mockClear();
++    mocks.sendOutboundEmailResult.mockClear();
++  });
++
++  afterEach(() => {
++    flushAuditLog();
++    _closeDatabase();
++    vi.unstubAllEnvs();
++    fs.rmSync(checkout, { recursive: true, force: true });
++  });
++
++  afterAll(async () => {
++    await disconnect?.();
++    vi.unstubAllGlobals();
++    fs.rmSync(hoisted.dir, { recursive: true, force: true });
++  });
++
++  beforeEach(() => {
++    audit.logEmailAuthentication.mockClear();
++    audit.logDroppedEmail.mockClear();
++    mocks.sendOutboundEmail.mockClear();
++  });
++
++  describe('flag mode (the default)', () => {
++    it('with no setting, processes the message as before and records "unknown"', async () => {
++      const payload = commitAsWorker('plain-question');
++      // Even a payload that claims a pass: the host was told to believe nobody.
++      payload.auth = authFrom({ dmarc: 'pass' });
++      const res = await deliver(payload);
++      expect(res.status).toBe(200);
++      expect(JSON.parse(res.body)).not.toHaveProperty('skipped');
++      expect(onMessage).toHaveBeenCalledOnce();
++      expect(audit.logEmailAuthentication).toHaveBeenCalledExactlyOnceWith({
++        from: 'praman@example.edu',
++        subject: 'When is the capstone proposal due?',
++        messageId: 'plain-1119@example.edu',
++        verdict: 'unknown',
++        reason: 'no trusted mail server is set',
++        mode: 'flag',
++      });
++    });
++
++    it('records "unauthenticated" and still processes the message', async () => {
++      vi.stubEnv('EMAIL_AUTH_TRUSTED_AUTHSERV_IDS', PLATFORM);
++      const payload = commitAsWorker('multipart-attachment');
++      payload.auth = authFrom({ spf: 'fail', dmarc: 'fail' });
++      const res = await deliver(payload);
++      expect(res.status).toBe(200);
++      expect(onMessage).toHaveBeenCalledOnce();
++      expect(audit.logEmailAuthentication).toHaveBeenCalledOnce();
++      expect(audit.logEmailAuthentication.mock.calls[0][0]).toMatchObject({
++        verdict: 'unauthenticated',
++        mode: 'flag',
++      });
++      expect(audit.logEmailAuthentication.mock.calls[0][0]).not.toHaveProperty(
++        'blocked',
++      );
++    });
++
++    it('still sends the access-closed reply to a colleague who is not on the list', async () => {
++      vi.stubEnv('EMAIL_AUTH_TRUSTED_AUTHSERV_IDS', PLATFORM);
++      const payload = commitAsWorker('routed-approval');
++      payload.from = 'flag-newcomer@example.edu';
++      payload.auth = authFrom({ dmarc: 'fail' });
++      const res = await deliver(payload);
++      expect(JSON.parse(res.body)).toMatchObject({
++        skipped: true,
++        reason: 'sender not on allowlist',
++      });
++      expect(onMessage).not.toHaveBeenCalled();
++      await vi.waitFor(() =>
++        expect(mocks.sendOutboundEmail).toHaveBeenCalledOnce(),
++      );
++      expect(audit.logDroppedEmail).toHaveBeenCalledExactlyOnceWith(
++        'flag-newcomer@example.edu',
++        expect.any(String),
++        expect.stringMatching(/^unauthenticated — /),
++      );
++    });
++  });
++
++  describe('enforce mode', () => {
++    beforeEach(() => {
++      vi.stubEnv('EMAIL_AUTH_MODE', 'enforce');
++      vi.stubEnv('EMAIL_AUTH_TRUSTED_AUTHSERV_IDS', PLATFORM);
++    });
++
++    it('processes a message the platform authenticated', async () => {
++      const payload = commitNew('enforce-pass');
++      payload.auth = authFrom({ dmarc: 'pass', dmarc_from: 'example.edu' });
++      const res = await deliver(payload);
++      expect(res.status).toBe(200);
++      expect(onMessage).toHaveBeenCalledOnce();
++      expect(audit.logEmailAuthentication.mock.calls[0][0]).toMatchObject({
++        verdict: 'authenticated',
++        mode: 'enforce',
++      });
++    });
++
++    it('drops a forged allowlisted sender: no model turn, no reply, an audit entry', async () => {
++      const payload = commitAsWorker('routed-approval');
++      payload.auth = authFrom({
++        spf: 'pass',
++        spf_domain: 'attacker.example.net',
++        dkim: [{ result: 'pass', domain: 'attacker.example.net' }],
++        dmarc: 'fail',
++      });
++      const res = await deliver(payload);
++      // 200: the intake worker must not send it again.
++      expect(res.status).toBe(200);
++      expect(JSON.parse(res.body)).toEqual({
++        ok: true,
++        skipped: true,
++        reason: 'sender not authenticated',
++      });
++      expect(onMessage).not.toHaveBeenCalled();
++      expect(mocks.sendOutboundEmail).not.toHaveBeenCalled();
++      expect(mocks.sendOutboundEmailResult).not.toHaveBeenCalled();
++      expect(mocks.telegramFetch).not.toHaveBeenCalled();
++      expect(audit.logEmailAuthentication).toHaveBeenCalledExactlyOnceWith(
++        expect.objectContaining({
++          from: payload.from,
++          verdict: 'unauthenticated',
++          reason: `no DMARC pass covers example.edu (checked by ${PLATFORM})`,
++          mode: 'enforce',
++          blocked: true,
++        }),
++      );
++    });
++
++    it('drops a message with no trusted result unless EMAIL_AUTH_UNKNOWN=allow', async () => {
++      const payload = commitNew('enforce-unknown');
++      const blocked = await deliver(payload);
++      expect(JSON.parse(blocked.body)).toMatchObject({
++        skipped: true,
++        reason: 'sender not authenticated',
++      });
++      expect(onMessage).not.toHaveBeenCalled();
++      expect(audit.logEmailAuthentication.mock.calls[0][0]).toMatchObject({
++        verdict: 'unknown',
++        blocked: true,
++      });
++
++      vi.stubEnv('EMAIL_AUTH_UNKNOWN', 'allow');
++      const allowed = await deliver(payload);
++      expect(JSON.parse(allowed.body)).not.toHaveProperty('skipped');
++      expect(onMessage).toHaveBeenCalledOnce();
++    });
++
++    it('sends no access-closed reply to an unauthenticated address that is not on the list', async () => {
++      const payload = commitAsWorker('routed-approval');
++      payload.from = 'enforce-newcomer@example.edu';
++      payload.auth = authFrom({ dmarc: 'fail' });
++      const res = await deliver(payload);
++      expect(JSON.parse(res.body)).toMatchObject({
++        skipped: true,
++        reason: 'sender not on allowlist',
++      });
++      await new Promise((resolve) => setTimeout(resolve, 50));
++      expect(mocks.sendOutboundEmail).not.toHaveBeenCalled();
++      expect(mocks.sendOutboundEmailResult).not.toHaveBeenCalled();
++      expect(audit.logDroppedEmail).toHaveBeenCalledOnce();
++    });
++  });
++});
 diff --git a/src/channels/webhook-inbound-intake.test.ts b/src/channels/webhook-inbound-intake.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..6abed551248d2a84153305b1c7bee8d2d18a531d
@@ -8561,18 +9153,31 @@ index 0000000000000000000000000000000000000000..aed627472587da38136c151fac5bfa66
 +  });
 +});
 diff --git a/src/channels/webhook.ts b/src/channels/webhook.ts
-index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5cfc1e4f2 100644
+index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..a1f321ac9ae22e651cf14090287c24498610ed62 100644
 --- a/src/channels/webhook.ts
 +++ b/src/channels/webhook.ts
-@@ -77,6 +77,7 @@ import { readFromCheckoutBuffer } from '../checkout-fs.js';
+@@ -27,6 +27,7 @@ import {
+ import {
+   logDeliveryProblem,
+   logDroppedEmail,
++  logEmailAuthentication,
+   logInboundEmailReceiptOnce,
+   logRoutedApproval,
+ } from '../audit-log.js';
+@@ -77,6 +78,12 @@ import { readFromCheckoutBuffer } from '../checkout-fs.js';
  import { deriveEmailChatJid, parseEmailIdentity } from './webhook-threading.js';
  import { logger } from '../logger.js';
  import { readEnvFile } from '../env.js';
++import {
++  emailAuthBlocks,
++  emailAuthVerdict,
++  readEmailAuthSettings,
++} from '../email-auth.js';
 +import { INSTITUTION_DOMAIN } from '../instance-identity.js';
  import { Channel, PreparedDelivery } from '../types.js';
  import {
    extractEmailAttachments,
-@@ -84,9 +85,12 @@ import {
+@@ -84,9 +91,12 @@ import {
    saveExtraction,
  } from '../document-extractor.js';
  import { isAutoReplyEml } from '../email-loop-detection.js';
@@ -8585,7 +9190,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
  
  const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3003', 10);
  const WEBHOOK_HOST = process.env.WEBHOOK_HOST || '0.0.0.0';
-@@ -186,11 +190,7 @@ registerChannel('webhook', (opts) => {
+@@ -186,11 +196,7 @@ registerChannel('webhook', (opts) => {
    // failure) can distinguish a transient outage (worth a retry) from a
    // permanent misconfiguration (retrying forever would get the endpoint
    // auto-disabled by the sender, e.g. Svix).
@@ -8598,7 +9203,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
      const token =
        resendEnv.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
      const chatId =
-@@ -226,6 +226,12 @@ registerChannel('webhook', (opts) => {
+@@ -226,6 +232,12 @@ registerChannel('webhook', (opts) => {
      }
    }
  
@@ -8611,7 +9216,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
    // Live checkout path — still needed for WRITE-side work (raw .eml reads of
    // just-committed mail, attachment extraction output) and for ownership
    // repair after host-side commits. Allowlist READS no longer touch it.
-@@ -423,13 +429,13 @@ registerChannel('webhook', (opts) => {
+@@ -423,13 +435,13 @@ registerChannel('webhook', (opts) => {
      const alertFrom = alertField(args.from, 'unknown');
      const alertSubject = alertField(args.subject, 'No Subject');
      if (result === 'write-failed') {
@@ -8627,7 +9232,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
          `High-attachment email accepted (${args.attachmentCount} files).\nFrom: ${alertFrom}\nSubject: ${alertSubject}\nA durable intake receipt exists; attachment storage and agent processing may still be pending.`,
        );
      }
-@@ -501,9 +507,7 @@ registerChannel('webhook', (opts) => {
+@@ -501,9 +513,7 @@ registerChannel('webhook', (opts) => {
            ? 'sent-earlier'
            : 'none',
      });
@@ -8638,7 +9243,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
      if (event.notice) {
        // A notice failure must not stop the alert retry and release below.
        await sendSenderCapNotice(event, resetAt, firstAlert === 'sent').catch(
-@@ -514,7 +518,7 @@ registerChannel('webhook', (opts) => {
+@@ -514,7 +524,7 @@ registerChannel('webhook', (opts) => {
      if (!event.alert || firstAlert === undefined) return;
      const finalAlert = await retryTransient(
        firstAlert,
@@ -8647,7 +9252,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
        SENDER_CAP_ALERT_RETRY_DELAYS_MS,
      );
      if (finalAlert !== 'sent') {
-@@ -595,7 +599,7 @@ registerChannel('webhook', (opts) => {
+@@ -595,7 +605,7 @@ registerChannel('webhook', (opts) => {
      cancelRelay: (deliveryId, reason) =>
        cancelQueuedOutboundEmail(deliveryId, reason),
      refreshMirror: () => getRepoReader().refreshAsync(),
@@ -8656,7 +9261,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
      audit: (event) => logRoutedApproval(event),
    });
  
-@@ -628,7 +632,9 @@ registerChannel('webhook', (opts) => {
+@@ -628,7 +638,9 @@ registerChannel('webhook', (opts) => {
    // skip obvious automated addresses + set Auto-Submitted so we don't loop
    // with the recipient's own autoresponder.
    // ───────────────────────────────────────────────────────────────────────
@@ -8667,7 +9272,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
    const blockedNotified = new Set<string>();
    const MAX_BLOCKED_NOTIFIED = 1000;
  
-@@ -655,7 +661,7 @@ registerChannel('webhook', (opts) => {
+@@ -655,7 +667,7 @@ registerChannel('webhook', (opts) => {
      if (from.includes(',') || from.includes(';')) return null;
      const angle = from.match(/<([^>]+)>/);
      const addr = (angle ? angle[1] : from).trim().toLowerCase();
@@ -8676,7 +9281,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
      return addr;
    }
  
-@@ -787,8 +793,8 @@ registerChannel('webhook', (opts) => {
+@@ -787,8 +799,8 @@ registerChannel('webhook', (opts) => {
              // degrades to log-and-200 — endlessly failing deliveries would
              // get the endpoint auto-disabled, ending bounce visibility.
              pingAdminViaTelegram: async (text) => {
@@ -8687,7 +9292,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
                }
              },
              logDeliveryProblem,
-@@ -810,8 +816,8 @@ registerChannel('webhook', (opts) => {
+@@ -810,8 +822,8 @@ registerChannel('webhook', (opts) => {
              res,
              githubPushSecret,
              async (text) => {
@@ -8698,7 +9303,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
                }
              },
              // A push is the moment a new Routed Approvals entry is committed.
-@@ -822,7 +828,7 @@ registerChannel('webhook', (opts) => {
+@@ -822,7 +834,7 @@ registerChannel('webhook', (opts) => {
  
          // Check secret
          const authHeader = req.headers['authorization'];
@@ -8707,7 +9312,51 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
            res.writeHead(401);
            res.end('Unauthorized');
            return;
-@@ -1031,7 +1037,7 @@ registerChannel('webhook', (opts) => {
+@@ -935,6 +947,30 @@ registerChannel('webhook', (opts) => {
+               attachment_state === 'pending'
+                 ? attachment_state
+                 : undefined;
++            // Sender authentication (src/email-auth.ts). The verdict is
++            // recorded for every message; it changes what happens to the
++            // message only with EMAIL_AUTH_MODE=enforce.
++            const emailAuth = readEmailAuthSettings();
++            const authDecision = emailAuthVerdict(
++              from,
++              body.auth,
++              emailAuth.trusted,
++            );
++            const authBlocked = emailAuthBlocks(
++              emailAuth,
++              authDecision.verdict,
++            );
++            const authSummary = `${authDecision.verdict} — ${authDecision.reason}`;
++            const notAuthenticated = () => {
++              res.writeHead(200, { 'Content-Type': 'application/json' });
++              res.end(
++                JSON.stringify({
++                  ok: true,
++                  skipped: true,
++                  reason: 'sender not authenticated',
++                }),
++              );
++            };
+             if (phase === 'accepted') {
+               if (
+                 attachmentCount === null ||
+@@ -965,6 +1001,12 @@ registerChannel('webhook', (opts) => {
+                 );
+                 return;
+               }
++              if (authBlocked) {
++                // No receipt for a sender the full message will be dropped
++                // for; that POST writes the audit entry.
++                notAuthenticated();
++                return;
++              }
+               const receiptId =
+                 (typeof message_id === 'string' &&
+                   message_id.replace(/^<|>$/g, '')) ||
+@@ -1031,7 +1073,7 @@ registerChannel('webhook', (opts) => {
                const now = Date.now();
                if (now - lastBoxPingAt >= BOX_PING_DEBOUNCE_MS) {
                  lastBoxPingAt = now;
@@ -8716,7 +9365,86 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5
                    `📦 Box update detected (from ${from}).\n` +
                      `Subject: ${emailSubject}\n` +
                      `→ Run a Box sync sweep to refresh Coordinator's course data.`,
-@@ -1711,7 +1717,7 @@ registerChannel('webhook', (opts) => {
+@@ -1079,7 +1121,7 @@ registerChannel('webhook', (opts) => {
+               // "allowlist unavailable" failures — those aren't unauthorized
+               // senders, just a failed read (see CLAUDE.md reliability note).
+               if (access.reason === 'sender not on allowlist') {
+-                logDroppedEmail(from || 'unknown', emailSubject);
++                logDroppedEmail(from || 'unknown', emailSubject, authSummary);
+                 // A blocked **@example.edu** colleague gets one courteous
+                 // reply instead of a silent drop. External/unknown senders
+                 // stay silent (anti-backscatter). Deduped + skip automated.
+@@ -1088,14 +1130,17 @@ registerChannel('webhook', (opts) => {
+                   key &&
+                   isInstitutionSender(from) &&
+                   !isLikelyAutomatedAddress(from) &&
++                  // enforce: no reply to an address that may be forged.
++                  !authBlocked &&
+                   !blockedNotified.has(key)
+                 ) {
+                   // Reuse the robust header-based auto-reply/list guard BEFORE
+                   // emitting outbound mail, so a spoofed or auto-generated EXU
+                   // From can't turn a silent drop into backscatter or an
+-                  // autoresponder loop. (True SPF/DKIM sender-auth isn't
+-                  // available at this layer; the per-sender dedup caps residual
+-                  // forged-From backscatter to one notice per address.)
++                  // autoresponder loop. In flag mode the sender is not
++                  // authenticated here; the per-sender dedup caps residual
++                  // forged-From backscatter to one notice per address. In
++                  // enforce mode `authBlocked` above withholds the reply.
+                   let isAuto = false;
+                   if (raw_file_path) {
+                     try {
+@@ -1139,6 +1184,33 @@ registerChannel('webhook', (opts) => {
+               return;
+             }
+ 
++            // enforce: an allowlisted address that the mail servers did not
++            // vouch for is handled like an address that is not on the list.
++            // It never reaches the model, and it gets no reply of any kind:
++            // a reply to a forged address is mail sent to a third party.
++            if (authBlocked) {
++              logger.warn(
++                {
++                  from,
++                  subject: emailSubject,
++                  verdict: authDecision.verdict,
++                  reason: authDecision.reason,
++                },
++                'Email dropped: sender not authenticated (EMAIL_AUTH_MODE=enforce)',
++              );
++              logEmailAuthentication({
++                from: from || 'unknown',
++                subject: emailSubject,
++                messageId: emailMessageId,
++                verdict: authDecision.verdict,
++                reason: authDecision.reason,
++                mode: emailAuth.mode,
++                blocked: true,
++              });
++              notAuthenticated();
++              return;
++            }
++
+             // (A missing sender never reaches this point when the allowlist
+             // is available — canProcessEmailSender already rejected it above.)
+             if (!allowlistState.available) {
+@@ -1187,6 +1259,14 @@ registerChannel('webhook', (opts) => {
+             }
+             processingEmails.add(dedupKey);
+             activeDedupKey = dedupKey;
++            logEmailAuthentication({
++              from,
++              subject: emailSubject,
++              messageId: emailMessageId,
++              verdict: authDecision.verdict,
++              reason: authDecision.reason,
++              mode: emailAuth.mode,
++            });
+ 
+             // Auto-reply / mailing-list loop detection. Drops Outlook OOO,
+             // Gmail vacation, list expansions, autoresponders BEFORE we
+@@ -1711,7 +1791,7 @@ registerChannel('webhook', (opts) => {
      ) {
        const meta = emailMetadata.get(jid);
  
@@ -11629,6 +12357,423 @@ index 0000000000000000000000000000000000000000..14bdca3ba3ffdd5a304e1c1b461e6da4
 +    expect(seen).toBeGreaterThanOrEqual(inConfig.length + 2);
 +  });
 +});
+diff --git a/src/email-auth.test.ts b/src/email-auth.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8e6bbf5d337d2fc595b1e161a4fda04be30cce13
+--- /dev/null
++++ b/src/email-auth.test.ts
+@@ -0,0 +1,237 @@
++import { describe, expect, it } from 'vitest';
++
++import {
++  emailAuthBlocks,
++  emailAuthVerdict,
++  readEmailAuthSettings,
++} from './email-auth.js';
++
++const PLATFORM = 'mx.platform.example';
++const CAMPUS = 'mx.campus.example.edu';
++const trusted = new Set([PLATFORM, CAMPUS]);
++
++function result(over: Record<string, unknown>) {
++  return {
++    source: 'platform',
++    authserv_id: PLATFORM,
++    spf: '',
++    spf_domain: '',
++    dkim: [],
++    dmarc: '',
++    dmarc_from: '',
++    arc: '',
++    ...over,
++  };
++}
++function record(results: unknown[], over: Record<string, unknown> = {}) {
++  return {
++    version: 1,
++    envelope_from_domain: 'mail.example.edu',
++    from_headers: 1,
++    from_mailboxes: 1,
++    results,
++    ...over,
++  };
++}
++const verdict = (auth: unknown, from = 'dlee@example.edu', t = trusted) =>
++  emailAuthVerdict(from, auth, t).verdict;
++
++describe('emailAuthVerdict', () => {
++  it('is "unknown" when the host trusts no server, whatever the payload says', () => {
++    expect(
++      emailAuthVerdict(
++        'dlee@example.edu',
++        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })]),
++        new Set(),
++      ),
++    ).toEqual({ verdict: 'unknown', reason: 'no trusted mail server is set' });
++  });
++
++  it('is "unknown" with no auth field, an empty one, or only servers the host does not trust', () => {
++    expect(verdict(undefined)).toBe('unknown');
++    expect(verdict('pass')).toBe('unknown');
++    expect(verdict(record([]))).toBe('unknown');
++    expect(
++      verdict(
++        record([result({ authserv_id: 'mx.other.example', dmarc: 'pass' })]),
++      ),
++    ).toBe('unknown');
++    // A record of a version this code does not know is not interpreted.
++    expect(verdict(record([result({ dmarc: 'pass' })], { version: 2 }))).toBe(
++      'unknown',
++    );
++  });
++
++  it('is "authenticated" on a DMARC pass from the platform', () => {
++    expect(verdict(record([result({ dmarc: 'pass' })]))).toBe('authenticated');
++    expect(
++      emailAuthVerdict(
++        'dlee@example.edu',
++        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })]),
++        trusted,
++      ),
++    ).toEqual({
++      verdict: 'authenticated',
++      reason: `DMARC pass for example.edu (${PLATFORM})`,
++    });
++  });
++
++  it('uses DMARC only: an aligned DKIM or SPF pass alone does not authenticate', () => {
++    expect(
++      verdict(
++        record([
++          result({
++            spf: 'pass',
++            spf_domain: 'example.edu',
++            dkim: [{ result: 'pass', domain: 'example.edu' }],
++            dmarc: 'none',
++          }),
++        ]),
++      ),
++    ).toBe('unauthenticated');
++    expect(
++      verdict(
++        record([result({ dkim: [{ result: 'pass', domain: 'example.edu' }] })]),
++      ),
++    ).toBe('unauthenticated');
++  });
++
++  it('is "unauthenticated" on a pass that does not cover the From domain', () => {
++    // DMARC was checked for another From domain, for a parent or a child
++    // of it, or for a domain the worker could not read.
++    for (const dmarc_from of [
++      'attacker.example.net',
++      'edu',
++      'dept.example.edu',
++      'invalid',
++    ]) {
++      expect(verdict(record([result({ dmarc: 'pass', dmarc_from })]))).toBe(
++        'unauthenticated',
++      );
++    }
++    expect(
++      verdict(
++        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })]),
++        'dlee@dept.example.edu',
++      ),
++    ).toBe('unauthenticated');
++    expect(verdict(record([result({ spf: 'fail', dmarc: 'fail' })]))).toBe(
++      'unauthenticated',
++    );
++    expect(verdict(record([result({ spf: 'none', dmarc: 'none' })]))).toBe(
++      'unauthenticated',
++    );
++  });
++
++  it('a forwarder must name the From domain it checked DMARC for', () => {
++    const forwarder = (over: Record<string, unknown>) =>
++      result({ source: 'forwarder', authserv_id: CAMPUS, ...over });
++    expect(verdict(record([forwarder({ dmarc: 'pass' })]))).toBe(
++      'unauthenticated',
++    );
++    expect(
++      verdict(
++        record([forwarder({ dmarc: 'pass', dmarc_from: 'example.edu' })]),
++      ),
++    ).toBe('authenticated');
++  });
++
++  it('forwarded mail: SPF and DMARC fail at the platform, the forwarder recorded a pass', () => {
++    const auth = record([
++      result({
++        spf: 'fail',
++        spf_domain: 'example.edu',
++        dkim: [{ result: 'pass', domain: 'campus.example.edu' }],
++        dmarc: 'fail',
++      }),
++      result({
++        source: 'forwarder',
++        authserv_id: CAMPUS,
++        spf: 'pass',
++        spf_domain: 'example.edu',
++        dmarc: 'pass',
++        dmarc_from: 'example.edu',
++      }),
++    ]);
++    expect(emailAuthVerdict('dlee@example.edu', auth, trusted)).toEqual({
++      verdict: 'authenticated',
++      reason: `DMARC pass for example.edu (${CAMPUS})`,
++    });
++    // A host that trusts only the platform does not count the forwarder.
++    expect(verdict(auth, 'dlee@example.edu', new Set([PLATFORM]))).toBe(
++      'unauthenticated',
++    );
++  });
++
++  it('is never "authenticated" when the message has two From headers or two addresses in From', () => {
++    const pass = [result({ dmarc: 'pass' })];
++    expect(verdict(record(pass, { from_headers: 2 }))).toBe('unauthenticated');
++    expect(verdict(record(pass, { from_mailboxes: 2 }))).toBe(
++      'unauthenticated',
++    );
++    expect(verdict(record(pass, { from_headers: undefined }))).toBe(
++      'unauthenticated',
++    );
++    expect(verdict(record(pass), 'not-an-address')).toBe('unauthenticated');
++  });
++});
++
++describe('settings', () => {
++  it('defaults to flag with no trusted server', () => {
++    const s = readEmailAuthSettings({});
++    expect(s.mode).toBe('flag');
++    expect([...s.trusted]).toEqual([]);
++    expect(s.unknown).toBe('block');
++  });
++
++  it('flag never blocks', () => {
++    const s = readEmailAuthSettings({
++      EMAIL_AUTH_TRUSTED_AUTHSERV_IDS: PLATFORM,
++    });
++    for (const v of ['authenticated', 'unauthenticated', 'unknown'] as const)
++      expect(emailAuthBlocks(s, v)).toBe(false);
++  });
++
++  it('enforce refuses to start with no trusted server', () => {
++    expect(() => readEmailAuthSettings({ EMAIL_AUTH_MODE: 'enforce' })).toThrow(
++      /needs EMAIL_AUTH_TRUSTED_AUTHSERV_IDS/,
++    );
++    expect(() =>
++      readEmailAuthSettings({
++        EMAIL_AUTH_MODE: 'enforce',
++        EMAIL_AUTH_UNKNOWN: 'allow',
++        EMAIL_AUTH_TRUSTED_AUTHSERV_IDS: ' , ',
++      }),
++    ).toThrow(/needs EMAIL_AUTH_TRUSTED_AUTHSERV_IDS/);
++  });
++
++  it('refuses a value it does not know', () => {
++    expect(() => readEmailAuthSettings({ EMAIL_AUTH_MODE: 'reject' })).toThrow(
++      /"flag" or "enforce"/,
++    );
++    expect(() =>
++      readEmailAuthSettings({ EMAIL_AUTH_UNKNOWN: 'maybe' }),
++    ).toThrow(/"block" or "allow"/);
++    expect(() =>
++      readEmailAuthSettings({ EMAIL_AUTH_TRUSTED_AUTHSERV_IDS: 'not a host' }),
++    ).toThrow(/host names/);
++  });
++
++  it('enforce blocks "unauthenticated" always and "unknown" by the sub-choice', () => {
++    const base = {
++      EMAIL_AUTH_MODE: 'Enforce',
++      EMAIL_AUTH_TRUSTED_AUTHSERV_IDS: `MX.Platform.Example, ${CAMPUS}`,
++    };
++    const block = readEmailAuthSettings(base);
++    expect([...block.trusted]).toEqual([PLATFORM, CAMPUS]);
++    expect(emailAuthBlocks(block, 'authenticated')).toBe(false);
++    expect(emailAuthBlocks(block, 'unauthenticated')).toBe(true);
++    expect(emailAuthBlocks(block, 'unknown')).toBe(true);
++    const allow = readEmailAuthSettings({
++      ...base,
++      EMAIL_AUTH_UNKNOWN: 'allow',
++    });
++    expect(emailAuthBlocks(allow, 'unauthenticated')).toBe(true);
++    expect(emailAuthBlocks(allow, 'unknown')).toBe(false);
++  });
++});
+diff --git a/src/email-auth.ts b/src/email-auth.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..37af8f9f4541742f6f450b5c05be3ceac84cf266
+--- /dev/null
++++ b/src/email-auth.ts
+@@ -0,0 +1,168 @@
++// Sender authentication for inbound email: one verdict per message.
++//
++// The allowlist names people by the address in the From header, and anyone
++// can write any From header. Whether a message really came from that
++// address is known only to a mail server that checked SPF, DKIM and DMARC
++// when it received the message. The intake worker (`inbound/src/auth.ts`)
++// decides which servers' results are read and puts them in the `auth` field
++// of its payload. This file decides what those results prove.
++//
++// The host takes the results from the payload and does not read the
++// committed original for them. Both come from the same place: the payload
++// is accepted only with the webhook secret, the original only when the
++// intake worker committed it, and the payload already carries the `from`
++// the allowlist is matched against. The original also lacks one fact the
++// rule needs, the envelope sender, which only the mail platform reports.
++// What the host does NOT take from the payload is the list of servers it
++// believes: that is EMAIL_AUTH_TRUSTED_AUTHSERV_IDS, set on the host.
++
++export type EmailAuthVerdict = 'authenticated' | 'unauthenticated' | 'unknown';
++export type EmailAuthMode = 'flag' | 'enforce';
++
++export interface EmailAuthSettings {
++  mode: EmailAuthMode;
++  /** authserv-ids whose results count. Empty: every verdict is "unknown". */
++  trusted: Set<string>;
++  /** enforce only: what happens to a message with the verdict "unknown". */
++  unknown: 'block' | 'allow';
++}
++
++export interface EmailAuthDecision {
++  verdict: EmailAuthVerdict;
++  /** One line for the audit log. No text from the message is in it. */
++  reason: string;
++}
++
++const HOST_NAME =
++  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
++
++/**
++ * Read the three settings. Throws on a value that is not one of the listed
++ * ones, and on "enforce" with no trusted server: that would block every
++ * message, or (with EMAIL_AUTH_UNKNOWN=allow) check nothing while saying
++ * "enforce".
++ */
++export function readEmailAuthSettings(
++  env: Record<string, string | undefined> = process.env,
++): EmailAuthSettings {
++  const mode = (env.EMAIL_AUTH_MODE || 'flag').trim().toLowerCase();
++  if (mode !== 'flag' && mode !== 'enforce') {
++    throw new Error('EMAIL_AUTH_MODE must be "flag" or "enforce"');
++  }
++  const trusted = new Set<string>();
++  for (const part of (env.EMAIL_AUTH_TRUSTED_AUTHSERV_IDS || '').split(',')) {
++    const id = part.trim().toLowerCase();
++    if (!id) continue;
++    if (!HOST_NAME.test(id)) {
++      throw new Error(
++        'EMAIL_AUTH_TRUSTED_AUTHSERV_IDS must be a comma-separated list of host names',
++      );
++    }
++    trusted.add(id);
++  }
++  const unknown = (env.EMAIL_AUTH_UNKNOWN || 'block').trim().toLowerCase();
++  if (unknown !== 'block' && unknown !== 'allow') {
++    throw new Error('EMAIL_AUTH_UNKNOWN must be "block" or "allow"');
++  }
++  if (mode === 'enforce' && trusted.size === 0) {
++    throw new Error(
++      'EMAIL_AUTH_MODE=enforce needs EMAIL_AUTH_TRUSTED_AUTHSERV_IDS: with no trusted mail server no message can be authenticated. Set the list, or use EMAIL_AUTH_MODE=flag.',
++    );
++  }
++  return { mode, trusted, unknown };
++}
++
++/** Start-up check: the host does not start on a setting that cannot work. */
++export function assertEmailAuthConfigured(): void {
++  readEmailAuthSettings();
++}
++
++function domainOfAddress(address: string): string {
++  const at = address.lastIndexOf('@');
++  const domain = at < 0 ? '' : address.slice(at + 1).toLowerCase();
++  return HOST_NAME.test(domain) ? domain : '';
++}
++
++function text(value: unknown): string {
++  return typeof value === 'string' ? value.toLowerCase() : '';
++}
++
++/**
++ * Turn the worker's record into one verdict for the address in `from`.
++ *
++ * - "unknown": no result from a server in `trusted` (no `auth` field, an
++ *   empty one, or only servers the host was not told to believe).
++ * - "authenticated": a trusted server reports a DMARC pass for the From
++ *   domain. SPF and DKIM results are recorded and not used: a pass of
++ *   either says nothing about the From header unless DMARC ties it to it,
++ *   so a sender whose domain publishes no DMARC record is never
++ *   "authenticated".
++ * - "unauthenticated": a trusted server reported, and no DMARC pass covers
++ *   the From domain.
++ */
++export function emailAuthVerdict(
++  from: unknown,
++  auth: unknown,
++  trusted: ReadonlySet<string>,
++): EmailAuthDecision {
++  if (trusted.size === 0) {
++    return { verdict: 'unknown', reason: 'no trusted mail server is set' };
++  }
++  const record =
++    auth && typeof auth === 'object' ? (auth as Record<string, unknown>) : {};
++  const counted = (Array.isArray(record.results) ? record.results : [])
++    .filter(
++      (r): r is Record<string, unknown> =>
++        !!r && typeof r === 'object' && trusted.has(text(r.authserv_id)),
++    )
++    .slice(0, 4);
++  if (record.version !== 1 || counted.length === 0) {
++    return {
++      verdict: 'unknown',
++      reason: 'the intake sent no result from a trusted mail server',
++    };
++  }
++  const ids = counted.map((r) => text(r.authserv_id)).join(', ');
++  const fromDomain = domainOfAddress(text(from));
++  if (!fromDomain) {
++    return { verdict: 'unauthenticated', reason: 'no usable From address' };
++  }
++  if (record.from_headers !== 1 || record.from_mailboxes !== 1) {
++    return {
++      verdict: 'unauthenticated',
++      reason: `the message does not have exactly one From address (checked by ${ids})`,
++    };
++  }
++  for (const r of counted) {
++    const id = text(r.authserv_id);
++    const dmarcFrom = text(r.dmarc_from);
++    // Only DMARC is used: it is the one check that is about the From
++    // header. The mail platform checks it for the From header of the
++    // message it hands over and may not name the domain; a forwarder must
++    // name it. A named domain must be the From domain exactly.
++    if (
++      text(r.dmarc) === 'pass' &&
++      (dmarcFrom ? dmarcFrom === fromDomain : text(r.source) === 'platform')
++    ) {
++      return {
++        verdict: 'authenticated',
++        reason: `DMARC pass for ${fromDomain} (${id})`,
++      };
++    }
++  }
++  return {
++    verdict: 'unauthenticated',
++    reason: `no DMARC pass covers ${fromDomain} (checked by ${ids})`,
++  };
++}
++
++/** enforce: true when a message with this verdict must not be processed. */
++export function emailAuthBlocks(
++  settings: EmailAuthSettings,
++  verdict: EmailAuthVerdict,
++): boolean {
++  if (settings.mode !== 'enforce') return false;
++  if (verdict === 'authenticated') return false;
++  if (verdict === 'unknown') return settings.unknown === 'block';
++  return true;
++}
 diff --git a/src/email-loop-detection.test.ts b/src/email-loop-detection.test.ts
 index 2cebf4e35cf4b6500ebd78e26721ebc5d26875a9..8642d3d554849b08b07488b6f565306c575c9e63 100644
 --- a/src/email-loop-detection.test.ts
@@ -15723,7 +16868,7 @@ index 0000000000000000000000000000000000000000..8d5ed4ff95e4e60490caee25e48a6e1e
 +  );
 +}
 diff --git a/src/index.ts b/src/index.ts
-index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b018be45f66 100644
+index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..c09712dc1edac462570fc67732c8deff4f594fa7 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -13,6 +13,13 @@ import {
@@ -15799,7 +16944,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
    loadDeliveryState,
    saveDeliveryState,
  } from './delivery-state.js';
-@@ -121,6 +132,13 @@ import {
+@@ -121,10 +132,18 @@ import {
    type SentAuditArgs,
  } from './delivery-processor.js';
  import { stripMarkdown } from './email-format.js';
@@ -15813,7 +16958,12 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
  import {
    shutdownOutboundEmailQueue,
    startOutboundEmailQueue,
-@@ -134,7 +152,7 @@ let messageLoopRunning = false;
+ } from './outbound-email.js';
++import { assertEmailAuthConfigured } from './email-auth.js';
+ 
+ let lastTimestamp = '';
+ let sessions: Record<string, string> = {};
+@@ -134,7 +153,7 @@ let messageLoopRunning = false;
  
  const channels: Channel[] = [];
  const queue = new GroupQueue();
@@ -15822,7 +16972,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
    logger.error({ text }, 'Alert channel is not initialized');
    // Never resolve silently: an unsent alert must not look delivered to the
    // shortfall-replay layer, which deletes an alert only on confirmation.
-@@ -583,18 +601,22 @@ function auditPreparedSent(args: SentAuditArgs): AuditWriteResult {
+@@ -583,18 +602,22 @@ function auditPreparedSent(args: SentAuditArgs): AuditWriteResult {
              );
              return 'write-failed' as const;
            }
@@ -15857,7 +17007,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
          })();
  
    if (auditResult === 'written') {
-@@ -647,6 +669,9 @@ async function runAgent(
+@@ -647,6 +670,9 @@ async function runAgent(
      if (output.result !== null && output.result !== undefined) {
        sawUsableResult = true;
      }
@@ -15867,7 +17017,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
      if (onOutput) await onOutput(output);
    };
  
-@@ -689,6 +714,9 @@ async function runAgent(
+@@ -689,6 +715,9 @@ async function runAgent(
      .join('\n\n');
  
    try {
@@ -15877,7 +17027,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
      const imageAttachments =
        agentMode === 'normal' ? parseImageReferences(prompt) : [];
  
-@@ -866,16 +894,52 @@ function ensureContainerSystemRunning(): void {
+@@ -866,16 +895,55 @@ function ensureContainerSystemRunning(): void {
  }
  
  async function main(): Promise<void> {
@@ -15891,6 +17041,9 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
 +
 +  // OUTBOUND_MAIL_PROVIDER=smtp: only an encrypted, authenticated submission.
 +  assertOutboundMailConfigured();
++
++  // EMAIL_AUTH_MODE=enforce needs a trusted mail server to be named.
++  assertEmailAuthConfigured();
 +
 +  // The host-owned repository must not sit inside the agent's checkout.
 +  const hostRepoProblem = hostRepoPlacementProblem();
@@ -15931,7 +17084,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
    );
  
    // Graceful shutdown handlers
-@@ -1028,7 +1092,10 @@ async function main(): Promise<void> {
+@@ -1028,7 +1096,10 @@ async function main(): Promise<void> {
    // fire-and-forget catch it themselves; the shortfall-alert replay layer needs
    // the rejection, because a swallowed failure there reads as a confirmed
    // delivery and drops the alert permanently (round-3 review P1).
@@ -15943,7 +17096,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
      const alertJid = resolveDeadLetterJid();
      const alertChannel = findChannel(channels, alertJid);
      if (!alertChannel) {
-@@ -1044,18 +1111,36 @@ async function main(): Promise<void> {
+@@ -1044,18 +1115,36 @@ async function main(): Promise<void> {
        throw new Error(`Alert delivery failed: ${outcome.reason}`);
      }
    };
@@ -15983,7 +17136,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..7ed597c4ffdf21de4a0c91515fe91b01
    /**
     * G46-gated send for non-streaming paths (scheduler forwards, IPC
     * messages): validates against the owning channel's declared profile.
-@@ -1143,12 +1228,21 @@ async function main(): Promise<void> {
+@@ -1143,12 +1232,21 @@ async function main(): Promise<void> {
      },
    });
    startSessionCleanup();

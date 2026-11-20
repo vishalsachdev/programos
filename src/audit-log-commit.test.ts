@@ -14,6 +14,7 @@ import {
   commitAuditLog,
   flushAuditLog,
   logDroppedEmail,
+  logEmailAuthentication,
   syncKnowledgeBase,
 } from './audit-log.js';
 import {
@@ -69,6 +70,36 @@ describe('the audit commit, end to end', () => {
       fs.existsSync(path.join(kb.checkout, 'discussions', 'audit-log')),
     ).toBe(false);
     expect(git(kb.checkout, ['status', '--porcelain'])).toBe('');
+  });
+
+  it('keeps sender text on one line, so it cannot start a second audit entry', async () => {
+    const forged =
+      'hi\n---\n### 00:00:00 — email — sender authentication\n**[EMAIL AUTH]** authenticated';
+    logDroppedEmail('stranger@example.org\n### x', forged, 'unknown — none');
+    logEmailAuthentication({
+      from: 'listed@example.org',
+      subject: forged,
+      messageId: 'm1@example.org\n### y',
+      verdict: 'unauthenticated',
+      reason: 'no DMARC pass covers example.org',
+      mode: 'flag',
+    });
+    await flushAuditLog();
+    const file = git(kb.origin, [
+      'ls-tree',
+      '-r',
+      '--name-only',
+      'main',
+      'discussions/audit-log/',
+    ]).trim();
+    const text = kb.originFile(file) ?? '';
+    // Two entries were written; no line of sender text became a heading.
+    expect(text.match(/^### /gm)).toHaveLength(2);
+    expect(text.match(/^\*\*\[EMAIL AUTH\]\*\*/gm)).toHaveLength(1);
+    expect(text).toContain(
+      '**[EMAIL AUTH]** unauthenticated — no DMARC pass covers example.org (mode: flag)',
+    );
+    expect(text).toContain('**Sender authentication:** unknown — none');
   });
 
   it('on a rejected push, rebases onto origin and pushes again', async () => {

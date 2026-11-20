@@ -6,6 +6,7 @@ Subject: Réunion du comité — budget 2027
 Message-ID: <multi-1119@example.edu>
 In-Reply-To: <earlier-1118@example.org>
 References: <first-1117@example.edu> <earlier-1118@example.org>
+X-Intake-Authentication: no trusted result
 
 # Réunion du comité — budget 2027
 

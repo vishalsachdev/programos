@@ -1,7 +1,10 @@
 /**
  * Step: groups — Fetch group metadata from messaging platforms, write to DB.
- * WhatsApp requires an upfront sync (Baileys groupFetchAllParticipating).
- * Other channels discover group names at runtime — this step auto-skips for them.
+ * Kept from the upstream framework (NanoClaw) for its WhatsApp channel, which
+ * needs an upfront sync (Baileys groupFetchAllParticipating). ProgramOS does not
+ * ship that channel: email, Telegram and web chat groups are registered with the
+ * `register` step (AGENTS.md, "First start"), so on a ProgramOS install this
+ * step skips.
  * Replaces 05-sync-groups.sh + 05b-list-groups.sh
  */
 import { execSync } from 'child_process';
@@ -66,14 +69,17 @@ async function listGroups(limit: number): Promise<void> {
 }
 
 async function syncGroups(projectRoot: string): Promise<void> {
-  // Only WhatsApp needs an upfront group sync; other channels resolve names at runtime.
-  // Detect WhatsApp by checking for auth credentials on disk.
+  // Only the upstream WhatsApp channel needs an upfront group sync. ProgramOS
+  // has no WhatsApp channel, so this normally skips. Detected by auth
+  // credentials on disk.
   const authDir = path.join(projectRoot, 'store', 'auth');
   const hasWhatsAppAuth =
     fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0;
 
   if (!hasWhatsAppAuth) {
-    logger.info('WhatsApp auth not found — skipping group sync');
+    logger.info(
+      'No group sync needed: ProgramOS registers its channels with the register step (AGENTS.md, "First start")',
+    );
     emitStatus('SYNC_GROUPS', {
       BUILD: 'skipped',
       SYNC: 'skipped',

@@ -1,0 +1,29 @@
+name: Template or docs fix
+description: A doc, a template file or a settings example is wrong, unclear or differs from the code.
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The code is the source of truth. Where a doc and the code differ, the code is right and the doc needs the fix.
+        Never paste mail content, real names, addresses or secrets here.
+  - type: input
+    id: file
+    attributes:
+      label: File and section
+      description: For example `AGENTS.md`, "First start", or `templates/program-repo/program/EMAIL_ALLOWLIST.md`.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong
+      description: Quote the text. If it differs from the code, name the code file and the line or function.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: What it should say
+    validations:
+      required: false

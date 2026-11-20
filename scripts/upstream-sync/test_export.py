@@ -29,6 +29,8 @@ class InsideTest(unittest.TestCase):
 class OwnedTest(unittest.TestCase):
     def test_owned_paths(self):
         for p in ('README.md', 'templates/program-repo/CLAUDE.md', 'docs/design/x.md', 'scripts/upstream-sync/export.py',
+                  'CONTRIBUTING.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md',
+                  '.github/ISSUE_TEMPLATE/config.yml', '.github/PULL_REQUEST_TEMPLATE.md',
                   'docs/data-handling.md', 'docs/illinois/data-handling.md'):
             self.assertTrue(export.owned(p), p)
 

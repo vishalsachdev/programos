@@ -11800,10 +11800,10 @@ index 1bc7682f260e68f54a133d475b47d8a4a39a0b29..530293a3fccb64948f8adc22851f1d94
    it('a corrupt database file fails closed and is left byte-identical', async () => {
 diff --git a/src/outbound-email-retry-wake.test.ts b/src/outbound-email-retry-wake.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..21b225f87f6833a07e6e62207fe7ea09acad6f0a
+index 0000000000000000000000000000000000000000..114cb8347bbc5ecd70d95489a3a5a2560eac9a77
 --- /dev/null
 +++ b/src/outbound-email-retry-wake.test.ts
-@@ -0,0 +1,567 @@
+@@ -0,0 +1,646 @@
 +/**
 + * The lane's wake timer for retryable rows (scheduleLaneRetry).
 + *
@@ -12250,6 +12250,85 @@ index 0000000000000000000000000000000000000000..21b225f87f6833a07e6e62207fe7ea09
 +    expect(mockFetch.mock.calls.length).toBe(calls);
 +  });
 +
++  it('a store read that fails right after the throw on the last attempt still dead-letters, with no sixth send', async () => {
++    await sendThrows();
++    const realGet = store.get.bind(store);
++    let armed = false;
++    vi.spyOn(store, 'get').mockImplementation((id: string) => {
++      if (armed) {
++        armed = false;
++        throw new Error('database is locked');
++      }
++      return realGet(id);
++    });
++    // The send throws; on the final permitted attempt the queue's catch block
++    // then reads the row, and that read fails.
++    mockFetch.mockImplementation(() => {
++      if (realGet('throw:read')?.attempts === MAX_OUTBOX_ATTEMPTS - 1) {
++        armed = true;
++      }
++      throw new Error('bad payload');
++    });
++    await sendOutboundEmailResult(EMAIL, {
++      ...OPTIONS,
++      deliveryId: 'throw:read',
++    });
++    await vi.advanceTimersByTimeAsync(0);
++    for (let n = 1; n < MAX_OUTBOX_ATTEMPTS; n++) {
++      await vi.advanceTimersByTimeAsync(retryBackoffMs(n));
++    }
++    expect(armed).toBe(false); // the read really did fail
++    expect(store.get('throw:read')).toMatchObject({
++      status: 'dead-letter',
++      attempts: MAX_OUTBOX_ATTEMPTS,
++    });
++    const calls = mockFetch.mock.calls.length;
++    expect(calls).toBe(MAX_OUTBOX_ATTEMPTS);
++    await vi.advanceTimersByTimeAsync(60 * 60_000);
++    expect(mockFetch.mock.calls.length).toBe(calls);
++    expect(vi.getTimerCount()).toBe(0);
++  });
++
++  it('a store that cannot record the last throw leaves no sixth send and raises the alert', async () => {
++    await sendThrows();
++    const { reportDeliveryShortfall } = await import('./delivery-gate.js');
++    const realGet = store.get.bind(store);
++    const realFinalize = store.finalize.bind(store);
++    let failing = false;
++    vi.spyOn(store, 'get').mockImplementation((id: string) => {
++      if (failing) throw new Error('database is locked');
++      return realGet(id);
++    });
++    vi.spyOn(store, 'finalize').mockImplementation((...a) => {
++      if (failing) throw new Error('database is locked');
++      return realFinalize(...a);
++    });
++    mockFetch.mockImplementation(() => {
++      if (realGet('throw:store')?.attempts === MAX_OUTBOX_ATTEMPTS - 1) {
++        failing = true;
++      }
++      throw new Error('bad payload');
++    });
++    await sendOutboundEmailResult(EMAIL, {
++      ...OPTIONS,
++      deliveryId: 'throw:store',
++    });
++    await vi.advanceTimersByTimeAsync(0);
++    for (let n = 1; n < MAX_OUTBOX_ATTEMPTS; n++) {
++      await vi.advanceTimersByTimeAsync(retryBackoffMs(n));
++    }
++    expect(mockFetch.mock.calls.length).toBe(MAX_OUTBOX_ATTEMPTS);
++    expect(reportDeliveryShortfall).toHaveBeenCalledWith(
++      expect.objectContaining({
++        reason: expect.stringContaining('dead letter not recorded'),
++      }),
++    );
++    // The store comes back: the row is not sent again.
++    failing = false;
++    await vi.advanceTimersByTimeAsync(60 * 60_000);
++    expect(mockFetch.mock.calls.length).toBe(MAX_OUTBOX_ATTEMPTS);
++  });
++
 +  it('a send that throws once and then succeeds is delivered on the second attempt after the first backoff', async () => {
 +    await sendThrows(1);
 +    const first = await sendOutboundEmailResult(EMAIL, {
@@ -12372,7 +12451,7 @@ index 0000000000000000000000000000000000000000..21b225f87f6833a07e6e62207fe7ea09
 +  });
 +});
 diff --git a/src/outbound-email.ts b/src/outbound-email.ts
-index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..94063f60a96ec90d51739ba16cd25ddac35b4c31 100644
+index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..51241db66deb82c692c1be9ef3739a198ffa549d 100644
 --- a/src/outbound-email.ts
 +++ b/src/outbound-email.ts
 @@ -28,6 +28,7 @@ import {
@@ -12392,7 +12471,103 @@ index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..94063f60a96ec90d51739ba16cd25dda
    const plainText = stripMarkdown(gatedBody);
  
    const providerDeadlineMs = getProviderTimeoutMs();
-@@ -1160,7 +1161,32 @@ async function processRow(
+@@ -960,6 +961,9 @@ async function deadLetterRow(
+   outbox: OutboxStore,
+   row: OutboxRow,
+   reason: string,
++  // false: the row is a stale copy (its state could not be read); if the
++  // compare-and-set finds it unclaimed, do not write the copy back over it.
++  overwriteIfUnclaimed = true,
+ ): Promise<OutboundEmailResult> {
+   const result: OutboundEmailResult = {
+     status: 'failed',
+@@ -967,6 +971,11 @@ async function deadLetterRow(
+     retryable: false,
+   };
+   const finalized = outbox.finalize(row.deliveryId, result, nowMs());
++  if (!finalized && !overwriteIfUnclaimed) {
++    throw new Error(
++      `dead-letter of ${row.deliveryId} found it no longer claimed; state unknown`,
++    );
++  }
+   if (!finalized) {
+     // Defensive fallback if the row was not in 'claimed'.
+     row.status = 'dead-letter';
+@@ -1045,6 +1054,55 @@ function rowTerminalResult(row: OutboxRow): OutboundEmailResult | undefined {
+   return undefined;
+ }
+ 
++/**
++ * Attempts a queue throw consumed but the store could not record (the store
++ * was failing at that moment). Added to the stored count when the budget is
++ * checked, so a failing store cannot buy a row extra sends; a row with the
++ * whole budget here is never sent again by this process.
++ */
++const unrecordedAttempts = new Map<string, number>();
++
++function alertBudgetUnrecorded(row: OutboxRow, reason: string): void {
++  try {
++    reportDeliveryShortfall({
++      channel: 'email',
++      context: `${row.sendOptions.sourceGroup}: ${row.email.subject || '(no subject)'}`,
++      intended: row.intended,
++      sent: [],
++      missed: row.intended,
++      reason,
++      sourceGroup: row.sendOptions.sourceGroup,
++    });
++  } catch (err) {
++    logger.error({ err, deliveryId: row.deliveryId }, 'Budget alert failed');
++  }
++}
++
++async function retireSpentRow(
++  outbox: OutboxStore,
++  row: OutboxRow,
++): Promise<OutboundEmailResult> {
++  const reason = 'outbox-max-attempts-exceeded: attempt not recorded';
++  try {
++    const result = await deadLetterRow(outbox, row, reason, false);
++    unrecordedAttempts.delete(row.deliveryId);
++    return result;
++  } catch (err) {
++    logger.error(
++      { err, deliveryId: row.deliveryId },
++      'Attempt budget spent and the dead letter could not be recorded; the row is not sent again',
++    );
++    alertBudgetUnrecorded(row, `${reason}; dead letter not recorded`);
++    const result: OutboundEmailResult = {
++      status: 'failed',
++      reason,
++      retryable: false,
++    };
++    resolveWaiters(row.deliveryId, result);
++    return result;
++  }
++}
++
+ async function processRow(
+   outbox: OutboxStore,
+   row: OutboxRow,
+@@ -1078,6 +1136,17 @@ async function processRow(
+       return terminal;
+     }
+ 
++    // A row whose attempt budget is spent but whose dead letter could not be
++    // recorded is never sent again; try the record once more.
++    if (
++      unrecordedAttempts.has(current.deliveryId) &&
++      (current.attempts ?? 0) +
++        (unrecordedAttempts.get(current.deliveryId) ?? 0) >=
++        MAX_OUTBOX_ATTEMPTS
++    ) {
++      return await retireSpentRow(outbox, current);
++    }
++
+     if (maxAgeExceeded(current)) {
+       return await deadLetterRow(outbox, current, 'outbox-item-expired');
+     }
+@@ -1160,7 +1229,69 @@ async function processRow(
        reason: `send-queue-exception: ${err instanceof Error ? err.message : String(err)}`,
        retryable: true,
      };
@@ -12401,32 +12576,69 @@ index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..94063f60a96ec90d51739ba16cd25dda
 +    // the same budget and gets the same backoff, and the last one dead-letters
 +    // the row. Only a row this process still holds claimed is counted; one that
 +    // is already terminal or released (finalize would no-op) is left alone.
-+    // The queue has no abort signal, and shutdown resets claims instead of
-+    // throwing, so no throw is exempt.
++    // A row whose state cannot be read is taken to be still claimed: this
++    // process claimed it to get here, and every write below is a
++    // compare-and-set on 'claimed'. The queue has no abort signal, and
++    // shutdown resets claims instead of throwing, so no throw is exempt.
 +    let stored: OutboxRow | undefined;
++    let unreadable = false;
 +    try {
 +      stored = outbox.get(row.deliveryId);
-+    } catch {
-+      stored = undefined;
-+    }
-+    const attempts = ((stored ?? row).attempts ?? 0) + 1;
-+    if (stored?.status === 'claimed' && attempts >= MAX_OUTBOX_ATTEMPTS) {
-+      return await deadLetterRow(
-+        outbox,
-+        stored,
-+        `outbox-max-attempts-exceeded: ${result.reason}`,
++    } catch (readErr) {
++      unreadable = true;
++      logger.error(
++        { err: readErr, deliveryId: row.deliveryId },
++        'Could not read outbox row after a send error; treating it as claimed',
 +      );
 +    }
-+    outbox.finalize(
-+      row.deliveryId,
-+      result,
-+      nowMs(),
-+      nowMs() + retryBackoffMs(attempts),
-+    );
++    const base = stored ?? row;
++    const held = unreadable || stored?.status === 'claimed';
++    const carried = unrecordedAttempts.get(row.deliveryId) ?? 0;
++    const attempts = (base.attempts ?? 0) + carried + 1;
++    try {
++      if (held && attempts >= MAX_OUTBOX_ATTEMPTS) {
++        const dead = await deadLetterRow(
++          outbox,
++          base,
++          `outbox-max-attempts-exceeded: ${result.reason}`,
++          !unreadable,
++        );
++        unrecordedAttempts.delete(row.deliveryId);
++        return dead;
++      }
++      outbox.finalize(
++        row.deliveryId,
++        result,
++        nowMs(),
++        nowMs() + retryBackoffMs(attempts),
++      );
++      unrecordedAttempts.delete(row.deliveryId);
++    } catch (writeErr) {
++      // The store is failing. Remember the attempt here so the budget still
++      // holds, and make sure the row is not sent past it.
++      logger.error(
++        { err: writeErr, deliveryId: row.deliveryId, attempts },
++        'Could not record the outcome of a failed send; the attempt is counted in memory',
++      );
++      unrecordedAttempts.set(row.deliveryId, carried + 1);
++      if (attempts >= MAX_OUTBOX_ATTEMPTS) {
++        alertBudgetUnrecorded(
++          base,
++          `outbox-max-attempts-exceeded: ${result.reason}; dead letter not recorded`,
++        );
++        const spent: OutboundEmailResult = {
++          status: 'failed',
++          reason: `outbox-max-attempts-exceeded: ${result.reason}`,
++          retryable: false,
++        };
++        resolveWaiters(row.deliveryId, spent);
++        return spent;
++      }
++    }
      resolveWaiters(row.deliveryId, result);
      return result;
    } finally {
-@@ -1247,6 +1273,8 @@ function enqueue(outbox: OutboxStore, row: OutboxRow): void {
+@@ -1247,6 +1378,8 @@ function enqueue(outbox: OutboxStore, row: OutboxRow): void {
      .catch((err) => {
        logger.error({ err, lane }, 'Outbound email lane tail error');
        laneQueue.inFlight.delete(row.deliveryId);
@@ -12435,7 +12647,7 @@ index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..94063f60a96ec90d51739ba16cd25dda
      });
  }
  
-@@ -1276,33 +1304,65 @@ function enqueueNextPending(lane: OutboxLane, outbox: OutboxStore): void {
+@@ -1276,33 +1409,65 @@ function enqueueNextPending(lane: OutboxLane, outbox: OutboxStore): void {
  const laneRetryTimers = new Map<OutboxLane, ReturnType<typeof setTimeout>>();
  
  /**
@@ -12517,7 +12729,7 @@ index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..94063f60a96ec90d51739ba16cd25dda
  }
  
  function ensureQueueStarted(): void {
-@@ -1325,7 +1385,7 @@ function ensureQueueStarted(): void {
+@@ -1325,7 +1490,7 @@ function ensureQueueStarted(): void {
    outbox.compact(getOutboxRetentionMs(), now);
    lastCompactionAt = now;
  
@@ -12526,6 +12738,14 @@ index 6f4d55edf50e516f2e1fcd3fba810c10cc5c934a..94063f60a96ec90d51739ba16cd25dda
      enqueueNextPending(lane, outbox);
    }
  }
+@@ -1574,6 +1739,7 @@ export function _resetOutboundEmailQueueForTests(store?: OutboxStore): void {
+ 
+   for (const timer of laneRetryTimers.values()) clearTimeout(timer);
+   laneRetryTimers.clear();
++  unrecordedAttempts.clear();
+   for (const laneQueue of lanes.values()) {
+     laneQueue.tail = Promise.resolve();
+     laneQueue.inFlight.clear();
 diff --git a/src/pm2-kill-timeout.test.ts b/src/pm2-kill-timeout.test.ts
 index 8019ce15fb64ddda781ed919f41684e0e9ed972f..fd74067486dc6623b98692ccffaf659cfda202f2 100644
 --- a/src/pm2-kill-timeout.test.ts

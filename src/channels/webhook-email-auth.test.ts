@@ -252,6 +252,8 @@ function authFrom(result: Record<string, unknown>) {
     envelope_from_domain: 'mail.example.edu',
     from_headers: 1,
     from_mailboxes: 1,
+    from_display_commas: false,
+    platform_status: 'read',
     results: [
       {
         source: 'platform',
@@ -471,6 +473,26 @@ describe('sender authentication on inbound email', () => {
       const allowed = await deliver(payload);
       expect(JSON.parse(allowed.body)).not.toHaveProperty('skipped');
       expect(onMessage).toHaveBeenCalledOnce();
+    });
+
+    it('drops a message whose platform header could not be relied on, also with EMAIL_AUTH_UNKNOWN=allow', async () => {
+      vi.stubEnv('EMAIL_AUTH_UNKNOWN', 'allow');
+      const payload = commitNew('enforce-rejected');
+      payload.auth = {
+        ...authFrom({}),
+        platform_status: 'rejected',
+        results: [],
+      };
+      const res = await deliver(payload);
+      expect(JSON.parse(res.body)).toMatchObject({
+        skipped: true,
+        reason: 'sender not authenticated',
+      });
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(audit.logEmailAuthentication.mock.calls[0][0]).toMatchObject({
+        verdict: 'unauthenticated',
+        blocked: true,
+      });
     });
 
     it('sends no access-closed reply to an unauthenticated address that is not on the list', async () => {

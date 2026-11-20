@@ -48,7 +48,13 @@ before any setting is changed.
    passes SPF for the domain from step 5? Anyone with a campus account can
    pass that proof by sending straight to the bot; decide whether that is
    acceptable before naming the forwarder.
-7. Set the values, keep `EMAIL_AUTH_MODE=flag`, and read the `[EMAIL AUTH]`
+7. Run the offline check on that same `.eml`
+   (`npx tsx inbound/scripts/check-message.ts`, see `inbound/README.md`, "Check
+   one real message offline") with the names from steps 3 to 5. It prints what
+   the bot reads from the two lines and the verdict. If it says a pass names no
+   From domain, see `EMAIL_AUTH_REQUIRE_FROM_DOMAIN` in
+   `docs/setup-reference.md`.
+8. Set the values, keep `EMAIL_AUTH_MODE=flag`, and read the `[EMAIL AUTH]`
    entries in the audit log for a week of real mail before considering
    `enforce`.
 

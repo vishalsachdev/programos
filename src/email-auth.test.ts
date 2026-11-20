@@ -29,6 +29,8 @@ function record(results: unknown[], over: Record<string, unknown> = {}) {
     envelope_from_domain: 'mail.example.edu',
     from_headers: 1,
     from_mailboxes: 1,
+    from_display_commas: false,
+    platform_status: results.length > 0 ? 'read' : 'absent',
     results,
     ...over,
   };
@@ -47,23 +49,114 @@ describe('emailAuthVerdict', () => {
     ).toEqual({ verdict: 'unknown', reason: 'no trusted mail server is set' });
   });
 
-  it('is "unknown" with no auth field, an empty one, or only servers the host does not trust', () => {
+  it('is "unknown" only when nobody was asked or the platform wrote nothing', () => {
+    // An intake that sends no record.
     expect(verdict(undefined)).toBe('unknown');
-    expect(verdict('pass')).toBe('unknown');
-    expect(verdict(record([]))).toBe('unknown');
-    expect(
-      verdict(
-        record([result({ authserv_id: 'mx.other.example', dmarc: 'pass' })]),
-      ),
-    ).toBe('unknown');
-    // A record of a version this code does not know is not interpreted.
-    expect(verdict(record([result({ dmarc: 'pass' })], { version: 2 }))).toBe(
-      'unknown',
+    expect(verdict(null)).toBe('unknown');
+    // The worker has no platform set; the platform wrote no header.
+    expect(verdict(record([], { platform_status: 'unset' }))).toBe('unknown');
+    expect(verdict(record([], { platform_status: 'absent' }))).toBe('unknown');
+  });
+
+  it('is "unauthenticated" when the worker read results and none is from a server the host trusts', () => {
+    const decision = emailAuthVerdict(
+      'dlee@example.edu',
+      record([
+        result({
+          authserv_id: 'mx.other.example',
+          dmarc: 'pass',
+          dmarc_from: 'example.edu',
+        }),
+      ]),
+      trusted,
+    );
+    expect(decision.verdict).toBe('unauthenticated');
+    expect(decision.reason).toMatch(/EMAIL_AUTH_TRUSTED_AUTHSERV_IDS/);
+    // The host trusts the forwarder only. Mail sent straight to the bot
+    // carries the platform's result alone and must not come out "unknown"
+    // where the forwarded copy is "unauthenticated".
+    const forwarderOnly = new Set([CAMPUS]);
+    const direct = record([
+      result({ dmarc: 'fail', dmarc_from: 'example.edu' }),
+    ]);
+    const forwarded = record([
+      result({ dmarc: 'fail', dmarc_from: 'example.edu' }),
+      result({
+        source: 'forwarder',
+        authserv_id: CAMPUS,
+        dmarc: 'fail',
+        dmarc_from: 'example.edu',
+      }),
+    ]);
+    expect(verdict(direct, 'dlee@example.edu', forwarderOnly)).toBe(
+      'unauthenticated',
+    );
+    expect(verdict(forwarded, 'dlee@example.edu', forwarderOnly)).toBe(
+      'unauthenticated',
     );
   });
 
-  it('is "authenticated" on a DMARC pass from the platform', () => {
-    expect(verdict(record([result({ dmarc: 'pass' })]))).toBe('authenticated');
+  it('is "unauthenticated", not "unknown", when a header with the platform name was there and was not read', () => {
+    const decision = emailAuthVerdict(
+      'dlee@example.edu',
+      record([], { platform_status: 'rejected' }),
+      trusted,
+    );
+    expect(decision.verdict).toBe('unauthenticated');
+    expect(decision.reason).toMatch(/could not be relied on/);
+  });
+
+  it('is "unauthenticated" on a record it cannot interpret', () => {
+    expect(verdict('pass')).toBe('unauthenticated');
+    expect(verdict([])).toBe('unauthenticated');
+    // A version this code does not know.
+    expect(
+      verdict(
+        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })], {
+          version: 2,
+        }),
+      ),
+    ).toBe('unauthenticated');
+    expect(verdict(record([], { results: 'none' }))).toBe('unauthenticated');
+    expect(verdict(record([], { platform_status: 'maybe' }))).toBe(
+      'unauthenticated',
+    );
+    // A status and a result list that contradict each other.
+    const pass = [result({ dmarc: 'pass', dmarc_from: 'example.edu' })];
+    expect(verdict(record(pass, { platform_status: 'absent' }))).toBe(
+      'unauthenticated',
+    );
+    expect(verdict(record(pass, { platform_status: 'unset' }))).toBe(
+      'unauthenticated',
+    );
+    expect(verdict(record([], { platform_status: 'read' }))).toBe(
+      'unauthenticated',
+    );
+    expect(verdict(record([null], { platform_status: 'read' }))).toBe(
+      'unauthenticated',
+    );
+  });
+
+  it('a worker from before platform_status: an empty result list is "unauthenticated"', () => {
+    // That worker sent an empty list both when the platform wrote nothing
+    // and when its header was unusable.
+    const old = (results: unknown[]) => ({
+      version: 1,
+      envelope_from_domain: 'mail.example.edu',
+      from_headers: 1,
+      from_mailboxes: 1,
+      results,
+    });
+    const decision = emailAuthVerdict('dlee@example.edu', old([]), trusted);
+    expect(decision.verdict).toBe('unauthenticated');
+    expect(decision.reason).toMatch(/inbound\/ worker/);
+    // Its results are still read.
+    expect(
+      verdict(old([result({ dmarc: 'pass', dmarc_from: 'example.edu' })])),
+    ).toBe('authenticated');
+  });
+
+  it('is "authenticated" on a DMARC pass from the platform that names the From domain', () => {
     expect(
       emailAuthVerdict(
         'dlee@example.edu',
@@ -74,6 +167,68 @@ describe('emailAuthVerdict', () => {
       verdict: 'authenticated',
       reason: `DMARC pass for example.edu (${PLATFORM})`,
     });
+  });
+
+  it('a pass that names no From domain does not authenticate unless the deployer allows it for the platform', () => {
+    const bare = record([result({ dmarc: 'pass' })]);
+    const strict = emailAuthVerdict('dlee@example.edu', bare, trusted);
+    expect(strict.verdict).toBe('unauthenticated');
+    expect(strict.reason).toMatch(/names no From domain/);
+    expect(
+      emailAuthVerdict('dlee@example.edu', bare, trusted, {
+        requireFromDomain: false,
+      }).verdict,
+    ).toBe('authenticated');
+    // Never for a forwarder, whatever the setting.
+    expect(
+      emailAuthVerdict(
+        'dlee@example.edu',
+        record([
+          result({ dmarc: 'fail' }),
+          result({ source: 'forwarder', authserv_id: CAMPUS, dmarc: 'pass' }),
+        ]),
+        trusted,
+        { requireFromDomain: false },
+      ).verdict,
+    ).toBe('unauthenticated');
+    // A domain the worker could not read is not "no domain".
+    expect(
+      emailAuthVerdict(
+        'dlee@example.edu',
+        record([result({ dmarc: 'pass', dmarc_from: 'invalid' })]),
+        trusted,
+        { requireFromDomain: false },
+      ).verdict,
+    ).toBe('unauthenticated');
+  });
+
+  it('a From header with commas in the display name counts only with a pass that names the From domain', () => {
+    const commas = { from_mailboxes: 2, from_display_commas: true };
+    expect(
+      verdict(
+        record([result({ dmarc: 'pass', dmarc_from: 'example.edu' })], commas),
+      ),
+    ).toBe('authenticated');
+    // No named domain: not even where the deployer accepts that otherwise.
+    expect(
+      emailAuthVerdict(
+        'dlee@example.edu',
+        record([result({ dmarc: 'pass' })], commas),
+        trusted,
+        { requireFromDomain: false },
+      ).verdict,
+    ).toBe('unauthenticated');
+    // The flag does not excuse any other count, or a second From header.
+    const pass = [result({ dmarc: 'pass', dmarc_from: 'example.edu' })];
+    expect(
+      verdict(record(pass, { from_mailboxes: 3, from_display_commas: true })),
+    ).toBe('unauthenticated');
+    expect(verdict(record(pass, { ...commas, from_headers: 2 }))).toBe(
+      'unauthenticated',
+    );
+    expect(
+      verdict(record(pass, { from_mailboxes: 2, from_display_commas: 'yes' })),
+    ).toBe('unauthenticated');
   });
 
   it('uses DMARC only: an aligned DKIM or SPF pass alone does not authenticate', () => {
@@ -182,6 +337,23 @@ describe('settings', () => {
     expect(s.mode).toBe('flag');
     expect([...s.trusted]).toEqual([]);
     expect(s.unknown).toBe('block');
+    expect(s.requireFromDomain).toBe(true);
+  });
+
+  it('EMAIL_AUTH_REQUIRE_FROM_DOMAIN takes the usual on and off words and nothing else', () => {
+    for (const on of ['true', 'TRUE', '1', 'on', ' true '])
+      expect(
+        readEmailAuthSettings({ EMAIL_AUTH_REQUIRE_FROM_DOMAIN: on })
+          .requireFromDomain,
+      ).toBe(true);
+    for (const off of ['false', '0', 'Off'])
+      expect(
+        readEmailAuthSettings({ EMAIL_AUTH_REQUIRE_FROM_DOMAIN: off })
+          .requireFromDomain,
+      ).toBe(false);
+    expect(() =>
+      readEmailAuthSettings({ EMAIL_AUTH_REQUIRE_FROM_DOMAIN: 'no thanks' }),
+    ).toThrow(/EMAIL_AUTH_REQUIRE_FROM_DOMAIN/);
   });
 
   it('flag never blocks', () => {

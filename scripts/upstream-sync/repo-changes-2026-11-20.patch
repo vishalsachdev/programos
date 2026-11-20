@@ -15798,10 +15798,10 @@ index 0000000000000000000000000000000000000000..21b225f87f6833a07e6e62207fe7ea09
 +});
 diff --git a/src/outbound-email-smtp.test.ts b/src/outbound-email-smtp.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..82df2c1fb3646882cc43491abac679491a717ed0
+index 0000000000000000000000000000000000000000..a95629209e154b46b12e13898259559b69c5d984
 --- /dev/null
 +++ b/src/outbound-email-smtp.test.ts
-@@ -0,0 +1,1385 @@
+@@ -0,0 +1,1386 @@
 +/**
 + * The SMTP provider (OUTBOUND_MAIL_PROVIDER=smtp), through the REAL outbound
 + * path: outbox, delivery gate, recipient rules, audit log. The mail server is
@@ -17127,10 +17127,11 @@ index 0000000000000000000000000000000000000000..82df2c1fb3646882cc43491abac67949
 +  });
 +
 +  it('the request to the HTTP provider is byte for byte what it was', async () => {
++    const deliveryId = 'default-bytes-1';
 +    const result = await sendOutboundEmailResult(
 +      { ...EMAIL, cc: COLLEAGUE },
 +      options({
-+        deliveryId: 'default-bytes-1',
++        deliveryId,
 +        inReplyTo: '<parent-message-1@example.edu>',
 +        deferAudit: true,
 +      }),
@@ -17144,7 +17145,7 @@ index 0000000000000000000000000000000000000000..82df2c1fb3646882cc43491abac67949
 +    expect(init.headers).toEqual({
 +      Authorization: 'Bearer re_test',
 +      'Content-Type': 'application/json',
-+      'Idempotency-Key': 'default-bytes-1',
++      'Idempotency-Key': deliveryId,
 +    });
 +    const messageId = JSON.parse(init.body).headers['Message-ID'];
 +    expect(messageId).toMatch(/^<outreach-[0-9a-f]{32}@[a-z0-9.-]+>$/);

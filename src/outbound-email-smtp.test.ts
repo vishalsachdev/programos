@@ -1323,10 +1323,11 @@ describe('default provider, with nothing new set', () => {
   });
 
   it('the request to the HTTP provider is byte for byte what it was', async () => {
+    const deliveryId = 'default-bytes-1';
     const result = await sendOutboundEmailResult(
       { ...EMAIL, cc: COLLEAGUE },
       options({
-        deliveryId: 'default-bytes-1',
+        deliveryId,
         inReplyTo: '<parent-message-1@example.edu>',
         deferAudit: true,
       }),
@@ -1340,7 +1341,7 @@ describe('default provider, with nothing new set', () => {
     expect(init.headers).toEqual({
       Authorization: 'Bearer re_test',
       'Content-Type': 'application/json',
-      'Idempotency-Key': 'default-bytes-1',
+      'Idempotency-Key': deliveryId,
     });
     const messageId = JSON.parse(init.body).headers['Message-ID'];
     expect(messageId).toMatch(/^<outreach-[0-9a-f]{32}@[a-z0-9.-]+>$/);

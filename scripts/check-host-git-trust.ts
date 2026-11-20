@@ -26,6 +26,7 @@ import {
   KB_BRANCH,
   probeUploadPackIsolation,
 } from '../src/host-repo.js';
+import { redactOriginCredential } from '../src/origin-credential.js';
 import { getProgramRepoPath } from '../src/program-repo.js';
 
 let failed = false;
@@ -45,6 +46,20 @@ function hostGit(args: string[], credentialed = false): string {
 /** The origin address without a password or token. */
 function redact(url: string): string {
   return url.replace(/\/\/[^/@]*@/, '//***@');
+}
+
+/**
+ * What git printed, without the origin's credential. `origin.url` below holds
+ * none (expectedOriginUrl), so no command line here does either; git gets it
+ * through the environment that hostGitOptions builds.
+ */
+function gitSaid(err: unknown): string {
+  return redactOriginCredential(
+    String((err as { stderr?: string }).stderr || err),
+    [process.env.PROGRAM_ORIGIN_URL],
+  )
+    .trim()
+    .slice(0, 200);
 }
 
 const network = process.argv.includes('--network');
@@ -179,14 +194,7 @@ if (network && hostReady && origin.url) {
     hostGit(['ls-remote', '--heads', '--', origin.url, KB_BRANCH], true);
     line('PASS', 'the host credential reads the origin');
   } catch (err) {
-    line(
-      'FAIL',
-      `the host credential cannot read the origin: ${String(
-        (err as { stderr?: string }).stderr || err,
-      )
-        .trim()
-        .slice(0, 200)}`,
-    );
+    line('FAIL', `the host credential cannot read the origin: ${gitSaid(err)}`);
   }
   try {
     hostGit(
@@ -202,14 +210,7 @@ if (network && hostReady && origin.url) {
     );
     line('PASS', 'the host credential can push to the origin (dry run)');
   } catch (err) {
-    line(
-      'NOTE',
-      `push --dry-run did not succeed: ${String(
-        (err as { stderr?: string }).stderr || err,
-      )
-        .trim()
-        .slice(0, 200)}`,
-    );
+    line('NOTE', `push --dry-run did not succeed: ${gitSaid(err)}`);
   }
 } else if (!network) {
   line(

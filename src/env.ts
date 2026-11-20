@@ -41,3 +41,77 @@ export function readEnvFile(keys: string[]): Record<string, string> {
 
   return result;
 }
+
+/** Where the host reads its secrets from. */
+export function envFilePath(): string {
+  return path.join(process.cwd(), '.env');
+}
+
+/**
+ * Write `.env`. A new file is created readable by its owner only (0600),
+ * whatever the umask; an existing file keeps the mode it has. For the setup
+ * steps that create or rewrite the file.
+ */
+export function writeEnvFile(file: string, content: string): void {
+  const isNew = !fs.existsSync(file);
+  fs.writeFileSync(file, content, isNew ? { mode: 0o600 } : {});
+  if (isNew) fs.chmodSync(file, 0o600);
+}
+
+export interface EnvFilePermissionProblem {
+  file: string;
+  /** The permission bits found, in octal ("644"). */
+  mode: string;
+  /** The command that fixes it. */
+  fix: string;
+}
+
+/**
+ * `.env` holds every secret of the host. This says whether another user of
+ * the machine can read it: any permission bit for the group or for others.
+ * Null when the file is private, missing, or on Windows (no such bits).
+ */
+export function envFilePermissionProblem(
+  file = envFilePath(),
+): EnvFilePermissionProblem | null {
+  if (process.platform === 'win32') return null;
+  let mode: number;
+  try {
+    mode = fs.statSync(file).mode & 0o777;
+  } catch {
+    return null;
+  }
+  if ((mode & 0o077) === 0) return null;
+  return { file, mode: mode.toString(8), fix: `chmod 600 ${file}` };
+}
+
+/**
+ * The startup check. With a `.env` that the group or others can read it logs
+ * one error naming the file and the command to fix it. The host still
+ * starts, so an upgrade does not stop a deployment that was running; set
+ * REQUIRE_PRIVATE_ENV_FILE=true (in the process environment or in `.env`) to
+ * make it refuse to start instead.
+ */
+export function checkEnvFilePermissions(file = envFilePath()): void {
+  const problem = envFilePermissionProblem(file);
+  if (!problem) return;
+  const strict =
+    (
+      process.env.REQUIRE_PRIVATE_ENV_FILE ||
+      readEnvFile(['REQUIRE_PRIVATE_ENV_FILE']).REQUIRE_PRIVATE_ENV_FILE ||
+      ''
+    )
+      .trim()
+      .toLowerCase() === 'true';
+  const text =
+    `${problem.file} holds every secret of this host and is readable by other users of this machine ` +
+    `(mode ${problem.mode}). Fix it with: ${problem.fix}`;
+  if (strict)
+    throw new Error(
+      `${text} (refusing to start: REQUIRE_PRIVATE_ENV_FILE=true)`,
+    );
+  logger.error(
+    { file: problem.file, mode: problem.mode, fix: problem.fix },
+    `${text} (set REQUIRE_PRIVATE_ENV_FILE=true to make the host refuse to start in this state)`,
+  );
+}

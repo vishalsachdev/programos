@@ -6,6 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 
+import { writeEnvFile } from '../src/env.js';
 import { isValidTimezone } from '../src/timezone.js';
 import { logger } from '../src/logger.js';
 import { emitStatus } from './status.js';
@@ -49,9 +50,9 @@ export async function run(args: string[]): Promise<void> {
       } else {
         content = content.trimEnd() + `\nTZ=${resolvedTz}\n`;
       }
-      fs.writeFileSync(envFile, content);
+      writeEnvFile(envFile, content);
     } else {
-      fs.writeFileSync(envFile, `TZ=${resolvedTz}\n`);
+      writeEnvFile(envFile, `TZ=${resolvedTz}\n`);
     }
     logger.info({ timezone: resolvedTz }, 'Set TZ in .env');
   }

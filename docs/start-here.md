@@ -47,9 +47,9 @@ Some parts are new and have not yet been run against live services: the mail int
 
 For **Try it**:
 
-- a laptop, and a coding agent on it;
+- a laptop, and a coding agent on it. The laptop must be able to run two free programs, Docker and Node; your agent checks for them and tells you how to install what is missing;
 - an account with an AI provider that serves Claude, such as Anthropic (check the provider's current pricing);
-- a Telegram account;
+- a Telegram account, and a bot token: a secret that Telegram gives you when you create a bot through its BotFather chat. Your agent walks you through it;
 - an account at a git host such as GitHub, for a private place to keep the record.
 
 For a **Pilot**, also:

@@ -55,13 +55,13 @@ The Foundry path and the failover were tested against fake servers only. [`model
 
 | Key | Read from | When nothing is set | Meaning | Choice |
 |---|---|---|---|---|
-| `WEBHOOK_SECRET` | .env | The mail listener does not start | Shared secret that the inbound mail intake service sends. Marked REQUIRED for email | 3, 5 |
+| `WEBHOOK_SECRET` | .env or process | The HTTP listener does not start: no inbound mail, no web chat, no optional webhooks | Shared secret that the inbound mail intake service sends. Marked REQUIRED for email | 3, 5 |
 | `WEBHOOK_HOST` | process | All interfaces | The listener address. Set `127.0.0.1` and use a reverse proxy | 3, 8 |
 | `WEBHOOK_PORT` | process | `3003` | The listener port | 8 |
 | `CREDENTIAL_PROXY_PORT` | process | `3001` | The port of the credential proxy that containers call | 8 |
 | `TELEGRAM_BOT_TOKEN` | .env | No Telegram channel, and no alerts on the Telegram route | The Telegram bot's token | 3, 4 |
 | `TELEGRAM_ADMIN_CHAT_ID` | .env | None | The admin's Telegram chat, for alerts | 3, 4 |
-| `WEBCHAT_SECRET` | .env | No web chat | The web chat's shared secret. Anyone who holds it is answered | 3 |
+| `WEBCHAT_SECRET` | .env | No web chat | The web chat's shared secret. Anyone who holds it is answered. Web chat is reachable only when `WEBHOOK_SECRET` is set too, because that channel starts the one HTTP listener | 3 |
 | `ADMIN_ALERT_ROUTE` | .env | `telegram` | Where operator alerts go: `telegram`, `email`, or `telegram,email` | 4 |
 | `ADMIN_ALERT_TEST` | process | No test | `1` sends one test alert on each enabled route at startup. First start only; remove it after | 4 |
 | `DEAD_LETTER_ALERT_JID` | .env or process | The operator's Telegram chat (`tg-avery@program`, a placeholder) | The chat id that receives dead-letter and delivery-shortfall alerts on the Telegram route | 4 |

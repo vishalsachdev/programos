@@ -322,7 +322,10 @@ does nothing for them. `docs/setup-reference.md` has the full table.
     of people and no cap. The reference deployment retired it. Treat it as untested.
 - *Code default:* a channel runs when its settings are present (`WEBHOOK_SECRET`
   for the mail listener, `TELEGRAM_BOT_TOKEN` for Telegram, `WEBCHAT_SECRET` for
-  web chat).
+  web chat). **Web chat also needs `WEBHOOK_SECRET`:** the one HTTP listener is
+  started by the mail webhook channel (`src/channels/webhook.ts`), and web chat
+  only adds its `/chat` route to it. With `WEBCHAT_SECRET` alone the channel
+  reports ready and no port is open.
 - *First pilot:* email for the team; Telegram for the admin only, if the admin
   wants it; web chat off.
 - *Settings:* `WEBHOOK_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`,

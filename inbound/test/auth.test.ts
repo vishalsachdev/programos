@@ -248,6 +248,16 @@ describe('which headers are read', () => {
       from: 'From: "dlee@example.edu" <other@example.org>',
     });
     expect(group.payload.auth.from_mailboxes).toBe(2);
+    // The same address as display name and as mailbox is one address:
+    // some mail clients write it that way.
+    const same = await auth([], {
+      from: 'From: "DLee@example.edu" <dlee@example.edu>',
+    });
+    expect(same.payload.auth.from_mailboxes).toBe(1);
+    const list = await auth([], {
+      from: 'From: dlee@example.edu, other@example.org',
+    });
+    expect(list.payload.auth.from_mailboxes).toBe(2);
   });
 });
 

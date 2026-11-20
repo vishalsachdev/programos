@@ -233,7 +233,7 @@ The payload field, for a message the platform checked:
 }
 ```
 
-`from_mailboxes` counts every `@` in the From header, so a display name that holds an address counts as a second one, and the host then never calls the message authenticated.
+`from_mailboxes` counts the different addresses in the From header, display name included. A display name that holds another address than the mailbox makes it 2, and the host then never calls the message authenticated; the same address written twice counts once.
 
 ## Limits
 

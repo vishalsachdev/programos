@@ -226,9 +226,14 @@ export async function buildIntake(
   const auth = readAuth(
     email.headers,
     envelope.from,
-    // Counted on the header text, so a group or a second address the parser
-    // drops still counts.
-    (fromHeader.match(/@/g) ?? []).length,
+    // Distinct addresses in the header text, so a group or a second address
+    // the parser drops still counts. The same address as display name and
+    // as mailbox ("a@example.edu" <a@example.edu>) is one.
+    new Set(
+      (fromHeader.match(/[^\s<>"'(),;:]+@[^\s<>"'(),;:]+/g) ?? []).map((a) =>
+        a.toLowerCase(),
+      ),
+    ).size,
     trust,
   );
   const toBoxes = mailboxes(email.to);

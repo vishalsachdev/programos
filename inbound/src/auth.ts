@@ -48,8 +48,8 @@ export interface AuthRecord {
   /** Domain of the SMTP envelope sender, from the platform (not a header). */
   envelope_from_domain: string;
   /**
-   * How many From header fields the message has, and how many mailboxes the
-   * first one holds. Anything but 1 and 1 means two readers can disagree
+   * How many From header fields the message has, and how many different
+   * addresses the first one holds (display name included). Anything but 1 and 1 means two readers can disagree
    * about who the sender is, and the host then never calls it authenticated.
    */
   from_headers: number;

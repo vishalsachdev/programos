@@ -30,7 +30,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 1. **Stop and ask the user at every choice marked ASK.** Do not guess.
 2. **Do not deploy, send mail, or contact any service** until the user says so.
 3. Keep the tests passing: `npm ci && npm run typecheck && npm test`. The baseline
-   is 2,213 passing tests (1,761 from the source, 452 added here). One timing test
+   is 2,214 passing tests (1,761 from the source, 453 added here). One timing test
    in `src/channels/webhook-ingest-context.test.ts` can fail under load; rerun it
    alone before you treat it as real.
 4. Change placeholders consistently in code AND tests. A half-changed name fails tests.
@@ -513,9 +513,10 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   the reply sensor off, a private repo, web chat off. Take that page to the
   people who approve data use, and write each answer in `setup-decisions.md`.
 - *Not tested:* the prune has run only against data made by the tests, never
-  on a deployment with real data. Deleting old messages shortens what the bot
-  can recall of a chat; deleting old Telegram files means it can no longer
-  open them.
+  on a deployment with real data. Deleting old messages and old conversation
+  copies shortens what the bot can recall; deleting old Telegram files means
+  it can no longer open them. Closed approvals keep an empty record, so an old
+  request is never mailed to an approver twice.
 - *Settings:* `RETENTION_MESSAGES_DAYS`, `RETENTION_ROUTED_APPROVALS_DAYS`,
   `RETENTION_TASKS_DAYS`, `RETENTION_TRANSCRIPT_ARCHIVE_DAYS`,
   `RETENTION_UPLOADS_DAYS`, `RETENTION_WORKING_CONTEXT_ARCHIVE_DAYS`,

@@ -32,7 +32,6 @@ import {
   unlinkFileInTree,
 } from './host-fs-safety.js';
 import { logger } from './logger.js';
-import { parseRoutedApprovals } from './routed-approvals.js';
 import { approvedEmailOutreachTaskId } from './send-email-capability.js';
 import { pruneWorkingContextArchives } from './working-context.js';
 
@@ -141,8 +140,6 @@ export interface RetentionPaths {
 export interface RetentionDeps {
   /** The host's main SQLite store (store/messages.db). */
   db: Database.Database;
-  /** `discussions/OPEN_QUESTIONS.md` as the host reads it, or null. */
-  readOpenQuestions: () => Promise<string | null>;
   now?: () => number;
   paths?: Partial<RetentionPaths>;
   /** Prefix of a bot message stored before the is_bot_message column. */
@@ -177,6 +174,15 @@ function deleteRowids(
   db.transaction((ids: number[]) => {
     for (const id of ids) stmt.run(id);
   })(rowids);
+}
+
+/**
+ * Decide and delete in one write transaction, so a second process (the
+ * running host, when this is the script) cannot change a row between the
+ * two. A dry run only reads, and its database may be opened read-only.
+ */
+function atomic<T>(db: Database.Database, dryRun: boolean, fn: () => T): T {
+  return dryRun ? fn() : db.transaction(fn).immediate();
 }
 
 interface ChatCursor {
@@ -259,6 +265,17 @@ function pruneMessages(
   dryRun: boolean,
   botPrefix: string,
 ): StoreResult {
+  return atomic(db, dryRun, () =>
+    planAndPruneMessages(db, cutoffMs, dryRun, botPrefix),
+  );
+}
+
+function planAndPruneMessages(
+  db: Database.Database,
+  cutoffMs: number,
+  dryRun: boolean,
+  botPrefix: string,
+): StoreResult {
   const cursors = chatCursors(db, botPrefix);
   if (!cursors) return { deleted: 0, skipped: 'saved cursors unreadable' };
   const cutoff = new Date(cutoffMs).toISOString();
@@ -306,47 +323,53 @@ function pendingMessageText(db: Database.Database, botPrefix: string): string {
 }
 
 /**
- * `routed_approvals`: rows closed or removed before the window. Kept
- * whatever their age:
+ * `routed_approvals`: rows closed or removed before the window have their
+ * content cleared: title, sender, approver, subject, the quoted words, the
+ * trusted addresses and the hold reason. The row itself stays, with its key
+ * (the path of the mail file), status and dates. It has to: the scan creates
+ * a row for any open entry in OPEN_QUESTIONS.md it has no row for, and a new
+ * row mails the approver again. A kept, empty row answers "already handled"
+ * exactly as the full row did, whenever the entry is reopened or re-added.
+ * Not touched, whatever their age:
  *  - a row still waiting on someone (any status but closed or removed);
- *  - a row with a notice to the operator still owed;
- *  - a row with a relay handed to the outbox and not yet recorded;
- *  - a row whose entry is still open in OPEN_QUESTIONS.md. The scan creates
- *    a row for an open entry it has no row for, and a new row sends a new
- *    relay to the approver; the old row is what stops that.
- * When OPEN_QUESTIONS.md cannot be read, nothing is deleted.
+ *  - a row with a notice to the operator still owed (the notice quotes it);
+ *  - a row with a relay handed to the outbox and not yet recorded.
+ * `deleted` counts the rows cleared.
  */
-async function pruneRoutedApprovals(
+function pruneRoutedApprovals(
   db: Database.Database,
   cutoffMs: number,
   dryRun: boolean,
-  readOpenQuestions: () => Promise<string | null>,
-): Promise<StoreResult> {
-  let md: string | null = null;
-  try {
-    md = await readOpenQuestions();
-  } catch {
-    md = null;
-  }
-  if (md === null)
-    return { deleted: 0, skipped: 'OPEN_QUESTIONS.md unavailable' };
-  const openKeys = new Set(
-    parseRoutedApprovals(md)
-      .filter((e) => e.open)
-      .map((e) => e.key),
-  );
-  const rows = db
-    .prepare(
-      `SELECT rowid AS rowid, key FROM routed_approvals
-       WHERE status IN ('closed', 'removed')
-         AND closed_at IS NOT NULL AND closed_at < ?
-         AND pending_notice IS NULL
-         AND relay_submitted <= relay_count`,
-    )
-    .all(cutoffMs) as { rowid: number; key: string }[];
-  const rowids = rows.filter((r) => !openKeys.has(r.key)).map((r) => r.rowid);
-  if (!dryRun) deleteRowids(db, 'routed_approvals', rowids);
-  return { deleted: rowids.length, keptNeeded: rows.length - rowids.length };
+): StoreResult {
+  return atomic(db, dryRun, () => {
+    const rowids = (
+      db
+        .prepare(
+          `SELECT rowid AS rowid FROM routed_approvals
+           WHERE status IN ('closed', 'removed')
+             AND closed_at IS NOT NULL AND closed_at < ?
+             AND pending_notice IS NULL
+             AND relay_submitted <= relay_count
+             AND (title <> '' OR sender <> '' OR sender_name IS NOT NULL
+               OR approver_email IS NOT NULL OR approver_name IS NOT NULL
+               OR subject IS NOT NULL OR quotes_json <> '[]'
+               OR trusted_addresses_json <> '[]' OR hold_reason IS NOT NULL)`,
+        )
+        .all(cutoffMs) as { rowid: number }[]
+    ).map((r) => r.rowid);
+    if (!dryRun) {
+      const clear = db.prepare(
+        `UPDATE routed_approvals
+         SET title = '', sender = '', sender_name = NULL,
+             approver_email = NULL, approver_name = NULL, subject = NULL,
+             quotes_json = '[]', trusted_addresses_json = '[]',
+             hold_reason = NULL
+         WHERE rowid = ?`,
+      );
+      for (const id of rowids) clear.run(id);
+    }
+    return { deleted: rowids.length };
+  });
 }
 
 /**
@@ -355,10 +378,24 @@ async function pruneRoutedApprovals(
  * paused task is never deleted, and neither are the run records of a task
  * that still exists and ran inside the window. The exceptions digest reads
  * the last seven days of run records, so the window used here is never
- * shorter than that. The approved email-outreach task is never deleted:
- * only the operator ends it. The count is tasks plus run records.
+ * shorter than that. The newest run record is always kept, with its task:
+ * `/health` reports how long ago the scheduler last ran from it. The
+ * approved email-outreach task is never deleted: only the operator ends it.
+ * The count is tasks plus run records.
  */
 function pruneTasks(
+  db: Database.Database,
+  cutoffMs: number,
+  now: number,
+  dryRun: boolean,
+  protectedTaskIds: string[],
+): StoreResult {
+  return atomic(db, dryRun, () =>
+    planAndPruneTasks(db, cutoffMs, now, dryRun, protectedTaskIds),
+  );
+}
+
+function planAndPruneTasks(
   db: Database.Database,
   cutoffMs: number,
   now: number,
@@ -368,6 +405,12 @@ function pruneTasks(
   const cutoff = new Date(
     Math.min(cutoffMs, now - EXCEPTIONS_REPORT_LOOKBACK_MS),
   ).toISOString();
+  const newestRun = db
+    .prepare(
+      `SELECT rowid AS rowid, task_id FROM task_run_logs
+       ORDER BY run_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get() as { rowid: number; task_id: string } | undefined;
   const tasks = (
     db
       .prepare(
@@ -377,7 +420,9 @@ function pruneTasks(
            AND COALESCE(last_run, created_at) GLOB '${ISO_GLOB}'`,
       )
       .all(cutoff) as { rowid: number; id: string }[]
-  ).filter((t) => !protectedTaskIds.includes(t.id));
+  ).filter(
+    (t) => !protectedTaskIds.includes(t.id) && t.id !== newestRun?.task_id,
+  );
   const goneTasks = new Set(tasks.map((t) => t.id));
   const runs = (
     db
@@ -385,8 +430,9 @@ function pruneTasks(
       .all() as { rowid: number; task_id: string; run_at: string }[]
   ).filter(
     (r) =>
-      goneTasks.has(r.task_id) ||
-      (r.run_at < cutoff && /^\d{4}-\d{2}-\d{2}T/.test(r.run_at)),
+      r.rowid !== newestRun?.rowid &&
+      (goneTasks.has(r.task_id) ||
+        (r.run_at < cutoff && /^\d{4}-\d{2}-\d{2}T/.test(r.run_at))),
   );
   if (!dryRun) {
     // Run records first: they reference the task.
@@ -471,8 +517,11 @@ const HOST_IMAGE_RE = /^img-\d+-[a-z0-9]{1,4}\.jpg$/;
 
 /**
  * `groups/<group>/conversations/`: the Markdown transcript copies written
- * at compaction, by the name the hook gives them. Nothing reads them back.
- * Other files in that folder, and other folders, are not touched.
+ * at compaction, by the name the hook gives them. The host never reads them;
+ * the agent is told it may search them, and loses what is deleted. A file
+ * the agent itself saved there under a `YYYY-MM-DD-<name>.md` name is
+ * deleted too. Other files in that folder, and other folders, are not
+ * touched.
  */
 function pruneTranscriptArchives(
   groupsDir: string,
@@ -544,14 +593,17 @@ function pruneUploads(
 
 /**
  * `store/evals.db`, table `response_evals`: one row of scores and a short
- * note per reply. Only the dashboard reads it. The file is opened only when
- * it exists; this never creates it.
+ * note per reply. The dashboard and the weekly quality report read it; the
+ * report reads seven days, so the window used here is never shorter than
+ * that. The file is opened only when it exists; this never creates it.
  */
 function pruneEvals(
   storeDir: string,
   cutoffMs: number,
+  now: number,
   dryRun: boolean,
 ): StoreResult {
+  cutoffMs = Math.min(cutoffMs, now - EXCEPTIONS_REPORT_LOOKBACK_MS);
   const dbPath = path.join(storeDir, 'evals.db');
   if (!fs.existsSync(dbPath)) return { deleted: 0 };
   assertSafeDbPath(dbPath); // store/ is writable for the main group
@@ -567,16 +619,18 @@ function pruneEvals(
       )
       .get();
     if (!hasTable) return { deleted: 0 };
-    const rowids = (
-      evals
-        .prepare(
-          `SELECT rowid AS rowid FROM response_evals
-           WHERE timestamp < ? AND timestamp GLOB '${ISO_GLOB}'`,
-        )
-        .all(new Date(cutoffMs).toISOString()) as { rowid: number }[]
-    ).map((r) => r.rowid);
-    if (!dryRun) deleteRowids(evals, 'response_evals', rowids);
-    return { deleted: rowids.length };
+    return atomic(evals, dryRun, () => {
+      const rowids = (
+        evals
+          .prepare(
+            `SELECT rowid AS rowid FROM response_evals
+             WHERE timestamp < ? AND timestamp GLOB '${ISO_GLOB}'`,
+          )
+          .all(new Date(cutoffMs).toISOString()) as { rowid: number }[]
+      ).map((r) => r.rowid);
+      if (!dryRun) deleteRowids(evals, 'response_evals', rowids);
+      return { deleted: rowids.length };
+    });
   } finally {
     evals.close();
   }
@@ -640,9 +694,7 @@ export async function runRetention(
     pruneUploads(deps.db, paths, c, dryRun, botPrefix),
   );
   await run('messages', (c) => pruneMessages(deps.db, c, dryRun, botPrefix));
-  await run('routedApprovals', (c) =>
-    pruneRoutedApprovals(deps.db, c, dryRun, deps.readOpenQuestions),
-  );
+  await run('routedApprovals', (c) => pruneRoutedApprovals(deps.db, c, dryRun));
   const protectedTaskIds = deps.protectedTaskIds ?? [
     approvedEmailOutreachTaskId(),
   ];
@@ -656,7 +708,7 @@ export async function runRetention(
     const { deleted } = pruneWorkingContextArchives(c, dryRun, paths.dataDir);
     return { deleted };
   });
-  await run('evals', (c) => pruneEvals(paths.storeDir, c, dryRun));
+  await run('evals', (c) => pruneEvals(paths.storeDir, c, now, dryRun));
   await run('ipcErrors', (c) => pruneIpcErrors(paths.dataDir, c, dryRun));
 
   // Counts and store names only: never a sender, a subject or a file name.

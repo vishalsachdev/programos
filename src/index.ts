@@ -84,7 +84,6 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import { readRetentionConfig, startRetention } from './retention.js';
-import { OPEN_QUESTIONS_PATH } from './routed-approvals.js';
 import { startSessionCleanup } from './session-cleanup.js';
 import { startDeliveryCheck } from './email-delivery-check.js';
 import { startSchedulerLoop } from './task-scheduler.js';
@@ -1206,10 +1205,7 @@ async function main(): Promise<void> {
   });
   startSessionCleanup();
   // Off unless a RETENTION_*_DAYS setting is above 0 (src/retention.ts).
-  startRetention(retentionConfig, {
-    db: getDatabase(),
-    readOpenQuestions: () => getRepoReader().readFileAsync(OPEN_QUESTIONS_PATH),
-  });
+  startRetention(retentionConfig, { db: getDatabase() });
   startDeliveryCheck({
     timezone: TIMEZONE,
     // Late-bound: sendDeadLetterAlert is reassigned once channels connect.

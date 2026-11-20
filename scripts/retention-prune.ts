@@ -25,14 +25,12 @@ import Database from 'better-sqlite3';
 
 import { STORE_DIR } from '../src/config.js';
 import { assertSafeDbPath } from '../src/host-fs-safety.js';
-import { getRepoReader } from '../src/repo-reader.js';
 import {
   readRetentionConfig,
   RETENTION_SETTINGS,
   runRetention,
   type RetentionStore,
 } from '../src/retention.js';
-import { OPEN_QUESTIONS_PATH } from '../src/routed-approvals.js';
 
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
@@ -65,15 +63,7 @@ async function main(): Promise<number> {
   const db = new Database(dbPath, { fileMustExist: true, readonly: dryRun });
   db.pragma('busy_timeout = 5000');
   try {
-    const report = await runRetention(
-      config,
-      {
-        db,
-        readOpenQuestions: () =>
-          getRepoReader().readFileAsync(OPEN_QUESTIONS_PATH),
-      },
-      { dryRun },
-    );
+    const report = await runRetention(config, { db }, { dryRun });
     console.log(dryRun ? 'DRY RUN: nothing was deleted.' : 'APPLIED.');
     for (const store of Object.keys(RETENTION_SETTINGS) as RetentionStore[]) {
       const key = RETENTION_SETTINGS[store];

@@ -11,8 +11,11 @@ import {
   _initTestDatabase,
   createTask,
   getDatabase,
+  getLastTaskRunAt,
   getMessagesSince,
+  getRoutedApproval,
   insertRoutedApproval,
+  listOpenRoutedApprovals,
   logTaskRun,
   setRouterState,
   storeChatMetadata,
@@ -66,12 +69,10 @@ const ALL_30: RetentionConfig = {
 
 let base: string;
 let outside: string;
-let openQuestions: string | null;
 
 function deps(): RetentionDeps {
   return {
     db: getDatabase(),
-    readOpenQuestions: async () => openQuestions,
     now: () => NOW,
     botPrefix: BOT,
     paths: {
@@ -256,6 +257,13 @@ function snapshot(): string {
     'task_run_logs',
   ])
     out.push(`${t} rows=${count(t)}`);
+  out.push(
+    JSON.stringify(
+      getDatabase()
+        .prepare('SELECT * FROM routed_approvals ORDER BY key')
+        .all(),
+    ),
+  );
   return out.join('\n');
 }
 
@@ -269,7 +277,6 @@ function populate(): void {
   setCursors(1, { 'tg:1': 1 });
   approval('discussions/raw/a.md');
   approval('discussions/raw/b.md', { closedAt: NOW - 2 * DAY });
-  openQuestions = '## Routed Approvals\n';
   task('t-done-old', 'completed', 60);
   run('t-done-old', 60);
   task('t-active', 'active', 60);
@@ -302,7 +309,6 @@ beforeEach(() => {
   fs.mkdirSync(outside);
   for (const d of ['store', 'data', 'groups']) fs.mkdirSync(path.join(base, d));
   _initTestDatabase();
-  openQuestions = '## Routed Approvals\n';
 });
 
 afterEach(() => {
@@ -545,66 +551,86 @@ describe('messages', () => {
 
 describe('routed approvals', () => {
   const only = { ...OFF, routedApprovals: 30 };
+  const stored = (key: string) =>
+    getDatabase()
+      .prepare('SELECT * FROM routed_approvals WHERE key = ?')
+      .get(key) as Record<string, unknown>;
 
-  it('deletes rows closed or removed before the window', async () => {
-    approval('raw/closed-old.md');
+  it('clears the content of rows closed or removed before the window, and keeps the row', async () => {
+    approval('raw/closed-old.md', {
+      senderName: 'Sam Sender',
+      approverEmail: 'approver@example.edu',
+      approverName: 'Pat Approver',
+      subject: 'A subject',
+      trustedAddresses: ['other@example.edu'],
+      holdReason: 'a reason',
+    });
     approval('raw/removed-old.md', { status: 'removed' });
     approval('raw/closed-recent.md', { closedAt: NOW - 29 * DAY });
+    const recentBefore = stored('raw/closed-recent.md');
     const report = await runRetention(only, deps());
-    expect(report.routedApprovals).toEqual({ deleted: 2, keptNeeded: 0 });
-    expect(approvalKeys()).toEqual(['raw/closed-recent.md']);
+    expect(report.routedApprovals).toEqual({ deleted: 2 });
+    expect(approvalKeys()).toHaveLength(3);
+    expect(stored('raw/closed-old.md')).toMatchObject({
+      status: 'closed',
+      closed_at: NOW - 60 * DAY,
+      title: '',
+      sender: '',
+      sender_name: null,
+      approver_email: null,
+      approver_name: null,
+      subject: null,
+      quotes_json: '[]',
+      trusted_addresses_json: '[]',
+      hold_reason: null,
+    });
+    expect(stored('raw/removed-old.md')).toMatchObject({
+      status: 'removed',
+      title: '',
+    });
+    expect(stored('raw/closed-recent.md')).toEqual(recentBefore);
+    // Cleared rows are not counted again.
+    expect((await runRetention(only, deps())).routedApprovals).toEqual({
+      deleted: 0,
+    });
   });
 
-  it('keeps an approval that is still open, however old', async () => {
+  it('leaves the row that stops a second relay when an entry is reopened later', async () => {
+    // The scan creates a row, and mails the approver, for an open entry it
+    // has no row for (routed-approvals.ts, scanOnce). The cleared row is
+    // still found by key and is still closed, so a reopened or re-added
+    // entry stays as inert after the prune as it was before.
+    approval('discussions/raw/reopened.md');
+    await runRetention(only, deps());
+    expect(getRoutedApproval('discussions/raw/reopened.md')).toMatchObject({
+      key: 'discussions/raw/reopened.md',
+      status: 'closed',
+      relayCount: 1,
+      relaySubmitted: 1,
+    });
+    expect(listOpenRoutedApprovals()).toEqual([]);
+  });
+
+  it('does not touch an approval that is still open, however old', async () => {
     for (const status of ['pending', 'relayed', 'held'] as const)
       approval(`raw/${status}.md`, {
         status: status as RoutedApprovalRow['status'],
         closedAt: undefined,
         createdAt: NOW - 400 * DAY,
       });
+    const before = snapshot();
     const report = await runRetention(only, deps());
-    expect(report.routedApprovals).toEqual({ deleted: 0, keptNeeded: 0 });
-    expect(approvalKeys()).toHaveLength(3);
+    expect(report.routedApprovals).toEqual({ deleted: 0 });
+    expect(snapshot()).toBe(before);
   });
 
-  it('keeps a closed row with a notice still owed or a relay not yet recorded', async () => {
+  it('does not touch a closed row with a notice still owed or a relay not yet recorded', async () => {
     approval('raw/notice.md', { status: 'removed', pendingNotice: 'removed' });
     approval('raw/relay.md', { relaySubmitted: 2, relayCount: 1 });
+    const before = snapshot();
     const report = await runRetention(only, deps());
-    expect(report.routedApprovals?.deleted).toBe(0);
-    expect(approvalKeys()).toEqual(['raw/notice.md', 'raw/relay.md']);
-  });
-
-  it('keeps a closed row whose entry is open again in OPEN_QUESTIONS.md', async () => {
-    approval('discussions/raw/reopened.md');
-    approval('discussions/raw/still-closed.md');
-    approval('discussions/raw/gone.md');
-    openQuestions = [
-      '## Routed Approvals',
-      '- [ ] **Reopened** Raw: discussions/raw/reopened.md',
-      '- [x] **Closed** Raw: discussions/raw/still-closed.md',
-      '',
-    ].join('\n');
-    const report = await runRetention(only, deps());
-    expect(report.routedApprovals).toEqual({ deleted: 2, keptNeeded: 1 });
-    expect(approvalKeys()).toEqual(['discussions/raw/reopened.md']);
-  });
-
-  it('deletes nothing when OPEN_QUESTIONS.md cannot be read', async () => {
-    approval('raw/closed-old.md');
-    openQuestions = null;
-    expect((await runRetention(only, deps())).routedApprovals).toEqual({
-      deleted: 0,
-      skipped: 'OPEN_QUESTIONS.md unavailable',
-    });
-    const failing = {
-      ...deps(),
-      readOpenQuestions: () => Promise.reject(new Error('mirror down')),
-    };
-    expect((await runRetention(only, failing)).routedApprovals?.deleted).toBe(
-      0,
-    );
-    expect(approvalKeys()).toEqual(['raw/closed-old.md']);
+    expect(report.routedApprovals).toEqual({ deleted: 0 });
+    expect(snapshot()).toBe(before);
   });
 });
 
@@ -639,6 +665,8 @@ describe('scheduled tasks and run records', () => {
     task('outreach-approved', 'completed', 400);
     run('outreach-approved', 400);
     task('other-done', 'completed', 400);
+    task('active', 'active', 1);
+    run('active', 1);
     const report = await runRetention(
       { ...OFF, tasks: 30 },
       { ...deps(), protectedTaskIds: ['outreach-approved'] },
@@ -646,8 +674,18 @@ describe('scheduled tasks and run records', () => {
     // The other task and the protected task's old run record.
     expect(report.tasks).toEqual({ deleted: 2 });
     expect(
-      getDatabase().prepare('SELECT id FROM scheduled_tasks').all(),
-    ).toEqual([{ id: 'outreach-approved' }]);
+      getDatabase().prepare('SELECT id FROM scheduled_tasks ORDER BY id').all(),
+    ).toEqual([{ id: 'active' }, { id: 'outreach-approved' }]);
+  });
+
+  it('always keeps the newest run record and its task, which /health reads', async () => {
+    task('done-long-ago', 'completed', 400);
+    run('done-long-ago', 401);
+    run('done-long-ago', 400);
+    const report = await runRetention({ ...OFF, tasks: 30 }, deps());
+    expect(report.tasks).toEqual({ deleted: 1 });
+    expect(getLastTaskRunAt()).toBe(iso(400));
+    expect(count('scheduled_tasks')).toBe(1);
   });
 
   it('keeps the seven days of run records the exceptions digest reads', async () => {
@@ -764,6 +802,14 @@ describe('files', () => {
     expect(fs.existsSync(path.join(base, 'store', 'evals.db'))).toBe(false);
     const p = evalsDb([100, 31, 29, 0]);
     expect((await runRetention(only, deps())).evals).toEqual({ deleted: 2 });
+    expect(evalCount(p)).toBe(2);
+  });
+
+  it('keeps the seven days of eval rows the weekly report reads', async () => {
+    const p = evalsDb([8, 6, 3]);
+    expect((await runRetention({ ...OFF, evals: 1 }, deps())).evals).toEqual({
+      deleted: 1,
+    });
     expect(evalCount(p)).toBe(2);
   });
 
@@ -937,9 +983,6 @@ describe('dry run', () => {
     });
     setCursors(1, { 'tg:1': 1, 'tg:9': 50 });
     file('data/telegram-uploads/main/held.pdf', 60);
-    approval('discussions/raw/open-again.md');
-    openQuestions =
-      '## Routed Approvals\n- [ ] **Again** Raw: discussions/raw/open-again.md\n';
     const before = snapshot();
 
     const dry = await runRetention(ALL_30, deps(), { dryRun: true });
@@ -947,7 +990,7 @@ describe('dry run', () => {
     expect(dry).toEqual({
       uploads: { deleted: 3, keptNeeded: 1 },
       messages: { deleted: 2, keptNeeded: 1 },
-      routedApprovals: { deleted: 1, keptNeeded: 1 },
+      routedApprovals: { deleted: 1 },
       tasks: { deleted: 3 },
       transcriptArchives: { deleted: 1 },
       workingContextArchive: { deleted: 1 },

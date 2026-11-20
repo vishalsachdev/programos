@@ -331,6 +331,31 @@ describe('originCredentialProblem', () => {
     }
   });
 
+  it('refuses an https:// URL whose password holds a "/" as written, which would not be split', () => {
+    for (const url of [
+      `https://kb-bot:${SECRET}/part2${at}git.example.edu/team/repo.git`,
+      `https://kb-bot:/${SECRET}${at}git.example.edu/team/repo.git`,
+      `http://kb-bot:${SECRET}/part2${at}git.example.edu/team/repo.git`,
+    ]) {
+      // The premise: this file's own split leaves the URL whole.
+      if (url.startsWith('https'))
+        expect(splitOriginCredential(url).bare).toBe(url);
+      const problem = originCredentialProblem(url);
+      expect(problem).toMatch(/%2F/);
+      expect(problem).not.toContain(SECRET);
+      expect(problem).not.toContain('kb-bot');
+    }
+    // Encoded, it is an ordinary https:// credential; and a port is a port.
+    expect(
+      originCredentialProblem(
+        `https://kb-bot:${SECRET}%2Fpart2${at}git.example.edu/team/repo.git`,
+      ),
+    ).toBeNull();
+    expect(
+      originCredentialProblem('https://git.example.edu:8443/team/repo@v2.git'),
+    ).toBeNull();
+  });
+
   it('reads the user part up to the path: an "@" in the path of an SSH address is not a password', () => {
     for (const url of [
       'ssh://git@git.example.edu:2222/team/repo@v2.git',

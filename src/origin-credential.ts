@@ -69,18 +69,19 @@ export function originCredentialProblem(
   // every scheme: it cannot be handed to git apart from the URL.
   if (/[?#]/.test(m[2]))
     return `the origin URL has a "?" or a "#" part. A token written there is part of the address and would reach git's command line and the log. Put the credential before the host name of an https:// URL (https://user:token@host/...), or use an SSH key.`;
-  if (scheme === 'https') return null;
   // The user-info ends at the last "@" before the path. A password pasted
   // with a "/" in it cuts the host part short: then what stands before the
   // first "/" has a ":" that is not followed by a port number, and an "@"
-  // comes later.
+  // comes later. Such a URL is not split (`splitOriginCredential` reads up
+  // to the first "/"), so git would get all of it; refused on every scheme.
   const slash = m[2].indexOf('/');
   const authority = slash < 0 ? m[2] : m[2].slice(0, slash);
   let userinfo = authority.includes('@')
     ? authority.slice(0, authority.lastIndexOf('@'))
     : '';
-  if (!userinfo && m[2].includes('@') && /:(?!\d*$)/.test(authority))
-    userinfo = m[2].slice(0, m[2].lastIndexOf('@'));
+  if (!userinfo && m[2].includes('@') && /:(?!\d+$)/.test(authority))
+    return 'the origin URL has a "/" inside its user name, password or token. Write that character as %2F: as it stands the credential cannot be told from the address, and the whole URL would reach git\'s command line.';
+  if (scheme === 'https') return null;
   if (!userinfo) return null;
   if (scheme === 'ssh' && !userinfo.includes(':')) return null;
   return scheme === 'ssh'

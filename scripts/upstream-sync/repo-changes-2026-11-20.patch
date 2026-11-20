@@ -21497,10 +21497,10 @@ index 4a9eb1212816dc5d5ecba1b75f31e5e695ce292f..57ee4522efdfd956fc78967ec7a6cfd8
      realPath,
 diff --git a/src/origin-credential.test.ts b/src/origin-credential.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..753d1e70c14b6f805508f2045cd67e1f56f518b3
+index 0000000000000000000000000000000000000000..80d17b11e0bdeb7b59156a54302c4f28f5bdfbdd
 --- /dev/null
 +++ b/src/origin-credential.test.ts
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,403 @@
 +import { execFileSync } from 'child_process';
 +import fs from 'fs';
 +import os from 'os';
@@ -21834,6 +21834,31 @@ index 0000000000000000000000000000000000000000..753d1e70c14b6f805508f2045cd67e1f
 +    }
 +  });
 +
++  it('refuses an https:// URL whose password holds a "/" as written, which would not be split', () => {
++    for (const url of [
++      `https://kb-bot:${SECRET}/part2${at}git.example.edu/team/repo.git`,
++      `https://kb-bot:/${SECRET}${at}git.example.edu/team/repo.git`,
++      `http://kb-bot:${SECRET}/part2${at}git.example.edu/team/repo.git`,
++    ]) {
++      // The premise: this file's own split leaves the URL whole.
++      if (url.startsWith('https'))
++        expect(splitOriginCredential(url).bare).toBe(url);
++      const problem = originCredentialProblem(url);
++      expect(problem).toMatch(/%2F/);
++      expect(problem).not.toContain(SECRET);
++      expect(problem).not.toContain('kb-bot');
++    }
++    // Encoded, it is an ordinary https:// credential; and a port is a port.
++    expect(
++      originCredentialProblem(
++        `https://kb-bot:${SECRET}%2Fpart2${at}git.example.edu/team/repo.git`,
++      ),
++    ).toBeNull();
++    expect(
++      originCredentialProblem('https://git.example.edu:8443/team/repo@v2.git'),
++    ).toBeNull();
++  });
++
 +  it('reads the user part up to the path: an "@" in the path of an SSH address is not a password', () => {
 +    for (const url of [
 +      'ssh://git@git.example.edu:2222/team/repo@v2.git',
@@ -21881,10 +21906,10 @@ index 0000000000000000000000000000000000000000..753d1e70c14b6f805508f2045cd67e1f
 +});
 diff --git a/src/origin-credential.ts b/src/origin-credential.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..8e85d06e7fc684a9b627853f67f83e9b1a08a8ea
+index 0000000000000000000000000000000000000000..da7bf3f5cdd0955188616cea867a6b3cc2205024
 --- /dev/null
 +++ b/src/origin-credential.ts
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,211 @@
 +/**
 + * A credential written inside the origin URL ("https://user:token@host/...").
 + *
@@ -21956,18 +21981,19 @@ index 0000000000000000000000000000000000000000..8e85d06e7fc684a9b627853f67f83e9b
 +  // every scheme: it cannot be handed to git apart from the URL.
 +  if (/[?#]/.test(m[2]))
 +    return `the origin URL has a "?" or a "#" part. A token written there is part of the address and would reach git's command line and the log. Put the credential before the host name of an https:// URL (https://user:token@host/...), or use an SSH key.`;
-+  if (scheme === 'https') return null;
 +  // The user-info ends at the last "@" before the path. A password pasted
 +  // with a "/" in it cuts the host part short: then what stands before the
 +  // first "/" has a ":" that is not followed by a port number, and an "@"
-+  // comes later.
++  // comes later. Such a URL is not split (`splitOriginCredential` reads up
++  // to the first "/"), so git would get all of it; refused on every scheme.
 +  const slash = m[2].indexOf('/');
 +  const authority = slash < 0 ? m[2] : m[2].slice(0, slash);
 +  let userinfo = authority.includes('@')
 +    ? authority.slice(0, authority.lastIndexOf('@'))
 +    : '';
-+  if (!userinfo && m[2].includes('@') && /:(?!\d*$)/.test(authority))
-+    userinfo = m[2].slice(0, m[2].lastIndexOf('@'));
++  if (!userinfo && m[2].includes('@') && /:(?!\d+$)/.test(authority))
++    return 'the origin URL has a "/" inside its user name, password or token. Write that character as %2F: as it stands the credential cannot be told from the address, and the whole URL would reach git\'s command line.';
++  if (scheme === 'https') return null;
 +  if (!userinfo) return null;
 +  if (scheme === 'ssh' && !userinfo.includes(':')) return null;
 +  return scheme === 'ssh'

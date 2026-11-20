@@ -64,7 +64,7 @@ The institution agent is the only automated writer. Human administrators can com
 
 ### Program KB (program-level)
 
-The existing ProgramOS program repo (see [`docs/02-program-repo.md`](../../SPEC.md)), unchanged. Program-specific decisions, curriculum, cohort data, action items, open questions.
+The existing ProgramOS program repo (see [`SPEC.md` section 5](../../SPEC.md#5-program-repository-contract)), unchanged. Program-specific decisions, curriculum, cohort data, action items, open questions.
 
 ### Precedence rule
 
@@ -172,7 +172,7 @@ The mesh produces a verifiable, tamper-evident record of which agent processed w
 The institution agent (or a lightweight cron job) should periodically:
 - Scan all program KBs for entries that reference shared KB topics
 - Flag divergences (two programs recorded different answers to the same policy question)
-- Surface them to a human reviewer via the standard exceptions digest (see [`docs/05-audit-logging.md`](../../SPEC.md))
+- Surface them to a human reviewer via the standard exceptions digest (see [`SPEC.md` section 6](../../SPEC.md#6-audit-log-contract))
 
 ---
 

@@ -25,8 +25,7 @@ Safety rules in the tool (tested in `test_export.py`):
 After `--apply`:
 
 1. Update the version in `UPSTREAM.md`.
-   Reapply `scripts/upstream-sync/prompt-audit-2026-11-15.patch` with `git apply --check` followed by `git apply`. If it no longer applies, reconcile its prompt safeguards against the new export before continuing; do not silently discard them. The patch includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`.
-   Reapply `scripts/upstream-sync/chat-allowlist-fail-closed-2026-11-19.patch` the same way. It makes a missing, unreadable or invalid chat sender allowlist deny every sender (`src/sender-allowlist.ts` and its test) and adds `config-examples/sender-allowlist.json`. If it no longer applies, check whether the new export already fails closed; if not, redo the change by hand. Drop the patch once the source carries it.
+   Reapply every `*.patch` file in `scripts/upstream-sync/`, in name order. For each one run `git apply --check <file>`, then `git apply <file>`. If one no longer applies, reconcile it by hand against the new export before you continue; do not discard it. Delete a patch only when the source has taken the same change. `prompt-audit-2026-11-15.patch` includes the referenced runtime procedure files under `groups/global/references/` and `groups/main/references/`.
 2. Run `npx tsc --noEmit` and `npx vitest run`. All tests must pass with none skipped.
 3. Run a secret scan (`gitleaks detect --no-git -s .`).
 4. Read the diff. New files need the closest look: a new file can carry names that no rule covers yet.
@@ -34,7 +33,7 @@ After `--apply`:
 
 ## What the tool does not touch
 
-The `OWNED` list in `export.py` names the paths that belong to this repo (`AGENTS.md`, `SPEC.md`, `templates/`, `docs/12-governance.md` and others). An export never writes or deletes them.
+The `OWNED` list in `export.py` names the paths that belong to this repo (`AGENTS.md`, `SPEC.md`, `templates/`, `docs/12-governance.md`, `CONTRIBUTING.md`, the `.github/` templates and others). An export never writes or deletes them.
 
 ## Limits
 

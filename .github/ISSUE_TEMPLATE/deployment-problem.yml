@@ -1,0 +1,72 @@
+name: Deployment problem
+description: You followed AGENTS.md and a step failed or the bot does not behave as described.
+labels: ["deployment"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste mail content, message text, real names, addresses, tokens, keys or a `.env` file here.** This tracker is public.
+        Replace people and addresses with placeholders (`avery@example.edu`) and cut secrets from logs before you paste them.
+        For a security problem, do not open an issue. See `SECURITY.md`.
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: Operating system and version, Node version, Docker version, and how the process runs (shell, systemd, pm2, launchd).
+      placeholder: Ubuntu 24.04, Node 22, Docker 27, systemd
+    validations:
+      required: true
+  - type: checkboxes
+    id: channels
+    attributes:
+      label: Channels enabled
+      options:
+        - label: Email
+        - label: Telegram
+        - label: Web chat
+  - type: input
+    id: model
+    attributes:
+      label: Model provider
+      description: The provider's API directly, or an approved endpoint set with `ANTHROPIC_BASE_URL`. Do not paste the URL if it is internal, and never the key.
+    validations:
+      required: true
+  - type: dropdown
+    id: step
+    attributes:
+      label: The failing step of the first-start checklist
+      description: The steps of `AGENTS.md`, "First start", and what follows them.
+      options:
+        - "1. npm install and npm run build"
+        - "2. Mount allowlist in ~/.config/nanoclaw/"
+        - "3. Registering channel groups"
+        - "4. Program repo clone, ownership and git credentials"
+        - "5. Container image build"
+        - "Inbound mail service"
+        - "Webhooks from the mail provider or the git host"
+        - "First test message"
+        - "Before step 1 (settings, placeholders, tests)"
+        - "Other or not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected and what happened
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines or test output
+      description: Only the lines around the failure, with secrets, addresses and message text removed.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Commit of this repo
+      description: Output of `git rev-parse --short HEAD`, and whether you changed code beyond the placeholders.
+    validations:
+      required: false

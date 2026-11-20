@@ -99,7 +99,7 @@ The program repo is a separate git repository that you own. It MUST contain:
 | `discussions/audit-log/` | The audit trail (§6) |
 | `skills/` | Optional. Skills the team wants the agent to follow. |
 
-Optional: `sync/` for generated snapshots of outside systems (never hand-edited), and other `program/` files your project needs.
+Optional: `sync/` for generated snapshots of outside systems (never hand-edited), and other `program/` files your project needs. Two optional `program/` files are read by name when they exist: `program/course_names.md` (the reply sensor adds its course codes to those in `curriculum.md`; the ingestion cross-check searches it) and `program/target_profile.md` (the ingestion cross-check searches it). Both are plain prose with no required format. The template does not ship them, and the code skips a missing one.
 
 The allowlist table has five columns with the email address in the second; approval routing and outreach ignore shorter rows. [`templates/program-repo/`](./templates/program-repo/) is a skeleton with the names and formats this code reads.
 

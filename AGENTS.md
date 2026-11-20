@@ -182,6 +182,34 @@ Read the handler in `src/channels/webhook.ts` (search for `Missing filename or s
 and `src/cc-context.ts` before you write the service. Also check the service's git author against `src/governance-protection.ts`. ASK which
 mail provider the user has; this is the largest piece of work not covered by the repo.
 
+## Webhooks from other services
+
+Two more routes share the listener with the inbound mail webhook (`src/channels/webhook.ts`). Both are optional, and both exist only when `WEBHOOK_SECRET` is set, because the listener does not start without it. Each checks its own signature and does not use `WEBHOOK_SECRET`. A route with no secret set answers 503. Set them up after "First start", when the host has a public HTTPS name. ASK before you create either one: each tells an outside service to send data to this host.
+
+### Mail delivery events: `/resend/webhook`
+
+What it does (`src/channels/resend-events.ts`): records each recipient's delivery outcome, and on a bounce, a complaint or a failure it writes a delivery-problem record and alerts the admin on Telegram. Without it, the bot does not learn that a sent mail bounced. The handler is written for the reference deployment's provider, Resend, which signs with Svix headers. Another provider needs a different handler.
+
+1. In the provider's dashboard, add a webhook endpoint with the URL `https://<your-host>/resend/webhook`.
+2. Subscribe it to four events: `email.delivered`, `email.bounced`, `email.complained`, `email.failed`. The handler acts on these only; any other event is logged and answered 200.
+3. Copy the endpoint's signing secret (it starts with `whsec_`) into `.env` as `RESEND_WEBHOOK_SECRET=`. This key is read from the `.env` file only; the process environment is not read for it. Restart the host process.
+4. Check: send a test event from the dashboard. It must show 200. A 401 means the secret does not match. The check is HMAC-SHA256 over `<svix-id>.<svix-timestamp>.<body>`, compared with the `svix-signature` header. The handler does not reject an old timestamp.
+5. Check the alert path: a bounce event must produce a Telegram message to the admin. If Telegram is down for a short time the handler answers 500 so that the provider retries.
+
+### Program repo pushes: `/api/github-push`
+
+What it does (`src/channels/github-push-events.ts`): on each push to `main` of the program repo it refreshes the host's read mirror at once, writes an audit-log entry for each knowledge-base commit a person made directly, and alerts the admin when an author who is not an admin changes a protected governance file. Without it, direct commits get no audit entry and that tripwire does not run. The handler reads GitHub's push payload; another git host needs a different handler.
+
+1. Choose a long random secret (for example `openssl rand -hex 32`). Put it in `.env` as `GITHUB_PUSH_WEBHOOK_SECRET=`, or export it in the process environment; the `.env` value wins. Restart the host process.
+2. In the **program repo** on GitHub (not this repo): Settings, Webhooks, Add webhook.
+   - Payload URL: `https://<your-host>/api/github-push`
+   - Content type: `application/json`. The handler parses the raw body as JSON; the form-encoded type fails.
+   - Secret: the same value.
+   - Events: "Just the push event".
+3. Check: GitHub sends a `ping` when you save. A 200 there shows that the signature matches (`X-Hub-Signature-256`, HMAC-SHA256 of the body). A 401 means the secret differs. Then push a commit to `main`: the delivery must show 200 and the log must show `GitHub push: read mirror refreshed`. Pushes to other branches are ignored. The mirror path is `PROGRAM_READ_MIRROR` (process environment); the code default is a fixed path from the reference deployment.
+4. Before you rely on it, set the three identity lists in code: `BOT_AUTHORS` in `src/channels/github-push-events.ts` (commits by these authors get no audit entry; use the bot's and the mail service's git author addresses), the admin identities in `src/governance-protection.ts`, and the path prefixes that count as knowledge base (`KB_INCLUDE_PREFIXES`, `KB_EXCLUDE_PREFIXES`), which follow the reference program's folder layout.
+5. Tell the user: GitHub does not retry a failed delivery. When an alert cannot reach Telegram or an audit entry cannot be written, the handler answers 500 on purpose, so the failure shows in the webhook's "Recent Deliveries" list. Someone must look there and press "Redeliver". The audit entry is written once per commit, so a redelivery is safe.
+
 ## First start
 
 Do these once, in this order, before the first test message:
@@ -224,4 +252,5 @@ Do these once, in this order, before the first test message:
 5. Adapt prompts in `groups/` and skills in `container/skills/`. `src/channel-claude-sync.test.ts`
    checks exact phrases in the prompts; update that test with the prompts.
 6. Do the "First start" steps, set up the inbound mail service, and run locally with a test mailbox.
+   Add the two optional webhooks ("Webhooks from other services") when the host has a public HTTPS name.
 7. Show the user a test exchange. Deploy only when they say so.

@@ -40,6 +40,8 @@ OWNED = [
     'docs/09-illinois-quickstart.md', 'docs/12-governance.md',
     'docs/deployment.md', 'docs/design', 'config', 'templates', 'plans',
     'site', 'scripts/upstream-sync', '.github/workflows/ci.yml',
+    '.github/ISSUE_TEMPLATE', '.github/PULL_REQUEST_TEMPLATE.md',
+    'CONTRIBUTING.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md',
     'node_modules', 'dist',
 ]
 

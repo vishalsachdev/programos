@@ -35,7 +35,7 @@ const tasks: Omit<ScheduledTask, 'last_run' | 'last_result'>[] = [
     group_folder: GROUP_FOLDER,
     chat_jid: CHAT_JID,
     prompt:
-      'Run the knowledge-builder skill. Read this week\'s audit logs and eval data, then update FAQ.md and PATTERNS.md and commit.',
+      'Run the knowledge-builder skill. Read this week\'s audit logs and eval data, then update docs/faq.md and discussions/PATTERNS.md and commit.',
     schedule_type: 'cron',
     schedule_value: '0 9 * * 3', // Wednesday 9 AM (Central, per TZ env)
     context_mode: 'isolated',

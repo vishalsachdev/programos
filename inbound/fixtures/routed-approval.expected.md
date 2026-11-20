@@ -3,6 +3,7 @@ To: program@example.org
 Date: Sat, 24 Oct 2026 10:00:00 -0500
 Subject: Re: Admissions updates
 Message-ID: <june-1024@example.edu>
+X-Intake-Authentication: no trusted result
 
 # Re: Admissions updates
 

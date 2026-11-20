@@ -32,6 +32,8 @@ import {
 export interface InboundMessage {
   readonly from: string;
   readonly to: string;
+  /** The platform's parsed headers. Absent in older test doubles. */
+  readonly headers?: { get(name: string): string | null };
   readonly raw: ReadableStream<Uint8Array>;
   readonly rawSize: number;
   setReject(reason: string): void;
@@ -69,6 +71,7 @@ async function commit(
     envelope,
     receivedAt,
     settings.inboxDir,
+    settings.authTrust,
   );
   await commitFiles(
     settings,
@@ -105,7 +108,12 @@ export async function receive(
   }
 
   const receivedAt = deps.now();
-  const envelope: Envelope = { from: message.from, to: message.to };
+  const envelope: Envelope = {
+    from: message.from,
+    to: message.to,
+    authenticationResults:
+      message.headers?.get('authentication-results') ?? null,
+  };
   const record: PendingRecord = {
     id: await sha256Hex(raw),
     stage: 'commit',

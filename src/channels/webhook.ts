@@ -27,6 +27,7 @@ import {
 import {
   logDeliveryProblem,
   logDroppedEmail,
+  logEmailAuthentication,
   logInboundEmailReceiptOnce,
   logRoutedApproval,
 } from '../audit-log.js';
@@ -77,6 +78,11 @@ import { readFromCheckoutBuffer } from '../checkout-fs.js';
 import { deriveEmailChatJid, parseEmailIdentity } from './webhook-threading.js';
 import { logger } from '../logger.js';
 import { readEnvFile } from '../env.js';
+import {
+  emailAuthBlocks,
+  emailAuthVerdict,
+  readEmailAuthSettings,
+} from '../email-auth.js';
 import { INSTITUTION_DOMAIN } from '../instance-identity.js';
 import { Channel, PreparedDelivery } from '../types.js';
 import {
@@ -941,6 +947,30 @@ registerChannel('webhook', (opts) => {
               attachment_state === 'pending'
                 ? attachment_state
                 : undefined;
+            // Sender authentication (src/email-auth.ts). The verdict is
+            // recorded for every message; it changes what happens to the
+            // message only with EMAIL_AUTH_MODE=enforce.
+            const emailAuth = readEmailAuthSettings();
+            const authDecision = emailAuthVerdict(
+              from,
+              body.auth,
+              emailAuth.trusted,
+            );
+            const authBlocked = emailAuthBlocks(
+              emailAuth,
+              authDecision.verdict,
+            );
+            const authSummary = `${authDecision.verdict} — ${authDecision.reason}`;
+            const notAuthenticated = () => {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  ok: true,
+                  skipped: true,
+                  reason: 'sender not authenticated',
+                }),
+              );
+            };
             if (phase === 'accepted') {
               if (
                 attachmentCount === null ||
@@ -969,6 +999,12 @@ registerChannel('webhook', (opts) => {
                     reason: preflightAccess.reason,
                   }),
                 );
+                return;
+              }
+              if (authBlocked) {
+                // No receipt for a sender the full message will be dropped
+                // for; that POST writes the audit entry.
+                notAuthenticated();
                 return;
               }
               const receiptId =
@@ -1085,7 +1121,7 @@ registerChannel('webhook', (opts) => {
               // "allowlist unavailable" failures — those aren't unauthorized
               // senders, just a failed read (see CLAUDE.md reliability note).
               if (access.reason === 'sender not on allowlist') {
-                logDroppedEmail(from || 'unknown', emailSubject);
+                logDroppedEmail(from || 'unknown', emailSubject, authSummary);
                 // A blocked **@example.edu** colleague gets one courteous
                 // reply instead of a silent drop. External/unknown senders
                 // stay silent (anti-backscatter). Deduped + skip automated.
@@ -1094,14 +1130,17 @@ registerChannel('webhook', (opts) => {
                   key &&
                   isInstitutionSender(from) &&
                   !isLikelyAutomatedAddress(from) &&
+                  // enforce: no reply to an address that may be forged.
+                  !authBlocked &&
                   !blockedNotified.has(key)
                 ) {
                   // Reuse the robust header-based auto-reply/list guard BEFORE
                   // emitting outbound mail, so a spoofed or auto-generated EXU
                   // From can't turn a silent drop into backscatter or an
-                  // autoresponder loop. (True SPF/DKIM sender-auth isn't
-                  // available at this layer; the per-sender dedup caps residual
-                  // forged-From backscatter to one notice per address.)
+                  // autoresponder loop. In flag mode the sender is not
+                  // authenticated here; the per-sender dedup caps residual
+                  // forged-From backscatter to one notice per address. In
+                  // enforce mode `authBlocked` above withholds the reply.
                   let isAuto = false;
                   if (raw_file_path) {
                     try {
@@ -1142,6 +1181,33 @@ registerChannel('webhook', (opts) => {
                   reason: access.reason,
                 }),
               );
+              return;
+            }
+
+            // enforce: an allowlisted address that the mail servers did not
+            // vouch for is handled like an address that is not on the list.
+            // It never reaches the model, and it gets no reply of any kind:
+            // a reply to a forged address is mail sent to a third party.
+            if (authBlocked) {
+              logger.warn(
+                {
+                  from,
+                  subject: emailSubject,
+                  verdict: authDecision.verdict,
+                  reason: authDecision.reason,
+                },
+                'Email dropped: sender not authenticated (EMAIL_AUTH_MODE=enforce)',
+              );
+              logEmailAuthentication({
+                from: from || 'unknown',
+                subject: emailSubject,
+                messageId: emailMessageId,
+                verdict: authDecision.verdict,
+                reason: authDecision.reason,
+                mode: emailAuth.mode,
+                blocked: true,
+              });
+              notAuthenticated();
               return;
             }
 
@@ -1193,6 +1259,14 @@ registerChannel('webhook', (opts) => {
             }
             processingEmails.add(dedupKey);
             activeDedupKey = dedupKey;
+            logEmailAuthentication({
+              from,
+              subject: emailSubject,
+              messageId: emailMessageId,
+              verdict: authDecision.verdict,
+              reason: authDecision.reason,
+              mode: emailAuth.mode,
+            });
 
             // Auto-reply / mailing-list loop detection. Drops Outlook OOO,
             // Gmail vacation, list expansions, autoresponders BEFORE we

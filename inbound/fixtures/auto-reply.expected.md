@@ -4,6 +4,7 @@ Date: Thu, 19 Nov 2026 09:30:00 -0600
 Subject: Automatic reply: When is the capstone proposal due?
 Message-ID: <ooo-1119@example.edu>
 Auto-Submitted: auto-replied
+X-Intake-Authentication: no trusted result
 
 # Automatic reply: When is the capstone proposal due?
 

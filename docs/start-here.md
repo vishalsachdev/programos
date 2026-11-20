@@ -10,7 +10,7 @@ ProgramOS is a coordinator bot for a team. Your colleagues write to one mail add
 
 It will:
 
-- answer only people on a list you control (the allowlist);
+- answer only people on a list you control (the allowlist). The list is matched on the From line of a message, which can be forged; the bot can record, and if you choose refuse, mail whose sender the mail servers did not confirm;
 - answer from your team's record, with a citation, and say when the record has no answer;
 - record decisions, action items and open questions in that record;
 - pass a request that needs approval to the approver you named for that sender;

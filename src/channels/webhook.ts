@@ -85,6 +85,7 @@ import {
   saveExtraction,
 } from '../document-extractor.js';
 import { isAutoReplyEml } from '../email-loop-detection.js';
+import { sendAdminAlert, type AdminAlertResult } from '../admin-alert.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { safeAttachmentName } from '../attachment-safety.js';
 import { getLastTaskRunAt } from '../db.js';
@@ -187,11 +188,7 @@ registerChannel('webhook', (opts) => {
   // failure) can distinguish a transient outage (worth a retry) from a
   // permanent misconfiguration (retrying forever would get the endpoint
   // auto-disabled by the sender, e.g. Svix).
-  async function pingAdminViaTelegram(
-    text: string,
-  ): Promise<
-    'sent' | 'unconfigured' | 'failed-permanent' | 'failed-transient'
-  > {
+  async function pingAdminViaTelegram(text: string): Promise<AdminAlertResult> {
     const token =
       resendEnv.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
     const chatId =
@@ -226,6 +223,12 @@ registerChannel('webhook', (opts) => {
       return 'failed-transient';
     }
   }
+
+  // Every operator alert from this channel goes through here. The route
+  // (Telegram, email to the operator, or both) follows ADMIN_ALERT_ROUTE;
+  // see admin-alert.ts. Do not call pingAdminViaTelegram directly.
+  const alertAdmin = (text: string): Promise<AdminAlertResult> =>
+    sendAdminAlert(text, { telegram: () => pingAdminViaTelegram(text) });
 
   // Live checkout path — still needed for WRITE-side work (raw .eml reads of
   // just-committed mail, attachment extraction output) and for ownership
@@ -424,13 +427,13 @@ registerChannel('webhook', (opts) => {
     const alertFrom = alertField(args.from, 'unknown');
     const alertSubject = alertField(args.subject, 'No Subject');
     if (result === 'write-failed') {
-      await pingAdminViaTelegram(
+      await alertAdmin(
         `Email intake audit failed for a ${args.attachmentCount}-attachment message from ${alertFrom}: ${alertSubject}. The Worker must retry this receipt.`,
       );
       return false;
     }
     if (result === 'written') {
-      await pingAdminViaTelegram(
+      await alertAdmin(
         `High-attachment email accepted (${args.attachmentCount} files).\nFrom: ${alertFrom}\nSubject: ${alertSubject}\nA durable intake receipt exists; attachment storage and agent processing may still be pending.`,
       );
     }
@@ -502,9 +505,7 @@ registerChannel('webhook', (opts) => {
           ? 'sent-earlier'
           : 'none',
     });
-    const firstAlert = event.alert
-      ? await pingAdminViaTelegram(alertText)
-      : undefined;
+    const firstAlert = event.alert ? await alertAdmin(alertText) : undefined;
     if (event.notice) {
       // A notice failure must not stop the alert retry and release below.
       await sendSenderCapNotice(event, resetAt, firstAlert === 'sent').catch(
@@ -515,7 +516,7 @@ registerChannel('webhook', (opts) => {
     if (!event.alert || firstAlert === undefined) return;
     const finalAlert = await retryTransient(
       firstAlert,
-      () => pingAdminViaTelegram(alertText),
+      () => alertAdmin(alertText),
       SENDER_CAP_ALERT_RETRY_DELAYS_MS,
     );
     if (finalAlert !== 'sent') {
@@ -596,7 +597,7 @@ registerChannel('webhook', (opts) => {
     cancelRelay: (deliveryId, reason) =>
       cancelQueuedOutboundEmail(deliveryId, reason),
     refreshMirror: () => getRepoReader().refreshAsync(),
-    pingOwner: pingAdminViaTelegram,
+    pingOwner: alertAdmin,
     audit: (event) => logRoutedApproval(event),
   });
 
@@ -790,8 +791,8 @@ registerChannel('webhook', (opts) => {
             // degrades to log-and-200 — endlessly failing deliveries would
             // get the endpoint auto-disabled, ending bounce visibility.
             pingAdminViaTelegram: async (text) => {
-              if ((await pingAdminViaTelegram(text)) === 'failed-transient') {
-                throw new Error('Owner alert via Telegram failed');
+              if ((await alertAdmin(text)) === 'failed-transient') {
+                throw new Error('Owner alert failed');
               }
             },
             logDeliveryProblem,
@@ -813,8 +814,8 @@ registerChannel('webhook', (opts) => {
             res,
             githubPushSecret,
             async (text) => {
-              if ((await pingAdminViaTelegram(text)) !== 'sent') {
-                throw new Error('Owner alert via Telegram failed');
+              if ((await alertAdmin(text)) !== 'sent') {
+                throw new Error('Owner alert failed');
               }
             },
             // A push is the moment a new Routed Approvals entry is committed.
@@ -1034,7 +1035,7 @@ registerChannel('webhook', (opts) => {
               const now = Date.now();
               if (now - lastBoxPingAt >= BOX_PING_DEBOUNCE_MS) {
                 lastBoxPingAt = now;
-                await pingAdminViaTelegram(
+                await alertAdmin(
                   `📦 Box update detected (from ${from}).\n` +
                     `Subject: ${emailSubject}\n` +
                     `→ Run a Box sync sweep to refresh Coordinator's course data.`,

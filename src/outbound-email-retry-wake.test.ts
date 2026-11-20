@@ -456,9 +456,10 @@ describe('a send that throws counts against the attempt budget', () => {
       return realGet(id);
     });
     // The send throws; on the final permitted attempt the queue's catch block
-    // then reads the row, and that read fails.
+    // then reads the row, and that read fails. The attempt is counted before
+    // the send, so during the last send the stored count is the whole budget.
     mockFetch.mockImplementation(() => {
-      if (realGet('throw:read')?.attempts === MAX_OUTBOX_ATTEMPTS - 1) {
+      if (realGet('throw:read')?.attempts === MAX_OUTBOX_ATTEMPTS) {
         armed = true;
       }
       throw new Error('bad payload');
@@ -498,7 +499,7 @@ describe('a send that throws counts against the attempt budget', () => {
       return realFinalize(...a);
     });
     mockFetch.mockImplementation(() => {
-      if (realGet('throw:store')?.attempts === MAX_OUTBOX_ATTEMPTS - 1) {
+      if (realGet('throw:store')?.attempts === MAX_OUTBOX_ATTEMPTS) {
         failing = true;
       }
       throw new Error('bad payload');

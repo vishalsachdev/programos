@@ -16,7 +16,7 @@ The code is the source of truth for how the bot runs. This page holds only what 
 | Trial | A laptop | Telegram only, one chat (the bot polls Telegram) | None |
 | Pilot | A virtual machine, always on (the recipe below) | Telegram and email | One HTTPS endpoint behind a reverse proxy |
 
-Email needs two things that Telegram does not: a public HTTPS endpoint and the separate inbound mail service described in `AGENTS.md`, "Inbound mail". Plan for that work before you promise email to your team.
+Email needs two things that Telegram does not: a public HTTPS endpoint and an inbound mail intake service (`AGENTS.md`, "Inbound mail"). `inbound/` holds one, for a domain on Cloudflare Email Routing; it runs at Cloudflare, not on this host, and needs a GitHub token for the knowledge-base repo. It has not been run against live services yet, so plan a real test. With another mail provider you write the service yourself. Plan for that work before you promise email to your team.
 
 ## The supported recipe: one virtual machine
 
@@ -206,7 +206,7 @@ Go through this list at the end of the recipe.
 - The reply sensor is off, or its destination is approved for your data.
 - Pull, commit and push work for both writers of the knowledge-base repo.
 - One plain question passes end to end on each channel you enabled.
-- If email is on: one routed approval passes end to end. A sender who is not on the allowlist gets no answer, or the one courtesy reply if they are at your institution.
+- If email is on: the intake service files a test message (two files in `discussions/raw/`, by the expected git author), and one routed approval passes end to end. A sender who is not on the allowlist gets no answer, or the one courtesy reply if they are at your institution.
 - If email is on: the mail provider's events webhook answers 200 to a test event, and a bounce reaches the admin on Telegram (`AGENTS.md`, "Webhooks from other services").
 - If the program repo is on GitHub: its push webhook shows a 200 delivery, or you have decided to run without it.
 - If Telegram is on: only one chat uses it (see `AGENTS.md`, safety items), and a handle that is not on the list gets no answer.

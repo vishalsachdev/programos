@@ -107,7 +107,8 @@ and say so.
 
 | Feature | Status | Needs |
 |---|---|---|
-| Email questions and status updates | In production in K-ai | **A separate inbound mail intake service (not in this repo; see "Inbound mail")**, outbound provider key, allowlist file in the program repo |
+| Email questions and status updates | In production in K-ai | **An inbound mail intake service** (see "Inbound mail"), outbound provider key, allowlist file in the program repo |
+| Inbound mail intake worker (`inbound/`) | **New; never run against live services.** Not the worker K-ai uses | A domain on Cloudflare Email Routing, a GitHub token for the program repo, the webhook secret |
 | Delivery gate and audit log | In production in K-ai | Nothing extra |
 | Reminders and scheduled outreach | In production in K-ai | A reminder registry (`docs/reminder-registry.md` is the template); ASK before any schedule goes live |
 | Routed approvals | In production in K-ai | Approver recorded per sender in the allowlist; the institution domain set correctly |
@@ -201,9 +202,8 @@ and who can push.
 
 ## Inbound mail
 
-This repo does **not** contain the service that receives mail. The reference
-deployment uses a small separate worker at its mail provider. You must supply one.
-For each inbound message it must:
+The host does not receive mail itself. A separate intake service does, and for
+each inbound message it must:
 
 1. Write the message as a Markdown file into the program repo's email inbox folder,
    commit and push it. The agent reads that committed file; the webhook does not
@@ -224,9 +224,27 @@ For each inbound message it must:
    `src/channels/github-push-events.ts` both read that one setting.
 4. After setup, test one routed-approval exchange, not only a plain question.
 
-Read the handler in `src/channels/webhook.ts` (search for `Missing filename or subject`)
-and `src/cc-context.ts` before you write the service. Also check the service's git author against `src/governance-protection.ts`. ASK which
-mail provider the user has; this is the largest piece of work not covered by the repo.
+**`inbound/` holds one such service: a Cloudflare Email Worker.** It needs a domain
+on Cloudflare Email Routing. `inbound/README.md` has the setup steps, the file
+format it writes, its choices for failures and attachments, and its limits. Tell
+the user these three things before they choose it:
+
+- It was written for this repo from the contract above. It is not the worker the
+  reference deployment runs, and **it has never run against a live Cloudflare
+  account, domain, mailbox or GitHub repo.** Its tests use a mocked network.
+  Plan a real test (README, step 6) before go-live.
+- Mail it files gets no text extraction of PDF, Word or Excel attachments on the
+  host. The attachments stay inside the committed `.eml`.
+- Its git author is a setting (`GIT_AUTHOR_EMAIL`), with the address above as the
+  default. The host side is still fixed in the two files named in point 3.
+
+ASK which mail provider the user has. If it is not Cloudflare, or the user's
+institution requires mail to stay inside its own mail system, you must write the
+service: read the handler in `src/channels/webhook.ts` (search for
+`Missing filename or subject`) and `src/cc-context.ts`, check the service's git
+author against `src/governance-protection.ts`, and use `inbound/` and its fixtures
+as the worked example. `src/channels/webhook-inbound-intake.test.ts` runs those
+fixtures through the real handler; a new service should pass the same checks.
 
 ## Webhooks from other services
 

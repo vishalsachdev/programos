@@ -1,0 +1,49 @@
+From: =?UTF-8?Q?Zo=C3=AB_M=C3=BCller?= <zmuller@example.edu>
+To: Program Inbox <program@example.org>
+Cc: "Raman, Priya" <praman@example.edu>, dean-office@example.edu
+Subject: =?UTF-8?B?UsOpdW5pb24gZHUgY29taXTDqSDigJQgYnVkZ2V0IDIwMjc=?=
+Date: Thu, 19 Nov 2026 09:12:00 -0600
+Message-ID: <multi-1119@example.edu>
+In-Reply-To: <earlier-1118@example.org>
+References: <first-1117@example.edu>
+ <earlier-1118@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer-b1"
+
+--outer-b1
+Content-Type: multipart/related; boundary="rel-b2"
+
+--rel-b2
+Content-Type: multipart/alternative; boundary="alt-b3"
+
+--alt-b3
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Bonjour Coordinator,
+
+Le comit=C3=A9 se r=C3=A9unit le 3 d=C3=A9cembre. Le budget 2027 est en pi=
+=C3=A8ce jointe.
+
+Zo=C3=AB
+--alt-b3
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+<p>Bonjour Coordinator,</p><p>Le comit=C3=A9 se r=C3=A9unit le 3 d=C3=A9cembre.</p><img src=3D"cid:logo1">
+--alt-b3--
+--rel-b2
+Content-Type: image/png; name="logo.png"
+Content-Disposition: inline; filename="logo.png"
+Content-ID: <logo1>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgpzeW50aGV0aWM=
+--rel-b2--
+--outer-b1
+Content-Type: application/pdf; name="=?UTF-8?Q?budget=5F2027=5Fr=C3=A9sum=C3=A9.pdf?="
+Content-Disposition: attachment; filename="=?UTF-8?Q?budget=5F2027=5Fr=C3=A9sum=C3=A9.pdf?="
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJSBzeW50aGV0aWMgdGVzdCBmaWxlLCBub3QgYSByZWFsIGRvY3VtZW50CiUlRU9GCg==
+--outer-b1--

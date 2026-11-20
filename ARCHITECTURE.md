@@ -64,7 +64,7 @@ The cost of that choice is visible: some values that should be settings are writ
 ## One turn, step by step
 
 1. A message arrives. The channel handler checks the signature, the allowlist and, for email, the sender's cap (Telegram and web chat have no cap). A sender who fails never reaches the model.
-2. For email, a separate intake service (not in this repo; see `AGENTS.md`, "Inbound mail") has already committed a copy of the message to the program repo. The host reads that copy and writes the inbound audit entry.
+2. For email, a separate intake service (`inbound/` holds one; see `AGENTS.md`, "Inbound mail") has already committed a copy of the message to the program repo. The host reads that copy and writes the inbound audit entry.
 3. The host starts a container with the program repo mounted and the channel's instructions.
 4. The agent chooses the mode. In question mode it reads and cites. In status-update mode it runs the entry gate and the conflict check, then commits one change at a time.
 5. The agent returns a reply inside a reply block, with a self-evaluation.

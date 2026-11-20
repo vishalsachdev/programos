@@ -17,6 +17,7 @@ The bot answers questions from an allowlisted team by email (and Telegram for th
 | The agent that runs in a container for each message, and its skills | `container/` |
 | The agent's instructions for each channel | `groups/` |
 | Setup wizard and operations script examples | `setup/`, `scripts/` |
+| A mail intake worker for Cloudflare Email Routing. New, and not yet run against live services | [`inbound/`](./inbound/) |
 | Instructions for your coding agent | [`AGENTS.md`](./AGENTS.md) |
 | A skeleton for your knowledge-base repo | [`templates/program-repo/`](./templates/program-repo/) |
 | Settings to fill in | [`config/instance.env.example`](./config/instance.env.example) |
@@ -73,6 +74,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/data-handling.md`](./docs/data-handling.md) | What data reaches each outside service and each storage place, who can read it, what is and is not deleted, and what to decide before go-live | Yes; traced from the code 2026-11-19 |
 | [`docs/illinois/data-handling.md`](./docs/illinois/data-handling.md) | One university's open data questions, none verified | Open items only |
 | [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | The same recipe on a university virtual machine: open questions | Stub; not verified |
+| [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
 | [`docs/09-illinois-quickstart.md`](./docs/09-illinois-quickstart.md) | One university's recipe for a campus mail alias | Not yet updated |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | One university's host name for the knowledge-base repo setting | Not verified |
 | [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) | Claude on Microsoft Foundry (Azure) as a backup or primary model provider: deployments, hosting option, settings, failover and its limits | Yes for the code; not yet checked against a live Foundry endpoint |

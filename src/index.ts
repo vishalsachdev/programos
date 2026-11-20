@@ -48,6 +48,7 @@ import {
   storeMessage,
 } from './db.js';
 import { readEnvFile } from './env.js';
+import { setProviderChangeNotifier } from './model-provider.js';
 import { GroupQueue } from './group-queue.js';
 import {
   readGroupTemplate,
@@ -1171,6 +1172,13 @@ async function main(): Promise<void> {
     // Late-bound: sendDeadLetterAlert is reassigned once channels connect.
     notify: (text) => sendDeadLetterAlert(text),
     logProblem: logDeliveryProblem,
+  });
+  // A model provider change (failover or return) goes to the operator.
+  // Fire-and-forget: a failed alert must not affect the run that caused it.
+  setProviderChangeNotifier((text) => {
+    sendDeadLetterAlert(text).catch((err) =>
+      logger.error({ err }, 'Model provider change alert send failed'),
+    );
   });
   queue.setProcessMessagesFn(processGroupMessages);
   // Surface silent message drops (retries exhausted) to the owner's Telegram DM.

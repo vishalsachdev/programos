@@ -33,9 +33,14 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - [ ] Rewrite `docs/09-illinois-quickstart.md` (campus mail and cloud path)
 - [ ] A neutral inbound mail intake service (email needs one; none is in the repo)
 - [ ] Proof numbers on the site, each from a dated query, in one data file
+- [ ] Foundry backup provider: live checks with a real key (`docs/illinois/model-foundry.md`, section 6), then decide the provider order
 - [ ] Take fixes from the source through `scripts/upstream-sync/` (wrong-chat Telegram reply, timing test, others in SPEC section 11)
 
 ## Session Log
+
+### 2026-11-19
+- Completed (draft PR, not merged): model provider setting with Claude on Microsoft Foundry as a backup or primary (`MODEL_PROVIDERS`, `src/model-provider.ts`), a path prefix in `ANTHROPIC_BASE_URL` is now joined, `SENSOR_PROVIDER` for the reply sensor. The edits to exported code are recorded in `scripts/upstream-sync/model-provider-foundry-2026-11-19.patch`. Tested against fake servers only.
+- Next: the live checks in `docs/illinois/model-foundry.md` section 6; the Azure host page that issue 10 asks for is not written.
 
 ### 2026-11-16
 - Completed: pulled PR #5 (Illinois colors as an opt-in site theme, `e3a0113`); rebased the two local Codex fixwave commits on top and pushed them (`55ab09e`, `8950030`; CI green). Deployed the site with `SITE_THEME=illinois`; live `/theme.css` matches `site/themes/illinois.css`. Checked light and dark mode by headless Chrome screenshot at 1280px: navy and orange in both. Deleted the merged `site-illinois-colors` branch; `main` is the only remote branch.

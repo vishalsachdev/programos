@@ -23,7 +23,7 @@ The same contract serves an academic program, a research project, a grant team o
 |-----------|-------|-------|
 | Container runtime, channel registry, message router, group queue, SQLite store | `src/` (from the NanoClaw framework) | Change only when you must |
 | Channel handlers: email webhook, Telegram, web chat | `src/channels/` | Each validates the sender, builds the message, and formats the reply |
-| Credential proxy | `src/credential-proxy.ts` | The host's own credentials stay out of the container; the host injects them. In OAuth mode the container receives a temporary key from the exchange. Routing through the proxy is a setting, not a network block |
+| Credential proxy and model providers | `src/credential-proxy.ts`, `src/model-provider.ts` | The host's own credentials stay out of the container; the host injects them. In OAuth mode the container receives a temporary key from the exchange. Routing through the proxy is a setting, not a network block. `MODEL_PROVIDERS` orders the providers (`anthropic`, `foundry`; default `anthropic` only). The proxy routes each run to its provider and counts failures; after three in a row, new runs use the next provider for 30 minutes. Foundry: [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) |
 | Delivery gate and outbox | `src/delivery-gate.ts`, `src/outbound-email*.ts`, `src/delivery-*.ts` | Agent replies and outbound mail pass the gate. Email has a durable outbox with retries; direct chat sends do not |
 | Audit log writer | `src/audit-log.ts` | Host-side; the agent does not write the log |
 | Operator alerts | `src/admin-alert.ts` | One function for every operator alert. The route is a setting: Telegram (default), email to the operator's address, or both |
@@ -190,6 +190,7 @@ The code is the source of truth. This list names the known places where a rule a
 | Recipient from allowlist or inbound mail | Normal email | The courtesy reply to a blocked colleague; the operator address added to mail for a peer agent; operator alert mail, which goes to the configured operator address only, whether or not it is on the allowlist |
 | Address check in body text | Email | Chat; saved email deliveries from an older format |
 | Protected files | The agent's file-editing tools; git authorship check | Shell commands in the container |
-| Model traffic through the proxy | The agent, by setting | The reply sensor (calls the provider directly); remote control (a process on the host) |
+| Model traffic through the proxy | The agent, by setting | The reply sensor (calls the Anthropic API or Foundry directly, per `SENSOR_PROVIDER`); remote control (a process on the host) |
+| Model provider failover | New agent runs, after three failures in a row on the current provider; the change is logged and alerted | The turn that hit the failure (it fails and is retried); the reply sensor; state across a restart (in memory); a per-turn provider field in the audit log (none); a session resumed on the other provider (untested); any live Foundry endpoint (tested with fake servers only) |
 | Gate results logged | What the agent reports | Proof that the gate ran |
 

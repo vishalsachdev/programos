@@ -155,6 +155,18 @@ describe('pushCheckoutAfterTurn', () => {
     ]);
   });
 
+  it('alerts once, not on every turn, when the branch has no upstream', async () => {
+    const alerts: string[] = [];
+    setCheckoutPushAlerter(async (text) => {
+      alerts.push(text);
+    });
+    git(checkout, 'branch', '--unset-upstream');
+    commitFile(checkout, 'decision.md', 'agent wrote this\n');
+    expect(await pushCheckoutAfterTurn()).toBe('failed');
+    expect(await pushCheckoutAfterTurn()).toBe('failed');
+    expect(alerts).toHaveLength(1);
+  });
+
   it('is skipped where there is no checkout', async () => {
     vi.stubEnv('PROGRAM_REPO', path.join(tmp, 'missing'));
     expect(await pushCheckoutAfterTurn()).toBe('skipped');

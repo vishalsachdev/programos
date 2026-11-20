@@ -129,8 +129,11 @@ export function pushCheckoutAfterTurn(
         { head, err: reason },
         'Checkout sync: push failed; commits stay on the host',
       );
-      if (pushAlerter && (!head || head !== lastAlertedHead)) {
-        lastAlertedHead = head || null;
+      // One alert per stuck state: the HEAD, or "unknown" when git could not
+      // even name it (for example a branch with no upstream).
+      const stuck = head || 'unknown';
+      if (pushAlerter && stuck !== lastAlertedHead) {
+        lastAlertedHead = stuck;
         await pushAlerter(
           `Knowledge-base push failed. Commits made on this host are not on the remote` +
             (head ? ` (HEAD ${head.slice(0, 12)})` : '') +

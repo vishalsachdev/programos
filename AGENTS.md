@@ -94,6 +94,9 @@ and say so.
 | Routed approvals | In production in K-ai | Approver recorded per sender in the allowlist; the institution domain set correctly |
 | Telegram admin channel | In production in K-ai. **Required for operator alerts** (see "Safety items") | Bot token, admin chat ID, **the chat sender allowlist file** |
 | Behaviour sensor and evaluation scripts | In production in K-ai | Ground-truth files in the program repo; see "Academic examples" |
+| Restricted container network (`CONTAINER_NETWORK`) | New in this repo (2026-11-20); not in K-ai. Checked with real containers on Docker Engine on Linux only | Docker Engine on Linux for the default; see "Safety items" |
+| Host pulls and pushes the program repo (`src/checkout-sync.ts`) | New in this repo (2026-11-20); not in K-ai. Tested against a local remote | A git credential for the host user that runs git; an operator alert channel |
+| Web search, web fetch, `agent-browser` | Off by default since 2026-11-20 | `AGENT_WEB_TOOLS=1`; fetch and browser also need `CONTAINER_NETWORK=open`. ASK first |
 | Web chat | Was in production, later retired there | A secret and a reverse proxy; treat as untested. **No allowlist of people: any caller with the secret is answered** |
 
 ## Safety items you must handle
@@ -125,6 +128,26 @@ and say so.
   other. Put only the admin's handle on the Telegram allowlist until the source fixes this.
 - **Retired people:** delete their allowlist row and handle. The email check accepts
   an address in any table row in the allowlist file, also below the "Retired access" note.
+- **The container's network is restricted by default on Linux.** `CONTAINER_NETWORK`
+  (`src/container-runtime.ts`) has two values. `restricted` puts the container on a
+  Docker network created with `--internal`: it reaches the host's credential proxy and
+  no outside host, no git host and no outside DNS name. `open` is the runtime's default
+  network, where the agent can send what it reads (mail, the knowledge base) to any
+  host, unseen by the delivery gate and the audit log; the host logs a warning at each
+  start. The default is `restricted` on Docker Engine on Linux, where it was checked
+  with real containers, and `open` on Docker Desktop (macOS, WSL), where it was not.
+  ASK before you set `open`. Limits the user must know: the container still reaches any
+  host service that listens on all interfaces (keep `WEBHOOK_HOST=127.0.0.1`); and the
+  host runs git in the checkout, whose `.git/config` and hooks the agent can write, so
+  a planted hook runs on the host with the host's network (`SPEC.md` section 11).
+- **Web search and web fetch are off by default.** `AGENT_WEB_TOOLS=1` turns them on
+  (`src/web-tools.ts`). Web search runs at the model provider, so the agent's query
+  leaves through the credential proxy even on the restricted network; while the
+  setting is off the proxy refuses such a request. Web fetch and `agent-browser` need
+  `CONTAINER_NETWORK=open` as well. With both off, `groups/main/CLAUDE.md` ("Search the
+  web", "Browse the web"), the `agent-browser` skill, and the "Web" lines of the
+  `capabilities` and `status` skills describe tools the agent does not have. ASK
+  before you turn either on.
 - **Mounts:** `config-examples/mount-allowlist.json` must list only the program repo. The email group is not the main group and it must write to the program repo in status-update mode, so `nonMainReadOnly` is `false` in the example. Keep the web chat group's own mount read-only in its group registration.
 - **Protected files are guarded for the agent's file-editing tools only.** `container/agent-runner/src/protected-write-guard.ts` blocks Write, Edit and NotebookEdit on protected paths. It does not inspect shell commands. The git-author check in `src/governance-protection.ts` is the second line. Do not describe this to the user as a hard block.
 - **Known gaps inherited from the source** (reported there): the conflict-check skill tells the agent to notify the admin with a Telegram tool that is not registered; two prompts and that skill disagree on how to record an uncorroborated spreadsheet fact (the skill is stricter: it goes to open questions); `groups/main/CLAUDE.md` is mostly upstream framework text.
@@ -220,15 +243,27 @@ Do these once, in this order, before the first test message:
    mounts. `seed-db.cjs` shows the full row with `additionalMounts`; it needs the
    database to exist first, and its host path is a placeholder. Read both, then
    register the email group, the main group and (if used) the Telegram group.
-4. Clone the program repo at the mounted path. Two writers use it, and both need
-   file ownership and git credentials that work: the host's repository operations
-   and the agent inside the container. When the host process runs as root, its
-   repository operations run as user and group 1000 with home `/home/ubuntu`
-   (`src/checkout-fs.ts`, `src/program-repo.ts`), so a root-owned clone fails. The
-   container does not get the operator's SSH agent or home folder. Use a deploy key
-   or token limited to the program repo. Before the first test message, run a pull,
-   a commit and a push as each writer.
+4. Clone the program repo at the mounted path, with an upstream branch set
+   (`git clone` does this). Two writers use the files: the host and the agent inside
+   the container. Only the host talks to the git host. The container gets no git
+   credential, no SSH client and, on the restricted network, no route to the git host;
+   do not try to give it a key or a token. The agent commits in the mounted checkout.
+   The host pulls before each turn and pushes after each agent result, before the
+   reply is handed on (`src/checkout-sync.ts`); a push that fails is reported to the
+   operator on the alert channel. So the git credential belongs to the host user that
+   runs git: when the host process runs as root, that is user and group 1000 with home
+   `/home/ubuntu` (`src/checkout-fs.ts`, `src/program-repo.ts`), and a root-owned
+   clone fails. Give that user a credential limited to the program repo (a deploy key
+   in its `~/.ssh`, or a token in its git credential store). Check it as that user:
+   `git pull` and `git push --dry-run` in the checkout.
 5. Build the container image (`container/build.sh`).
+6. Run `npx tsx scripts/check-container-egress.ts` as the service user, with the
+   service's environment. It starts containers the way the host does and must print
+   PASS for each line: the container reaches the host's proxy address; on the
+   restricted network it reaches no outside host and resolves no outside name; a
+   commit made inside the container arrives on a (temporary) remote through the
+   host's push; and the host's credential can push from the real checkout (a dry
+   run). Do not send the first test message until it passes.
 
 ## Order of work
 

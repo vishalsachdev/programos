@@ -136,7 +136,7 @@ async function main(): Promise<void> {
       !dns.out.includes('RESOLVED'),
       `outside name does not resolve (${OUTSIDE_NAME})`,
       dns.out.includes('RESOLVED')
-        ? 'DNS answers leave the host: data can be sent out inside lookups. Update Docker (25 or later stops this on internal networks).'
+        ? 'DNS answers leave the host: data can be sent out inside lookups. A newer Docker does not answer outside names on an internal network (seen on Docker 29).'
         : '',
     );
   } else {

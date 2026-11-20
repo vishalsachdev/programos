@@ -46,6 +46,7 @@ import {
   getOutboxStore,
   MemoryOutboxStore,
   setOutboxStore,
+  type BeginAttemptResult,
   type OutboxLane,
   type OutboxRow,
   type OutboxSendOptionsPayload,
@@ -90,7 +91,7 @@ export function _resetOutboxRetentionForTests(): void {
 }
 
 /**
- * Finalized send attempts a single row gets before the queue stops retrying it
+ * Send attempts a single row gets before the queue stops retrying it
  * and dead-letters it (loudly, via the G46 shortfall alert). Without a budget a
  * row that fails retryably forever is re-claimed until it ages out, and the
  * owner only learns about it at the expiry deadline.
@@ -1109,13 +1110,37 @@ async function deadLetterRow(
   outbox: OutboxStore,
   row: OutboxRow,
   reason: string,
+  // false: the row is a stale copy (its state could not be read); if the
+  // compare-and-set finds it unclaimed, do not write the copy back over it.
+  overwriteIfUnclaimed = true,
 ): Promise<OutboundEmailResult> {
-  const result: OutboundEmailResult = {
+  const result: OutboundEmailResult & { status: 'failed' } = {
     status: 'failed',
     reason,
     retryable: false,
   };
-  const finalized = outbox.finalize(row.deliveryId, result, nowMs());
+  let finalized: OutboxRow | undefined;
+  try {
+    finalized = outbox.finalize(row.deliveryId, result, nowMs());
+  } catch (err) {
+    // The write may have landed before the store failed. If the row now
+    // holds this dead letter, carry on so it is reported; if not, or if the
+    // row cannot be read either, the caller hears about the failure.
+    const after = outbox.get(row.deliveryId);
+    if (
+      after?.status !== 'dead-letter' ||
+      after.result?.status !== 'failed' ||
+      after.result.reason !== reason
+    ) {
+      throw err;
+    }
+    finalized = after;
+  }
+  if (!finalized && !overwriteIfUnclaimed) {
+    throw new Error(
+      `dead-letter of ${row.deliveryId} found it no longer claimed; state unknown`,
+    );
+  }
   if (!finalized) {
     // Defensive fallback if the row was not in 'claimed'.
     row.status = 'dead-letter';
@@ -1124,6 +1149,19 @@ async function deadLetterRow(
     row.terminalAt = row.updatedAt;
     outbox.set(row);
   }
+  await announceDeadLetter(row, result);
+  return result;
+}
+
+/**
+ * Tell the operator and the requesting agent about a dead letter that is in
+ * the store: the shortfall alert, the delivery note, and the waiting callers.
+ */
+async function announceDeadLetter(
+  row: OutboxRow,
+  result: OutboundEmailResult & { status: 'failed' },
+): Promise<void> {
+  const reason = result.reason;
   reportDeliveryShortfall({
     channel: 'email',
     context: `${row.sendOptions.sourceGroup}: ${row.email.subject || '(no subject)'}`,
@@ -1178,7 +1216,6 @@ async function deadLetterRow(
     reason,
   });
   resolveWaiters(row.deliveryId, result);
-  return result;
 }
 
 function rowTerminalResult(row: OutboxRow): OutboundEmailResult | undefined {
@@ -1194,6 +1231,42 @@ function rowTerminalResult(row: OutboxRow): OutboundEmailResult | undefined {
   return undefined;
 }
 
+/**
+ * The attempt budget, and why it holds.
+ *
+ * A delivery is handed to the provider at most MAX_OUTBOX_ATTEMPTS times.
+ * `processRow` calls `outbox.beginAttempt` before every send, and sends only
+ * after it returned `started`. That call counts the attempt and claims the
+ * row in one atomic write, and refuses once the count has reached the budget.
+ * Nothing else raises the count and nothing lowers it. So whatever throws
+ * afterwards (the send, a store read, the write of the outcome, the dead
+ * letter) and whenever the process stops, the stored count is at least the
+ * number of sends: a failure can cost a delivery one of its tries, and can
+ * never buy it an extra one. If `beginAttempt` itself throws, there is no
+ * send in that pass.
+ *
+ * After the last attempt the row is dead-lettered by `deadLetterRow`. If the
+ * store cannot record that, the row is left claimed with its budget spent;
+ * the next time any process takes it up, `beginAttempt` answers `spent` and
+ * the dead letter is written then, with no send.
+ */
+function leaseMs(): number {
+  return getProviderTimeoutMs() + getMaxStaggerDelayMs() + 120_000;
+}
+
+function beginCountedAttempt(
+  outbox: OutboxStore,
+  deliveryId: string,
+): BeginAttemptResult {
+  return outbox.beginAttempt(
+    deliveryId,
+    nowMs(),
+    process.pid,
+    leaseMs(),
+    MAX_OUTBOX_ATTEMPTS,
+  );
+}
+
 async function processRow(
   outbox: OutboxStore,
   row: OutboxRow,
@@ -1207,6 +1280,10 @@ async function processRow(
     }),
     resolve: activeResolve,
   };
+
+  // The row as `beginAttempt` returned it, once this pass's attempt is
+  // counted in the store. The provider is called only after this is set.
+  let begun: OutboxRow | undefined;
 
   try {
     const current = outbox.get(row.deliveryId) ?? row;
@@ -1237,10 +1314,9 @@ async function processRow(
         current.result?.status === 'failed' &&
         current.result.retryable)
     ) {
-      const leaseMs = getProviderTimeoutMs() + getMaxStaggerDelayMs() + 120_000;
       current.status = 'claimed';
       current.claimPid = process.pid;
-      current.claimExpiresAt = new Date(nowMs() + leaseMs).toISOString();
+      current.claimExpiresAt = new Date(nowMs() + leaseMs()).toISOString();
       current.updatedAt = new Date().toISOString();
       outbox.set(current);
     } else if (current.status !== 'claimed') {
@@ -1253,51 +1329,71 @@ async function processRow(
       return unexpected;
     }
 
+    const begin = beginCountedAttempt(outbox, current.deliveryId);
+    if (begin.outcome === 'not-sendable') {
+      const unexpected: OutboundEmailResult = (begin.row &&
+        rowTerminalResult(begin.row)) ?? {
+        status: 'failed',
+        reason: 'outbox-unexpected-status',
+        retryable: false,
+      };
+      resolveWaiters(current.deliveryId, unexpected);
+      return unexpected;
+    }
+    if (begin.outcome === 'spent') {
+      // Every attempt was already started (an earlier pass could not record
+      // its dead letter, or the process stopped during the last send).
+      return await deadLetterRow(
+        outbox,
+        begin.row,
+        'outbox-max-attempts-exceeded: no attempt left',
+      );
+    }
+    begun = begin.row;
+    // This attempt's number, already in the store.
+    const attempts = begun.attempts ?? MAX_OUTBOX_ATTEMPTS;
+
     const sendOpts = fromOutboxSendOptionsPayload(
-      current.sendOptions,
-      current.deliveryId,
+      begun.sendOptions,
+      begun.deliveryId,
     );
-    const result = await executeSendOutboundEmailResult(
-      current.email,
-      sendOpts,
-    );
+    const result = await executeSendOutboundEmailResult(begun.email, sendOpts);
 
     // A retryable failure is only retryable while budget remains: past it the
     // row becomes a genuine permanent failure the owner is told about, rather
     // than an item that silently churns until it ages out.
-    const attempts = (current.attempts ?? 0) + 1;
     if (result.status === 'failed' && result.retryable) {
       if (attempts >= MAX_OUTBOX_ATTEMPTS) {
         return await deadLetterRow(
           outbox,
-          current,
+          begun,
           `outbox-max-attempts-exceeded: ${result.reason}`,
         );
       }
       const finalizedRetry = outbox.finalize(
-        current.deliveryId,
+        begun.deliveryId,
         result,
         nowMs(),
         nowMs() + retryBackoffMs(attempts),
       );
       if (!finalizedRetry) {
         logger.error(
-          { deliveryId: current.deliveryId },
+          { deliveryId: begun.deliveryId },
           'Could not finalize retryable outbox row (no longer claimed)',
         );
       }
-      resolveWaiters(current.deliveryId, result);
+      resolveWaiters(begun.deliveryId, result);
       return result;
     }
 
-    const finalized = outbox.finalize(current.deliveryId, result, nowMs());
+    const finalized = outbox.finalize(begun.deliveryId, result, nowMs());
     if (!finalized) {
       logger.error(
-        { deliveryId: current.deliveryId },
+        { deliveryId: begun.deliveryId },
         'Could not finalize outbox row (no longer claimed) — treating as retryable failure',
       );
     }
-    resolveWaiters(current.deliveryId, result);
+    resolveWaiters(begun.deliveryId, result);
     return result;
   } catch (err) {
     logger.error(
@@ -1309,32 +1405,101 @@ async function processRow(
       reason: `send-queue-exception: ${err instanceof Error ? err.message : String(err)}`,
       retryable: true,
     };
-    // A throw is an attempt like a retryable failure result: it counts against
-    // the same budget and gets the same backoff, and the last one dead-letters
-    // the row. Only a row this process still holds claimed is counted; one that
-    // is already terminal or released (finalize would no-op) is left alone.
-    // The queue has no abort signal, and shutdown resets claims instead of
-    // throwing, so no throw is exempt.
-    let stored: OutboxRow | undefined;
+    // A throw is an attempt like a retryable failure result: it counts
+    // against the same budget and gets the same backoff, and the last one
+    // dead-letters the row. A throw after `beginAttempt` is already counted,
+    // so this block decides nothing about the budget and only records the
+    // outcome. A throw before it sent nothing; it is counted here all the
+    // same, so a row whose pass throws every time still ends in the dead
+    // letter instead of being tried for ever. Every write here is a
+    // compare-and-set on 'claimed', so a row that is already terminal is left
+    // alone. The queue has no abort signal, and shutdown resets claims
+    // instead of throwing, so no throw is exempt.
+    const spentResult: OutboundEmailResult & { status: 'failed' } = {
+      status: 'failed',
+      reason: `outbox-max-attempts-exceeded: ${result.reason}`,
+      retryable: false,
+    };
     try {
-      stored = outbox.get(row.deliveryId);
-    } catch {
-      stored = undefined;
-    }
-    const attempts = ((stored ?? row).attempts ?? 0) + 1;
-    if (stored?.status === 'claimed' && attempts >= MAX_OUTBOX_ATTEMPTS) {
-      return await deadLetterRow(
-        outbox,
-        stored,
-        `outbox-max-attempts-exceeded: ${result.reason}`,
+      const settled = outbox.get(row.deliveryId);
+      const terminal = settled && rowTerminalResult(settled);
+      if (terminal) {
+        // The outcome was written before the throw, so nothing is left to
+        // record. A dead letter got here only if this pass wrote it and
+        // failed before it had announced it: announce it now.
+        if (settled.status === 'dead-letter' && terminal.status === 'failed') {
+          await announceDeadLetter(settled, terminal);
+        }
+        resolveWaiters(row.deliveryId, terminal);
+        return terminal;
+      }
+    } catch (readErr) {
+      logger.error(
+        { err: readErr, deliveryId: row.deliveryId },
+        'Could not read outbox row after a send error',
       );
     }
-    outbox.finalize(
-      row.deliveryId,
-      result,
-      nowMs(),
-      nowMs() + retryBackoffMs(attempts),
-    );
+    if (!begun) {
+      try {
+        const begin = beginCountedAttempt(outbox, row.deliveryId);
+        if (begin.outcome !== 'not-sendable') begun = begin.row;
+      } catch (countErr) {
+        logger.error(
+          { err: countErr, deliveryId: row.deliveryId },
+          'Could not count a pass that failed before its send; nothing was sent',
+        );
+      }
+    }
+    // True also when the budget was already spent before this pass.
+    const spent = begun && (begun.attempts ?? 0) >= MAX_OUTBOX_ATTEMPTS;
+    try {
+      if (begun && spent) {
+        // `begun` may be stale by now: do not write it over a row that is
+        // no longer claimed.
+        return await deadLetterRow(outbox, begun, spentResult.reason, false);
+      }
+      outbox.finalize(
+        row.deliveryId,
+        result,
+        nowMs(),
+        nowMs() + retryBackoffMs(begun?.attempts ?? (row.attempts ?? 0) + 1),
+      );
+    } catch (writeErr) {
+      // The store is failing. The attempt is already counted there, so the
+      // budget holds without this write. The row stays claimed until a
+      // restart or a new submission takes it up again.
+      logger.error(
+        {
+          err: writeErr,
+          deliveryId: row.deliveryId,
+          attempts: begun?.attempts,
+          attemptCounted: !!begun,
+        },
+        'Could not record the outcome of a failed send; the row stays claimed',
+      );
+      if (begun && spent) {
+        logger.error(
+          { deliveryId: row.deliveryId },
+          'Attempt budget spent and the dead letter could not be recorded; the row is not sent again',
+        );
+        // Not in the store as a dead letter, but final all the same: the
+        // operator and the requesting agent are told now.
+        const unrecorded = {
+          ...spentResult,
+          reason: `${spentResult.reason}; dead letter not recorded`,
+        };
+        try {
+          await announceDeadLetter(begun, unrecorded);
+        } catch (announceErr) {
+          logger.error(
+            { err: announceErr, deliveryId: row.deliveryId },
+            'Could not announce the unrecorded dead letter',
+          );
+          resolveWaiters(row.deliveryId, unrecorded);
+        }
+        return unrecorded;
+      }
+    }
     resolveWaiters(row.deliveryId, result);
     return result;
   } finally {

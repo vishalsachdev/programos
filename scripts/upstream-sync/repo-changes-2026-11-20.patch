@@ -3239,10 +3239,10 @@ index 0000000000000000000000000000000000000000..25e224f94058e15842daa16171a22e82
 +});
 diff --git a/scripts/check-host-git-trust.ts b/scripts/check-host-git-trust.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..526dbdf8aa522bd263399c1251214ba53f3e370e
+index 0000000000000000000000000000000000000000..febfb5ac31ea850f110b11cbe13e537d156b091b
 --- /dev/null
 +++ b/scripts/check-host-git-trust.ts
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,222 @@
 +/**
 + * First-start check for the host-owned repository (src/host-repo.ts).
 + *
@@ -3271,6 +3271,7 @@ index 0000000000000000000000000000000000000000..526dbdf8aa522bd263399c1251214ba5
 +  KB_BRANCH,
 +  probeUploadPackIsolation,
 +} from '../src/host-repo.js';
++import { redactOriginCredential } from '../src/origin-credential.js';
 +import { getProgramRepoPath } from '../src/program-repo.js';
 +
 +let failed = false;
@@ -3290,6 +3291,20 @@ index 0000000000000000000000000000000000000000..526dbdf8aa522bd263399c1251214ba5
 +/** The origin address without a password or token. */
 +function redact(url: string): string {
 +  return url.replace(/\/\/[^/@]*@/, '//***@');
++}
++
++/**
++ * What git printed, without the origin's credential. `origin.url` below holds
++ * none (expectedOriginUrl), so no command line here does either; git gets it
++ * through the environment that hostGitOptions builds.
++ */
++function gitSaid(err: unknown): string {
++  return redactOriginCredential(
++    String((err as { stderr?: string }).stderr || err),
++    [process.env.PROGRAM_ORIGIN_URL],
++  )
++    .trim()
++    .slice(0, 200);
 +}
 +
 +const network = process.argv.includes('--network');
@@ -3424,14 +3439,7 @@ index 0000000000000000000000000000000000000000..526dbdf8aa522bd263399c1251214ba5
 +    hostGit(['ls-remote', '--heads', '--', origin.url, KB_BRANCH], true);
 +    line('PASS', 'the host credential reads the origin');
 +  } catch (err) {
-+    line(
-+      'FAIL',
-+      `the host credential cannot read the origin: ${String(
-+        (err as { stderr?: string }).stderr || err,
-+      )
-+        .trim()
-+        .slice(0, 200)}`,
-+    );
++    line('FAIL', `the host credential cannot read the origin: ${gitSaid(err)}`);
 +  }
 +  try {
 +    hostGit(
@@ -3447,14 +3455,7 @@ index 0000000000000000000000000000000000000000..526dbdf8aa522bd263399c1251214ba5
 +    );
 +    line('PASS', 'the host credential can push to the origin (dry run)');
 +  } catch (err) {
-+    line(
-+      'NOTE',
-+      `push --dry-run did not succeed: ${String(
-+        (err as { stderr?: string }).stderr || err,
-+      )
-+        .trim()
-+        .slice(0, 200)}`,
-+    );
++    line('NOTE', `push --dry-run did not succeed: ${gitSaid(err)}`);
 +  }
 +} else if (!network) {
 +  line(
@@ -3792,6 +3793,30 @@ index 0000000000000000000000000000000000000000..1ec5843980fa547d3a6118691c2b96aa
 +    ]);
 +  });
 +});
+diff --git a/setup/register.ts b/setup/register.ts
+index 86c73b81041be92ed533eff17310254ebb2b4c54..80335cd3e75d205838ff36fdf6d1cf8ed6eafbdc 100644
+--- a/setup/register.ts
++++ b/setup/register.ts
+@@ -9,6 +9,7 @@ import path from 'path';
+ 
+ import { STORE_DIR } from '../src/config.ts';
+ import { initDatabase, setRegisteredGroup } from '../src/db.ts';
++import { writeEnvFile } from '../src/env.ts';
+ import { isValidGroupFolder, seedGroupFolder } from '../src/group-folder.ts';
+ import { readFileInTree, writeFileInTree } from '../src/host-fs-safety.ts';
+ import { logger } from '../src/logger.ts';
+@@ -183,9 +184,9 @@ export async function run(args: string[]): Promise<void> {
+       } else {
+         envContent += `\nASSISTANT_NAME="${parsed.assistantName}"`;
+       }
+-      fs.writeFileSync(envFile, envContent);
++      writeEnvFile(envFile, envContent);
+     } else {
+-      fs.writeFileSync(envFile, `ASSISTANT_NAME="${parsed.assistantName}"\n`);
++      writeEnvFile(envFile, `ASSISTANT_NAME="${parsed.assistantName}"\n`);
+     }
+     logger.info('Set ASSISTANT_NAME in .env');
+     nameUpdated = true;
 diff --git a/setup/status.ts b/setup/status.ts
 index bf73555272b70d52cf5f91c3f157195fbe91a2bf..5ec9c98dc22d71c3f777ba14e813f80fe21a188d 100644
 --- a/setup/status.ts
@@ -3805,6 +3830,70 @@ index bf73555272b70d52cf5f91c3f157195fbe91a2bf..5ec9c98dc22d71c3f777ba14e813f80f
    for (const [key, value] of Object.entries(fields)) {
      lines.push(`${key}: ${value}`);
    }
+diff --git a/setup/timezone.ts b/setup/timezone.ts
+index 22c039482463512187f9e3a586bbb786b06eb8b1..b5bff2777b9e41558bb969194f8f0ddcd0708758 100644
+--- a/setup/timezone.ts
++++ b/setup/timezone.ts
+@@ -6,6 +6,7 @@
+ import fs from 'fs';
+ import path from 'path';
+ 
++import { writeEnvFile } from '../src/env.js';
+ import { isValidTimezone } from '../src/timezone.js';
+ import { logger } from '../src/logger.js';
+ import { emitStatus } from './status.js';
+@@ -49,9 +50,9 @@ export async function run(args: string[]): Promise<void> {
+       } else {
+         content = content.trimEnd() + `\nTZ=${resolvedTz}\n`;
+       }
+-      fs.writeFileSync(envFile, content);
++      writeEnvFile(envFile, content);
+     } else {
+-      fs.writeFileSync(envFile, `TZ=${resolvedTz}\n`);
++      writeEnvFile(envFile, `TZ=${resolvedTz}\n`);
+     }
+     logger.info({ timezone: resolvedTz }, 'Set TZ in .env');
+   }
+diff --git a/setup/verify.ts b/setup/verify.ts
+index 804ae4a58b2eeaa5a78f93ffb2cf31652db1a2e1..fb133fab0f1ec46eade32203a51b7caaf469c6cb 100644
+--- a/setup/verify.ts
++++ b/setup/verify.ts
+@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
+ 
+ import { STORE_DIR } from '../src/config.js';
+ import { assertSafeDbPath } from '../src/host-fs-safety.js';
+-import { readEnvFile } from '../src/env.js';
++import { envFilePermissionProblem, readEnvFile } from '../src/env.js';
+ import { logger } from '../src/logger.js';
+ import {
+   getPlatform,
+@@ -107,6 +107,14 @@ export async function run(_args: string[]): Promise<void> {
+     }
+   }
+ 
++  // .env holds every secret: say so when other users of the machine can read it.
++  const envPermissions = envFilePermissionProblem(envFile);
++  if (envPermissions)
++    logger.error(
++      { file: envPermissions.file, mode: envPermissions.mode },
++      `.env is readable by other users of this machine. Fix it with: ${envPermissions.fix}`,
++    );
++
+   // 4. Check channel auth (detect configured channels by credentials)
+   const envVars = readEnvFile([
+     'TELEGRAM_BOT_TOKEN',
+@@ -182,6 +190,11 @@ export async function run(_args: string[]): Promise<void> {
+     SERVICE: service,
+     CONTAINER_RUNTIME: containerRuntime,
+     CREDENTIALS: credentials,
++    ENV_FILE: envPermissions
++      ? `readable by other users (mode ${envPermissions.mode})`
++      : fs.existsSync(envFile)
++        ? 'private'
++        : 'missing',
+     CONFIGURED_CHANNELS: configuredChannels.join(','),
+     CHANNEL_AUTH: JSON.stringify(channelAuth),
+     REGISTERED_GROUPS: registeredGroups,
 diff --git a/src/admin-alert.test.ts b/src/admin-alert.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..a4e2cc05cf1708a3d0440aeadfd3616adf2a9cce
@@ -6681,6 +6770,134 @@ index dcfc99a3aae04f554770670008896535f14bff02..b82b3d910f1144b192c9843d54e0914d
    'discussions/LEARNING_INFRASTRUCTURE.md',
    'courses/',
    'program/',
+diff --git a/src/channels/web-chat-auth.test.ts b/src/channels/web-chat-auth.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..de46ba45fcac8df347383eb038534e45c24999fb
+--- /dev/null
++++ b/src/channels/web-chat-auth.test.ts
+@@ -0,0 +1,101 @@
++/**
++ * Issue 55, the web chat listener: WEBCHAT_SECRET is checked with a
++ * constant-time comparison. Right secret passes; wrong, empty, missing and
++ * different-length headers get 401.
++ */
++import { EventEmitter } from 'events';
++import type { IncomingMessage, ServerResponse } from 'http';
++
++import { beforeAll, describe, expect, it, vi } from 'vitest';
++
++const SECRET = 'web-chat-test-secret';
++
++type Handler = (req: IncomingMessage, res: ServerResponse) => void;
++
++const routes = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }));
++const onMessage = vi.fn();
++
++vi.mock('../env.js', () => ({
++  readEnvFile: () => ({ WEBCHAT_SECRET: 'web-chat-test-secret' }),
++}));
++
++vi.mock('./http-routes.js', () => ({
++  registerHttpRoute: (route: string, handler: unknown) => {
++    routes.handlers.set(route, handler);
++  },
++}));
++
++import './web-chat.js';
++import { getChannelFactory } from './registry.js';
++
++/** Send one POST with this body to the /chat handler; resolves with its answer. */
++function chat(
++  authorization: string | undefined,
++  body: string,
++): Promise<{ status: number; body: string }> {
++  const handler = routes.handlers.get('/chat') as Handler | undefined;
++  if (!handler) throw new Error('/chat is not registered');
++  const req = Object.assign(new EventEmitter(), {
++    method: 'POST',
++    headers: authorization === undefined ? {} : { authorization },
++  });
++  return new Promise((resolve) => {
++    let status = 0;
++    const res = {
++      setHeader: () => undefined,
++      writeHead: (code: number) => {
++        status = code;
++      },
++      end: (text = '') => resolve({ status, body: String(text) }),
++    };
++    handler(
++      req as unknown as IncomingMessage,
++      res as unknown as ServerResponse,
++    );
++    // Past the secret check the handler reads the body.
++    if (status === 0) {
++      req.emit('data', Buffer.from(body));
++      req.emit('end');
++    }
++  });
++}
++
++beforeAll(async () => {
++  const channel = getChannelFactory('web-chat')?.({
++    onMessage,
++    onChatMetadata: vi.fn(),
++    registeredGroups: () => ({}),
++  });
++  if (!channel) throw new Error('web-chat channel not registered');
++  await channel.connect();
++});
++
++describe('web chat: the WEBCHAT_SECRET check', () => {
++  it('lets the right secret past the check (the body is then read and judged)', async () => {
++    // An empty message is refused by the step after the check, with 400.
++    expect(
++      await chat(`Bearer ${SECRET}`, JSON.stringify({ message: ' ' })),
++    ).toEqual({
++      status: 400,
++      body: JSON.stringify({ error: 'Empty message' }),
++    });
++  });
++
++  it.each([
++    [
++      'a wrong secret of the same length',
++      `Bearer ${'x'.repeat(SECRET.length)}`,
++    ],
++    ['a shorter secret', 'Bearer web'],
++    ['a longer secret', `Bearer ${SECRET}-and-more`],
++    ['the secret without "Bearer"', SECRET],
++    ['an empty header', ''],
++    ['a missing header', undefined],
++  ])('answers 401 to %s and passes nothing on', async (_name, header) => {
++    expect(await chat(header, JSON.stringify({ message: 'hello' }))).toEqual({
++      status: 401,
++      body: JSON.stringify({ error: 'Unauthorized' }),
++    });
++    expect(onMessage).not.toHaveBeenCalled();
++  });
++});
+diff --git a/src/channels/web-chat.ts b/src/channels/web-chat.ts
+index a1d1e32cbb6d17c44a5b8fec947f4a5f949e2213..a0c6f7e0e17c4e04bf1f04011c0ddd4dc1b97237 100644
+--- a/src/channels/web-chat.ts
++++ b/src/channels/web-chat.ts
+@@ -19,6 +19,7 @@ import {
+ } from './web-chat-session.js';
+ import { logger } from '../logger.js';
+ import { readEnvFile } from '../env.js';
++import { bearerMatches } from '../secret-compare.js';
+ import { Channel, PreparedDelivery } from '../types.js';
+ 
+ registerChannel('web-chat', (opts) => {
+@@ -132,7 +133,7 @@ registerChannel('web-chat', (opts) => {
+ 
+     // Check auth
+     const authHeader = (req.headers['authorization'] || '') as string;
+-    if (authHeader !== `Bearer ${secret}`) {
++    if (!bearerMatches(authHeader, secret)) {
+       res.writeHead(401, { 'Content-Type': 'application/json' });
+       res.end(JSON.stringify({ error: 'Unauthorized' }));
+       return;
 diff --git a/src/channels/webhook-admin-alert-email.test.ts b/src/channels/webhook-admin-alert-email.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..71f739c90fbf2fda7de03cbd6395f87d004b4f1d
@@ -7118,6 +7335,135 @@ index 05877f2bd548b7efcc9b20c0079308b698eca5b7..0961fa71bb4d35e316e73dc5b7dbf040
      const response = await postJson({
        ...basePayload(),
        phase: 'accepted',
+diff --git a/src/channels/webhook-auth.test.ts b/src/channels/webhook-auth.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..506f28c446924213d630ccd632a38e9e1fe896d2
+--- /dev/null
++++ b/src/channels/webhook-auth.test.ts
+@@ -0,0 +1,123 @@
++/**
++ * Issue 55, the inbound mail listener: WEBHOOK_SECRET is checked with a
++ * constant-time comparison. Right secret passes; wrong, empty, missing and
++ * different-length headers get 401. Real HTTP requests to the real listener.
++ */
++import http from 'http';
++
++import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
++
++const TEST_PORT = 39348;
++const SECRET = 'webhook-auth-test-secret';
++
++vi.hoisted(() => {
++  process.env.WEBHOOK_PORT = '39348';
++  process.env.WEBHOOK_HOST = '127.0.0.1';
++  delete process.env.WEBHOOK_SECRET;
++});
++
++vi.mock('../env.js', () => ({
++  readEnvFile: () => ({
++    WEBHOOK_SECRET: 'webhook-auth-test-secret',
++    ASSISTANT_NAME: 'Coordinator',
++  }),
++}));
++
++vi.mock('../repo-reader.js', () => ({
++  getRepoReader: () => ({
++    mirrorPath: '/tmp/missing-mirror',
++    refresh: vi.fn(() => ({ advanced: false, sha: null })),
++    refreshAsync: vi.fn(async () => ({ advanced: false, sha: null })),
++    readFile: vi.fn(() => null),
++    readFileAsync: vi.fn(async () => null),
++    readFileAtCreationAsync: vi.fn(async () => null),
++    readFileBuffer: vi.fn(() => null),
++    commitExists: vi.fn(() => false),
++  }),
++}));
++
++import './webhook.js';
++import { _closeDatabase, _initTestDatabase } from '../db.js';
++import { getChannelFactory } from './registry.js';
++
++function post(
++  headers: Record<string, string>,
++  body = '{}',
++): Promise<{ status: number; body: string }> {
++  return new Promise((resolve, reject) => {
++    const req = http.request(
++      {
++        hostname: '127.0.0.1',
++        port: TEST_PORT,
++        path: '/',
++        method: 'POST',
++        headers: { 'content-type': 'application/json', ...headers },
++      },
++      (res) => {
++        const chunks: Buffer[] = [];
++        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
++        res.on('end', () =>
++          resolve({
++            status: res.statusCode ?? 0,
++            body: Buffer.concat(chunks).toString(),
++          }),
++        );
++      },
++    );
++    req.on('error', reject);
++    req.end(body);
++  });
++}
++
++describe('inbound mail webhook: the WEBHOOK_SECRET check', () => {
++  const onMessage = vi.fn();
++  let disconnect: (() => Promise<void>) | undefined;
++
++  beforeAll(async () => {
++    _initTestDatabase();
++    const channel = getChannelFactory('webhook')?.({
++      onMessage,
++      onChatMetadata: vi.fn(),
++      registeredGroups: () => ({}),
++    });
++    if (!channel) throw new Error('webhook channel not registered');
++    disconnect = () => channel.disconnect();
++    await channel.connect();
++  });
++
++  afterAll(async () => {
++    await disconnect?.();
++    _closeDatabase();
++  });
++
++  it('lets the right secret past the check (the body is then read and judged)', async () => {
++    // An empty JSON object is refused by the step after the check, with 400.
++    expect(await post({ authorization: `Bearer ${SECRET}` })).toEqual({
++      status: 400,
++      body: 'Missing filename or subject',
++    });
++  });
++
++  it.each([
++    [
++      'a wrong secret of the same length',
++      { authorization: `Bearer ${'x'.repeat(SECRET.length)}` },
++    ],
++    ['a shorter secret', { authorization: 'Bearer web' }],
++    ['a longer secret', { authorization: `Bearer ${SECRET}-and-more` }],
++    ['the secret without "Bearer"', { authorization: SECRET }],
++    ['an empty header', { authorization: '' }],
++    ['a missing header', {}],
++  ])(
++    'answers 401 to %s and passes nothing on',
++    async (_name, headers: Record<string, string>) => {
++      expect(
++        await post(
++          headers,
++          JSON.stringify({ filename: 'a.md', subject: 'Hello' }),
++        ),
++      ).toEqual({ status: 401, body: 'Unauthorized' });
++      expect(onMessage).not.toHaveBeenCalled();
++    },
++  );
++});
 diff --git a/src/channels/webhook-delivery-smtp.test.ts b/src/channels/webhook-delivery-smtp.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..d3d36ac3089d4e8015231793677e443dca1ff57f
@@ -7962,7 +8308,7 @@ index 0000000000000000000000000000000000000000..aed627472587da38136c151fac5bfa66
 +  });
 +});
 diff --git a/src/channels/webhook.ts b/src/channels/webhook.ts
-index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5ef0276a2 100644
+index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..068b14ab7ca9cb2692f0d2cb416e5af5cfc1e4f2 100644
 --- a/src/channels/webhook.ts
 +++ b/src/channels/webhook.ts
 @@ -77,6 +77,7 @@ import { readFromCheckoutBuffer } from '../checkout-fs.js';
@@ -7973,7 +8319,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
  import { Channel, PreparedDelivery } from '../types.js';
  import {
    extractEmailAttachments,
-@@ -84,6 +85,8 @@ import {
+@@ -84,9 +85,12 @@ import {
    saveExtraction,
  } from '../document-extractor.js';
  import { isAutoReplyEml } from '../email-loop-detection.js';
@@ -7982,7 +8328,11 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
  import { resolveGroupFolderPath } from '../group-folder.js';
  import { safeAttachmentName } from '../attachment-safety.js';
  import { getLastTaskRunAt } from '../db.js';
-@@ -186,11 +189,7 @@ registerChannel('webhook', (opts) => {
++import { bearerMatches } from '../secret-compare.js';
+ 
+ const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3003', 10);
+ const WEBHOOK_HOST = process.env.WEBHOOK_HOST || '0.0.0.0';
+@@ -186,11 +190,7 @@ registerChannel('webhook', (opts) => {
    // failure) can distinguish a transient outage (worth a retry) from a
    // permanent misconfiguration (retrying forever would get the endpoint
    // auto-disabled by the sender, e.g. Svix).
@@ -7995,7 +8345,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
      const token =
        resendEnv.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
      const chatId =
-@@ -226,6 +225,12 @@ registerChannel('webhook', (opts) => {
+@@ -226,6 +226,12 @@ registerChannel('webhook', (opts) => {
      }
    }
  
@@ -8008,7 +8358,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
    // Live checkout path — still needed for WRITE-side work (raw .eml reads of
    // just-committed mail, attachment extraction output) and for ownership
    // repair after host-side commits. Allowlist READS no longer touch it.
-@@ -423,13 +428,13 @@ registerChannel('webhook', (opts) => {
+@@ -423,13 +429,13 @@ registerChannel('webhook', (opts) => {
      const alertFrom = alertField(args.from, 'unknown');
      const alertSubject = alertField(args.subject, 'No Subject');
      if (result === 'write-failed') {
@@ -8024,7 +8374,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
          `High-attachment email accepted (${args.attachmentCount} files).\nFrom: ${alertFrom}\nSubject: ${alertSubject}\nA durable intake receipt exists; attachment storage and agent processing may still be pending.`,
        );
      }
-@@ -501,9 +506,7 @@ registerChannel('webhook', (opts) => {
+@@ -501,9 +507,7 @@ registerChannel('webhook', (opts) => {
            ? 'sent-earlier'
            : 'none',
      });
@@ -8035,7 +8385,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
      if (event.notice) {
        // A notice failure must not stop the alert retry and release below.
        await sendSenderCapNotice(event, resetAt, firstAlert === 'sent').catch(
-@@ -514,7 +517,7 @@ registerChannel('webhook', (opts) => {
+@@ -514,7 +518,7 @@ registerChannel('webhook', (opts) => {
      if (!event.alert || firstAlert === undefined) return;
      const finalAlert = await retryTransient(
        firstAlert,
@@ -8044,7 +8394,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
        SENDER_CAP_ALERT_RETRY_DELAYS_MS,
      );
      if (finalAlert !== 'sent') {
-@@ -595,7 +598,7 @@ registerChannel('webhook', (opts) => {
+@@ -595,7 +599,7 @@ registerChannel('webhook', (opts) => {
      cancelRelay: (deliveryId, reason) =>
        cancelQueuedOutboundEmail(deliveryId, reason),
      refreshMirror: () => getRepoReader().refreshAsync(),
@@ -8053,7 +8403,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
      audit: (event) => logRoutedApproval(event),
    });
  
-@@ -628,7 +631,9 @@ registerChannel('webhook', (opts) => {
+@@ -628,7 +632,9 @@ registerChannel('webhook', (opts) => {
    // skip obvious automated addresses + set Auto-Submitted so we don't loop
    // with the recipient's own autoresponder.
    // ───────────────────────────────────────────────────────────────────────
@@ -8064,7 +8414,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
    const blockedNotified = new Set<string>();
    const MAX_BLOCKED_NOTIFIED = 1000;
  
-@@ -655,7 +660,7 @@ registerChannel('webhook', (opts) => {
+@@ -655,7 +661,7 @@ registerChannel('webhook', (opts) => {
      if (from.includes(',') || from.includes(';')) return null;
      const angle = from.match(/<([^>]+)>/);
      const addr = (angle ? angle[1] : from).trim().toLowerCase();
@@ -8073,7 +8423,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
      return addr;
    }
  
-@@ -787,8 +792,8 @@ registerChannel('webhook', (opts) => {
+@@ -787,8 +793,8 @@ registerChannel('webhook', (opts) => {
              // degrades to log-and-200 — endlessly failing deliveries would
              // get the endpoint auto-disabled, ending bounce visibility.
              pingAdminViaTelegram: async (text) => {
@@ -8084,7 +8434,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
                }
              },
              logDeliveryProblem,
-@@ -810,8 +815,8 @@ registerChannel('webhook', (opts) => {
+@@ -810,8 +816,8 @@ registerChannel('webhook', (opts) => {
              res,
              githubPushSecret,
              async (text) => {
@@ -8095,7 +8445,16 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
                }
              },
              // A push is the moment a new Routed Approvals entry is committed.
-@@ -1031,7 +1036,7 @@ registerChannel('webhook', (opts) => {
+@@ -822,7 +828,7 @@ registerChannel('webhook', (opts) => {
+ 
+         // Check secret
+         const authHeader = req.headers['authorization'];
+-        if (authHeader !== `Bearer ${secret}`) {
++        if (!bearerMatches(authHeader, secret)) {
+           res.writeHead(401);
+           res.end('Unauthorized');
+           return;
+@@ -1031,7 +1037,7 @@ registerChannel('webhook', (opts) => {
                const now = Date.now();
                if (now - lastBoxPingAt >= BOX_PING_DEBOUNCE_MS) {
                  lastBoxPingAt = now;
@@ -8104,7 +8463,7 @@ index a171b9e5de19bd4afb58e7f26a6156ac0cf2c009..0736871fcb3f6be123318197c77d21b5
                    `📦 Box update detected (from ${from}).\n` +
                      `Subject: ${emailSubject}\n` +
                      `→ Run a Box sync sweep to refresh Coordinator's course data.`,
-@@ -1711,7 +1716,7 @@ registerChannel('webhook', (opts) => {
+@@ -1711,7 +1717,7 @@ registerChannel('webhook', (opts) => {
      ) {
        const meta = emailMetadata.get(jid);
  
@@ -10294,6 +10653,394 @@ index 4d956d1c8ae46c46a2344eae18d4b9145c1dd4b9..fc78ae49017576410be701d30b999553
  
  /** Consumed notes are kept this long for inspection, then dropped. */
  export const DELIVERY_NOTE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+diff --git a/src/delivery-state.test.ts b/src/delivery-state.test.ts
+index a116c7b9b5b0b9c6e471ba80294270f079effade..25ab264f04b29be31e68a65c6b6a63a6530b012f 100644
+--- a/src/delivery-state.test.ts
++++ b/src/delivery-state.test.ts
+@@ -1,3 +1,4 @@
++import { createHmac } from 'crypto';
+ import fs from 'fs';
+ import os from 'os';
+ import path from 'path';
+@@ -10,9 +11,12 @@ import {
+   setRouterState,
+ } from './db.js';
+ import {
++  _resetDeliveryStateKeysForTests,
+   clearDeliveryState,
++  initDeliveryStateKeys,
+   isTransportExpired,
+   loadDeliveryState,
++  resolveDeliveryStateKeys,
+   saveDeliveryState,
+   type DeliveryState,
+ } from './delivery-state.js';
+@@ -236,3 +240,233 @@ describe('delivery state persistence', () => {
+     });
+   });
+ });
++
++// Issue 56: the signing key. A dedicated DELIVERY_STATE_SIGNING_KEY signs;
++// without it the host falls back, as before, to a channel secret from .env.
++// State signed with the fallback still loads after a dedicated key is set.
++describe('delivery-state signing keys', () => {
++  const state: DeliveryState = {
++    version: 1,
++    phase: 'transport-pending',
++    chatJid: JID,
++    targetTimestamp: '2026-08-10T15:00:00.000Z',
++    previousCursor: '',
++    context: CONTEXT,
++    outcomeId: 'outcome-1',
++    prepared: PREPARED,
++    replyText: 'Hello',
++    attempt: 1,
++    createdAt: '2026-08-10T15:01:00.000Z',
++  };
++  let envDir: string;
++
++  /** The working folder's .env, which is where the fallback secrets live. */
++  function writeEnv(lines: Record<string, string>): void {
++    fs.writeFileSync(
++      path.join(envDir, '.env'),
++      Object.entries(lines)
++        .map(([k, v]) => `${k}=${v}\n`)
++        .join(''),
++      { mode: 0o600 },
++    );
++  }
++
++  /** What the version before this change computed for the same settings. */
++  function macAsBefore(payload: string, key: string): string {
++    return createHmac('sha256', key)
++      .update('nanoclaw-delivery-state-v1\0')
++      .update(payload)
++      .digest('hex');
++  }
++
++  function storedRaw(): { payload: string; mac: string } {
++    return JSON.parse(getRouterState(`delivery-state:${JID}`)!);
++  }
++
++  beforeEach(() => {
++    envDir = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-keys-'));
++    vi.spyOn(process, 'cwd').mockReturnValue(envDir);
++    vi.stubEnv('DELIVERY_STATE_SIGNING_KEY', '');
++    _resetDeliveryStateKeysForTests();
++  });
++
++  afterEach(() => {
++    vi.restoreAllMocks();
++    _resetDeliveryStateKeysForTests();
++    fs.rmSync(envDir, { recursive: true, force: true });
++  });
++
++  it('falls back in the documented order, exactly as before: WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN, RESEND_API_KEY', () => {
++    writeEnv({
++      RESEND_API_KEY: 'fake-mail-key',
++      TELEGRAM_BOT_TOKEN: 'fake-telegram-token',
++      WEBHOOK_SECRET: 'fake-webhook-secret',
++    });
++    expect(resolveDeliveryStateKeys()).toEqual({
++      sign: 'fake-webhook-secret',
++      verify: ['fake-webhook-secret'],
++      source: 'WEBHOOK_SECRET',
++    });
++    writeEnv({
++      RESEND_API_KEY: 'fake-mail-key',
++      TELEGRAM_BOT_TOKEN: 'fake-telegram-token',
++    });
++    expect(resolveDeliveryStateKeys().source).toBe('TELEGRAM_BOT_TOKEN');
++    writeEnv({ RESEND_API_KEY: 'fake-mail-key' });
++    expect(resolveDeliveryStateKeys().source).toBe('RESEND_API_KEY');
++    writeEnv({});
++    expect(resolveDeliveryStateKeys()).toEqual({
++      sign: undefined,
++      verify: [],
++      source: null,
++    });
++  });
++
++  it('with only a fallback secret, signs with the same MAC as before this change', () => {
++    writeEnv({ WEBHOOK_SECRET: 'fake-webhook-secret' });
++    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
++    const raw = storedRaw();
++    expect(raw.mac).toBe(macAsBefore(raw.payload, 'fake-webhook-secret'));
++    expect(loadDeliveryState(JID)).toEqual({ status: 'valid', state });
++  });
++
++  it('reads the dedicated key from .env too, and prefers the process environment', () => {
++    writeEnv({
++      DELIVERY_STATE_SIGNING_KEY: 'fake-dedicated-from-file',
++      WEBHOOK_SECRET: 'fake-webhook-secret',
++    });
++    expect(resolveDeliveryStateKeys()).toEqual({
++      sign: 'fake-dedicated-from-file',
++      verify: ['fake-dedicated-from-file', 'fake-webhook-secret'],
++      source: 'DELIVERY_STATE_SIGNING_KEY',
++    });
++    vi.stubEnv('DELIVERY_STATE_SIGNING_KEY', 'fake-dedicated-from-env');
++    expect(resolveDeliveryStateKeys().sign).toBe('fake-dedicated-from-env');
++  });
++
++  it('state signed with the fallback secret still loads after a dedicated key is set, and new state is signed with the dedicated key', () => {
++    writeEnv({ WEBHOOK_SECRET: 'fake-webhook-secret' });
++    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
++    const old = storedRaw();
++
++    // The operator adds the dedicated key and restarts.
++    writeEnv({
++      DELIVERY_STATE_SIGNING_KEY: 'fake-dedicated-key',
++      WEBHOOK_SECRET: 'fake-webhook-secret',
++    });
++    expect(loadDeliveryState(JID)).toEqual({ status: 'valid', state });
++
++    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
++    const fresh = storedRaw();
++    expect(fresh.mac).toBe(macAsBefore(fresh.payload, 'fake-dedicated-key'));
++    expect(fresh.mac).not.toBe(old.mac);
++    expect(loadDeliveryState(JID)).toEqual({ status: 'valid', state });
++  });
++
++  it('with a dedicated key, rotating the channel secret does not invalidate saved state', () => {
++    writeEnv({
++      DELIVERY_STATE_SIGNING_KEY: 'fake-dedicated-key',
++      WEBHOOK_SECRET: 'fake-webhook-secret',
++    });
++    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
++    writeEnv({
++      DELIVERY_STATE_SIGNING_KEY: 'fake-dedicated-key',
++      WEBHOOK_SECRET: 'fake-webhook-secret-rotated',
++    });
++    expect(loadDeliveryState(JID)).toEqual({ status: 'valid', state });
++  });
++
++  it('state saved under one key and loaded under another is invalid, and the caller dead-letters it, clears it and retries the message', async () => {
++    writeEnv({ WEBHOOK_SECRET: 'fake-webhook-secret' });
++    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
++    // The only key is replaced (no dedicated key, the reused secret rotated).
++    writeEnv({ WEBHOOK_SECRET: 'fake-webhook-secret-rotated' });
++    expect(loadDeliveryState(JID)).toEqual({
++      status: 'invalid',
++      reason: 'invalid-state-signature',
++    });
++
++    // What src/index.ts does with it: processDelivery with the real load and
++    // clear functions (index.ts passes exactly these two).
++    const { processDelivery } = await import('./delivery-processor.js');
++    const auditDeadLetter = vi.fn(() => 'written' as const);
++    const alertDeadLetter = vi.fn(async () => undefined);
++    const runBusinessAgent = vi.fn();
++    const result = await processDelivery(
++      {
++        chatJid: JID,
++        prompt: 'unused',
++        previousCursor: '',
++        targetTimestamp: '2026-08-10T15:00:00.000Z',
++      } as never,
++      {
++        loadState: loadDeliveryState,
++        clearState: clearDeliveryState,
++        auditDeadLetter,
++        alertDeadLetter,
++        runBusinessAgent,
++      } as never,
++    );
++    expect(result).toEqual({ status: 'retry', attempt: 1 });
++    expect(auditDeadLetter).toHaveBeenCalledWith(
++      expect.objectContaining({
++        phase: 'corrupt-state',
++        reason: 'corrupt-state: invalid-state-signature',
++      }),
++    );
++    expect(alertDeadLetter).toHaveBeenCalledTimes(1);
++    // The forged or stale state is gone; no reply was sent from it.
++    expect(runBusinessAgent).not.toHaveBeenCalled();
++    expect(loadDeliveryState(JID)).toEqual({ status: 'none' });
++  });
++
++  it('a tampered payload is refused whichever key is tried', () => {
++    writeEnv({
++      DELIVERY_STATE_SIGNING_KEY: 'fake-dedicated-key',
++      WEBHOOK_SECRET: 'fake-webhook-secret',
++    });
++    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
++    const raw = storedRaw();
++    raw.payload = raw.payload.replace('person@example.edu', 'x@example.com');
++    setRouterState(`delivery-state:${JID}`, JSON.stringify(raw));
++    expect(loadDeliveryState(JID)).toEqual({
++      status: 'invalid',
++      reason: 'invalid-state-signature',
++    });
++  });
++
++  it('after initDeliveryStateKeys the settings are read once: an edit of .env takes effect at the restart only', () => {
++    writeEnv({ WEBHOOK_SECRET: 'fake-webhook-secret' });
++    expect(initDeliveryStateKeys().source).toBe('WEBHOOK_SECRET');
++    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
++
++    // Someone edits .env while the host runs. The listener still holds the
++    // old secret; so does the state signer.
++    writeEnv({ WEBHOOK_SECRET: 'fake-webhook-secret-rotated' });
++    vi.stubEnv('DELIVERY_STATE_SIGNING_KEY', 'fake-dedicated-set-later');
++    expect(loadDeliveryState(JID)).toEqual({ status: 'valid', state });
++    expect(saveDeliveryState(state)).toEqual({ status: 'saved' });
++    const raw = storedRaw();
++    expect(raw.mac).toBe(macAsBefore(raw.payload, 'fake-webhook-secret'));
++
++    // The restart.
++    expect(initDeliveryStateKeys()).toEqual({
++      sign: 'fake-dedicated-set-later',
++      verify: ['fake-dedicated-set-later', 'fake-webhook-secret-rotated'],
++      source: 'DELIVERY_STATE_SIGNING_KEY',
++    });
++  });
++
++  it('the host warns at start when a channel secret is reused, naming the setting and never the value', () => {
++    const text = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8');
++    const main = text.slice(text.indexOf('async function main()'));
++    expect(main).toMatch(/const deliveryKeys = initDeliveryStateKeys\(\);/);
++    expect(main).toMatch(
++      /deliveryKeys\.source !== 'DELIVERY_STATE_SIGNING_KEY'/,
++    );
++    expect(main).toMatch(
++      /Set DELIVERY_STATE_SIGNING_KEY to its own long random value/,
++    );
++    expect(main).not.toMatch(/deliveryKeys\.(sign|verify)/);
++  });
++});
+diff --git a/src/delivery-state.ts b/src/delivery-state.ts
+index d0f4d128d85ab7eb38a94385187097f4121e60a1..cbb5bd3d69210bd8efab374489789f5d78b312ee 100644
+--- a/src/delivery-state.ts
++++ b/src/delivery-state.ts
+@@ -72,18 +72,78 @@ function stateKey(jid: string): string {
+   return `${STATE_KEY_PREFIX}${jid}`;
+ }
+ 
+-function signingKey(): string | undefined {
++/**
++ * The keys that sign and check saved delivery state.
++ *
++ * `sign` is DELIVERY_STATE_SIGNING_KEY (process environment, or `.env`) when
++ * it is set. Without it the host falls back, as it always has, to the first
++ * one set of WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN and RESEND_API_KEY in
++ * `.env`: a secret that exists for another purpose, so a leak of it also
++ * lets its holder forge delivery state, and rotating it makes state saved
++ * before the rotation fail the check.
++ *
++ * `verify` lists every key a saved state may have been signed with: the
++ * signing key, then the fallback. So state signed before a dedicated key was
++ * set (or before this setting was documented) still loads.
++ */
++export interface DeliveryStateKeys {
++  sign: string | undefined;
++  verify: string[];
++  /** The setting the signing key came from, or null when state is unsigned. */
++  source:
++    | 'DELIVERY_STATE_SIGNING_KEY'
++    | 'WEBHOOK_SECRET'
++    | 'TELEGRAM_BOT_TOKEN'
++    | 'RESEND_API_KEY'
++    | null;
++}
++
++const FALLBACK_KEY_SETTINGS = [
++  'WEBHOOK_SECRET',
++  'TELEGRAM_BOT_TOKEN',
++  'RESEND_API_KEY',
++] as const;
++
++export function resolveDeliveryStateKeys(): DeliveryStateKeys {
+   const env = readEnvFile([
+-    'WEBHOOK_SECRET',
+-    'TELEGRAM_BOT_TOKEN',
+-    'RESEND_API_KEY',
++    'DELIVERY_STATE_SIGNING_KEY',
++    ...FALLBACK_KEY_SETTINGS,
+   ]);
+-  return (
+-    process.env.DELIVERY_STATE_SIGNING_KEY ||
+-    env.WEBHOOK_SECRET ||
+-    env.TELEGRAM_BOT_TOKEN ||
+-    env.RESEND_API_KEY
+-  );
++  const dedicated =
++    process.env.DELIVERY_STATE_SIGNING_KEY || env.DELIVERY_STATE_SIGNING_KEY;
++  const fallbackSetting = FALLBACK_KEY_SETTINGS.find((name) => env[name]);
++  const fallback = fallbackSetting ? env[fallbackSetting] : undefined;
++  const sign = dedicated || fallback;
++  return {
++    sign,
++    verify: [...new Set([dedicated, fallback].filter(isNonEmptyString))],
++    source: dedicated
++      ? 'DELIVERY_STATE_SIGNING_KEY'
++      : (fallbackSetting ?? null),
++  };
++}
++
++/** Set once at startup; null in tests and scripts that never start the host. */
++let startupKeys: DeliveryStateKeys | null = null;
++
++/**
++ * Read the keys once, as the listeners read their secrets once at start: an
++ * edit of `.env` then takes effect at the restart, for all of them together.
++ * Returns the keys so the caller can warn about a reused secret. Before this
++ * is called (tests, scripts) the settings are read at each use.
++ */
++export function initDeliveryStateKeys(): DeliveryStateKeys {
++  startupKeys = resolveDeliveryStateKeys();
++  return startupKeys;
++}
++
++/** @internal */
++export function _resetDeliveryStateKeysForTests(): void {
++  startupKeys = null;
++}
++
++function currentKeys(): DeliveryStateKeys {
++  return startupKeys ?? resolveDeliveryStateKeys();
+ }
+ 
+ function macFor(payload: string, key: string): string {
+@@ -96,8 +156,8 @@ function macFor(payload: string, key: string): string {
+ function unwrapSignedState(
+   serialized: string,
+ ): { ok: true; payload: string } | { ok: false; reason: string } {
+-  const key = signingKey();
+-  if (!key) return { ok: true, payload: serialized };
++  const keys = currentKeys().verify;
++  if (keys.length === 0) return { ok: true, payload: serialized };
+   let wrapper: unknown;
+   try {
+     wrapper = JSON.parse(serialized);
+@@ -112,11 +172,15 @@ function unwrapSignedState(
+   ) {
+     return { ok: false, reason: 'missing-state-signature' };
+   }
+-  const expected = Buffer.from(macFor(wrapper.payload, key), 'hex');
+   const actual = Buffer.from(wrapper.mac, 'hex');
+-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+-    return { ok: false, reason: 'invalid-state-signature' };
++  // Every key is tried, with no early exit: which one matched is not timed.
++  let matched = false;
++  for (const key of keys) {
++    const expected = Buffer.from(macFor(wrapper.payload, key), 'hex');
++    if (expected.length === actual.length && timingSafeEqual(expected, actual))
++      matched = true;
+   }
++  if (!matched) return { ok: false, reason: 'invalid-state-signature' };
+   return { ok: true, payload: wrapper.payload };
+ }
+ 
+@@ -261,7 +325,7 @@ export function saveDeliveryState(
+   if (Buffer.byteLength(serialized, 'utf8') > CONTAINER_MAX_OUTPUT_SIZE) {
+     return { status: 'invalid', reason: 'state-too-large' };
+   }
+-  const key = signingKey();
++  const key = currentKeys().sign;
+   const stored = key
+     ? JSON.stringify({
+         signatureVersion: SIGNATURE_VERSION,
 diff --git a/src/document-extractor.test.ts b/src/document-extractor.test.ts
 index 2755562863072b5d84fd18f09efd341f765b47d2..a210d5ce72564265fa8d368554dd5ada34210d5a 100644
 --- a/src/document-extractor.test.ts
@@ -10825,6 +11572,266 @@ index b418cd405708cecbbaa53b3a7ece1e875289b974..4e9b01c6f948bf488f739ffff690aa8d
  /**
   * Parse just the headers of an .eml file on disk and check for auto-reply
   * markers. Non-throwing — on parse failure, returns `{isAutoReply: false}`
+diff --git a/src/env-file-permissions.test.ts b/src/env-file-permissions.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5c065e7963be5c932976c90ac239643a6b7fc491
+--- /dev/null
++++ b/src/env-file-permissions.test.ts
+@@ -0,0 +1,172 @@
++/**
++ * Issue 54: `.env` holds every secret. The host says so at start when other
++ * users of the machine can read it, and refuses to start only when asked to.
++ * The setup steps create the file private and keep an existing file's mode.
++ */
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++import {
++  checkEnvFilePermissions,
++  envFilePermissionProblem,
++  writeEnvFile,
++} from './env.js';
++import { logger } from './logger.js';
++
++let dir: string;
++let file: string;
++
++beforeEach(() => {
++  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-mode-'));
++  file = path.join(dir, '.env');
++  vi.spyOn(process, 'cwd').mockReturnValue(dir);
++  vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', '');
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  vi.unstubAllEnvs();
++  fs.rmSync(dir, { recursive: true, force: true });
++});
++
++function writeWithMode(mode: number, content = 'WEBHOOK_SECRET=placeholder\n') {
++  fs.writeFileSync(file, content);
++  fs.chmodSync(file, mode);
++}
++
++describe('envFilePermissionProblem', () => {
++  it.each([0o600, 0o400])('accepts mode %o', (mode) => {
++    writeWithMode(mode);
++    expect(envFilePermissionProblem()).toBeNull();
++  });
++
++  it.each([
++    [0o644, '644'],
++    [0o640, '640'],
++    [0o604, '604'],
++    [0o660, '660'],
++    [0o620, '620'],
++  ])(
++    'reports mode %o, with the file and the command to fix it',
++    (mode, text) => {
++      writeWithMode(mode);
++      expect(envFilePermissionProblem()).toEqual({
++        file,
++        mode: text,
++        fix: `chmod 600 ${file}`,
++      });
++    },
++  );
++
++  it('says nothing when there is no .env', () => {
++    expect(envFilePermissionProblem()).toBeNull();
++  });
++});
++
++describe('the check at start', () => {
++  it('logs one error that names the file and the fix, and lets the host start', () => {
++    writeWithMode(0o644);
++    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
++    expect(() => checkEnvFilePermissions()).not.toThrow();
++    expect(error).toHaveBeenCalledTimes(1);
++    const [data, message] = error.mock.calls[0] as [
++      Record<string, string>,
++      string,
++    ];
++    expect(data).toEqual({ file, mode: '644', fix: `chmod 600 ${file}` });
++    expect(message).toContain(file);
++    expect(message).toContain(`chmod 600 ${file}`);
++    expect(message).toContain('REQUIRE_PRIVATE_ENV_FILE=true');
++    // The secret values are not part of the message.
++    expect(JSON.stringify(error.mock.calls)).not.toContain('placeholder');
++  });
++
++  it('is silent for a private file', () => {
++    writeWithMode(0o600);
++    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
++    checkEnvFilePermissions();
++    expect(error).not.toHaveBeenCalled();
++  });
++
++  it('refuses to start with REQUIRE_PRIVATE_ENV_FILE=true in the process environment', () => {
++    writeWithMode(0o640);
++    vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', 'true');
++    expect(() => checkEnvFilePermissions()).toThrow(
++      new RegExp(`chmod 600 ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
++    );
++    expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);
++  });
++
++  it('refuses to start with REQUIRE_PRIVATE_ENV_FILE=true in .env itself', () => {
++    writeWithMode(0o644, 'REQUIRE_PRIVATE_ENV_FILE=true\n');
++    expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);
++  });
++
++  it('with the setting on, a private file starts as usual', () => {
++    writeWithMode(0o600, 'REQUIRE_PRIVATE_ENV_FILE=true\n');
++    expect(() => checkEnvFilePermissions()).not.toThrow();
++  });
++
++  it.each(['false', '1', 'yes', ''])(
++    'only the value "true" makes it a refusal (%j does not)',
++    (value) => {
++      writeWithMode(0o644);
++      vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', value);
++      vi.spyOn(logger, 'error').mockImplementation(() => undefined);
++      expect(() => checkEnvFilePermissions()).not.toThrow();
++    },
++  );
++});
++
++describe('writeEnvFile (the setup steps)', () => {
++  it('creates a new .env with mode 0600, whatever the umask', () => {
++    let previous: number | null = null;
++    try {
++      previous = process.umask(0);
++    } catch {
++      /* a worker thread cannot change the umask */
++    }
++    try {
++      writeEnvFile(file, 'TZ=Etc/UTC\n');
++    } finally {
++      if (previous !== null) process.umask(previous);
++    }
++    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
++    expect(fs.readFileSync(file, 'utf8')).toBe('TZ=Etc/UTC\n');
++  });
++
++  it.each([0o600, 0o640, 0o644])(
++    'keeps the mode %o of a file that exists',
++    (mode) => {
++      writeWithMode(mode);
++      writeEnvFile(file, 'TZ=Etc/UTC\n');
++      expect(fs.statSync(file).mode & 0o777).toBe(mode);
++      expect(fs.readFileSync(file, 'utf8')).toBe('TZ=Etc/UTC\n');
++    },
++  );
++
++  it('the two setup steps that write .env use it, and no setup step writes .env directly', () => {
++    for (const rel of ['setup/register.ts', 'setup/timezone.ts']) {
++      const text = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
++      expect(text).toMatch(/writeEnvFile\(envFile,/);
++      expect(text).not.toMatch(/writeFileSync\(envFile/);
++    }
++  });
++
++  it('the host runs the check at start, before it creates or starts anything', () => {
++    const text = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8');
++    const main = text.slice(text.indexOf('async function main()'));
++    const at = main.indexOf('checkEnvFilePermissions();');
++    expect(at).toBeGreaterThan(0);
++    for (const later of [
++      'ensureHostRepo();',
++      'ensureContainerSystemRunning();',
++      'initDatabase();',
++      'startCredentialProxy(',
++    ])
++      expect(at).toBeLessThan(main.indexOf(later));
++  });
++});
+diff --git a/src/env.ts b/src/env.ts
+index 82cd5c3da0f0e4ebbfc83f2b5fe7aa09b7cf8e21..4bf3af14725822c72007dcf72c425bf0ae33cf0d 100644
+--- a/src/env.ts
++++ b/src/env.ts
+@@ -41,3 +41,77 @@ export function readEnvFile(keys: string[]): Record<string, string> {
+ 
+   return result;
+ }
++
++/** Where the host reads its secrets from. */
++export function envFilePath(): string {
++  return path.join(process.cwd(), '.env');
++}
++
++/**
++ * Write `.env`. A new file is created readable by its owner only (0600),
++ * whatever the umask; an existing file keeps the mode it has. For the setup
++ * steps that create or rewrite the file.
++ */
++export function writeEnvFile(file: string, content: string): void {
++  const isNew = !fs.existsSync(file);
++  fs.writeFileSync(file, content, isNew ? { mode: 0o600 } : {});
++  if (isNew) fs.chmodSync(file, 0o600);
++}
++
++export interface EnvFilePermissionProblem {
++  file: string;
++  /** The permission bits found, in octal ("644"). */
++  mode: string;
++  /** The command that fixes it. */
++  fix: string;
++}
++
++/**
++ * `.env` holds every secret of the host. This says whether another user of
++ * the machine can read it: any permission bit for the group or for others.
++ * Null when the file is private, missing, or on Windows (no such bits).
++ */
++export function envFilePermissionProblem(
++  file = envFilePath(),
++): EnvFilePermissionProblem | null {
++  if (process.platform === 'win32') return null;
++  let mode: number;
++  try {
++    mode = fs.statSync(file).mode & 0o777;
++  } catch {
++    return null;
++  }
++  if ((mode & 0o077) === 0) return null;
++  return { file, mode: mode.toString(8), fix: `chmod 600 ${file}` };
++}
++
++/**
++ * The startup check. With a `.env` that the group or others can read it logs
++ * one error naming the file and the command to fix it. The host still
++ * starts, so an upgrade does not stop a deployment that was running; set
++ * REQUIRE_PRIVATE_ENV_FILE=true (in the process environment or in `.env`) to
++ * make it refuse to start instead.
++ */
++export function checkEnvFilePermissions(file = envFilePath()): void {
++  const problem = envFilePermissionProblem(file);
++  if (!problem) return;
++  const strict =
++    (
++      process.env.REQUIRE_PRIVATE_ENV_FILE ||
++      readEnvFile(['REQUIRE_PRIVATE_ENV_FILE']).REQUIRE_PRIVATE_ENV_FILE ||
++      ''
++    )
++      .trim()
++      .toLowerCase() === 'true';
++  const text =
++    `${problem.file} holds every secret of this host and is readable by other users of this machine ` +
++    `(mode ${problem.mode}). Fix it with: ${problem.fix}`;
++  if (strict)
++    throw new Error(
++      `${text} (refusing to start: REQUIRE_PRIVATE_ENV_FILE=true)`,
++    );
++  logger.error(
++    { file: problem.file, mode: problem.mode, fix: problem.fix },
++    `${text} (set REQUIRE_PRIVATE_ENV_FILE=true to make the host refuse to start in this state)`,
++  );
++}
 diff --git a/src/gate-result-log.test.ts b/src/gate-result-log.test.ts
 index 058ff50a6135ffa71842a50726373d71c2294ab6..13ef7e2b59305f7bcdb53d235d321c450682f264 100644
 --- a/src/gate-result-log.test.ts
@@ -11660,6 +12667,295 @@ index 0000000000000000000000000000000000000000..5b7e42a4ac1d62d34e5b14c76a284fc4
 +      ).toBe(false);
 +  });
 +});
+diff --git a/src/host-repo-origin-credential.test.ts b/src/host-repo-origin-credential.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..cae89b45bb422eea68dd456a0b8a1e4dfe48be6a
+--- /dev/null
++++ b/src/host-repo-origin-credential.test.ts
+@@ -0,0 +1,283 @@
++/**
++ * Issue 53: a token written in PROGRAM_ORIGIN_URL is never stored in a git
++ * config file, never on a git command line, and never in a log line, an
++ * alert or a result. The host repo is private to its owner. A host repo made
++ * by an earlier version is repaired at the first start.
++ *
++ * The origin here is an HTTPS address on a closed local port: git is really
++ * started and really tries, and nothing leaves the machine.
++ */
++import fs from 'fs';
++import path from 'path';
++
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++import {
++  _resetHostRepoStateForTests,
++  ensureHostRepo,
++  expectedOriginUrl,
++  hostGitEnv,
++  setHostRepoAlerter,
++  syncHostRepo,
++} from './host-repo.js';
++import { logger } from './logger.js';
++import { recordGitProcesses } from './test-support/git-argv-recorder.js';
++import {
++  git,
++  makeKbFixture,
++  type KbFixture,
++} from './test-support/kb-fixture.js';
++
++// Obviously fake, and assembled so that no line holds a URL with a password.
++const USER = 'kb-bot';
++const TOKEN = ['not', 'a', 'real', 'token', '5353'].join('-');
++const ADDRESS = '127.0.0.1:9/team/program-repo.git';
++const BARE = `https://${ADDRESS}`;
++const WITH_PASSWORD = `https://${USER}:${TOKEN}@${ADDRESS}`;
++const TOKEN_AS_USER = `https://${TOKEN}@${ADDRESS}`;
++const PATTERN = '^https://([A-Za-z0-9_.~:-]+@)?127[.]0[.]0[.]1:9/team/';
++
++let kb: KbFixture;
++let alerts: string[];
++let logged: string[];
++
++function useOrigin(url: string): void {
++  vi.stubEnv('PROGRAM_ORIGIN_URL', url);
++  vi.stubEnv('PROGRAM_ORIGIN_PATTERN', PATTERN);
++}
++
++function storedConfig(): string {
++  return fs.readFileSync(path.join(kb.host, '.git', 'config'), 'utf8');
++}
++
++function mode(target: string): number {
++  return fs.statSync(target).mode & 0o777;
++}
++
++beforeEach(() => {
++  _resetHostRepoStateForTests();
++  kb = makeKbFixture();
++  alerts = [];
++  logged = [];
++  setHostRepoAlerter(async (text) => {
++    alerts.push(text);
++  });
++  for (const level of ['debug', 'info', 'warn', 'error', 'fatal'] as const)
++    vi.spyOn(logger, level).mockImplementation((...args: unknown[]) => {
++      logged.push(
++        JSON.stringify(args, (_k, v) =>
++          v instanceof Error ? `${v.message}\n${v.stack}` : v,
++        ),
++      );
++    });
++  // No proxy between git and the closed port, whatever this machine sets.
++  for (const key of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'])
++    vi.stubEnv(key, '');
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  kb.cleanup();
++});
++
++describe.each([
++  ['a user and a token', WITH_PASSWORD],
++  ['a token as the user name', TOKEN_AS_USER],
++])('origin URL with %s', (_name, url) => {
++  it('gives callers the URL without the credential, and checks the pattern on the URL as set', () => {
++    useOrigin(url);
++    expect(expectedOriginUrl()).toEqual({ url: BARE });
++    // A pattern that requires the credential still passes.
++    vi.stubEnv('PROGRAM_ORIGIN_PATTERN', '^https://[^/@]+@127[.]0[.]0[.]1:9/');
++    expect(expectedOriginUrl()).toEqual({ url: BARE });
++    vi.stubEnv('PROGRAM_ORIGIN_PATTERN', '^https://git[.]example[.]edu/');
++    expect(expectedOriginUrl().url).toBeNull();
++    expect(expectedOriginUrl().problem).toMatch(/PROGRAM_ORIGIN_PATTERN/);
++  });
++
++  it('hands the credential to credentialed git through its environment only', () => {
++    useOrigin(url);
++    const env = hostGitEnv({ credentialed: true });
++    expect(env.GIT_CONFIG_COUNT).toBe('1');
++    expect(env.GIT_CONFIG_KEY_0).toBe(`url.${url}.insteadOf`);
++    expect(env.GIT_CONFIG_VALUE_0).toBe(BARE);
++    // Local git (commit, import from the checkout) never gets it.
++    expect(JSON.stringify(hostGitEnv({ credentialed: false }))).not.toContain(
++      TOKEN,
++    );
++  });
++
++  it('a sync puts the token in no config file, no process argument, no log line, no alert and no result', async () => {
++    useOrigin(url);
++    const recorder = recordGitProcesses(kb.root);
++    const result = await syncHostRepo({ count: 1, fetchOrigin: true });
++
++    // git was really asked to fetch, and could not reach the closed port.
++    expect(result.failed).toMatch(/^fetch: /);
++    expect(recorder.argv().some((a) => / fetch .*\borigin$/.test(a))).toBe(
++      true,
++    );
++    // The fetch had the credential in its environment...
++    expect(
++      recorder.configKeys().some((k) => k.includes(`url.${url}.insteadOf`)),
++    ).toBe(true);
++    // ...and nothing else had it anywhere.
++    expect(recorder.argvText()).not.toContain(TOKEN);
++    expect(recorder.argvText()).toContain(`remote.origin.url ${BARE}`);
++    expect(storedConfig()).not.toContain(TOKEN);
++    expect(storedConfig()).toContain(`url = ${BARE}`);
++    expect(JSON.stringify(result)).not.toContain(TOKEN);
++    expect(alerts.join('\n')).not.toContain(TOKEN);
++    expect(logged.join('\n')).not.toContain(TOKEN);
++    // No file of the host repo or its export holds it.
++    const holds: string[] = [];
++    const walk = (dir: string) => {
++      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
++        const file = path.join(dir, entry.name);
++        if (entry.isDirectory()) walk(file);
++        else if (entry.isFile() && fs.readFileSync(file).includes(TOKEN))
++          holds.push(file);
++      }
++    };
++    walk(kb.host);
++    walk(`${kb.host}-export.git`);
++    expect(holds).toEqual([]);
++  });
++
++  it('an error text that quotes the token is redacted before it is logged or returned', async () => {
++    useOrigin(url);
++    // A stand-in git that fails every fetch the way git and Node can: with
++    // the URL as set in the message.
++    const bin = path.join(kb.root, 'failing-bin');
++    const realPath = process.env.PATH;
++    fs.mkdirSync(bin);
++    fs.writeFileSync(
++      path.join(bin, 'git'),
++      [
++        '#!/bin/sh',
++        'for a in "$@"; do if [ "$a" = fetch ] && [ -n "$GIT_CONFIG_KEY_0" ]; then',
++        `  echo "fatal: could not read Password for '$GIT_CONFIG_KEY_0': terminal prompts disabled" >&2; exit 128`,
++        'fi; done',
++        `PATH='${realPath}' exec git "$@"`,
++        '',
++      ].join('\n'),
++      { mode: 0o755 },
++    );
++    vi.stubEnv('PATH', `${bin}:${realPath}`);
++    const result = await syncHostRepo({ count: 1, fetchOrigin: true });
++    expect(result.failed).toMatch(/could not read Password/);
++    expect(JSON.stringify(result)).not.toContain(TOKEN);
++    expect(logged.join('\n')).toMatch(/could not read Password/);
++    expect(logged.join('\n')).not.toContain(TOKEN);
++  });
++});
++
++describe('the host repo is private to its owner', () => {
++  it('is created with mode 0700 and its config with 0600, under a permissive umask', () => {
++    let previous: number | null = null;
++    try {
++      previous = process.umask(0);
++    } catch {
++      /* a worker thread cannot change the umask; the modes are checked as is */
++    }
++    try {
++      ensureHostRepo();
++    } finally {
++      if (previous !== null) process.umask(previous);
++    }
++    expect(mode(kb.host)).toBe(0o700);
++    expect(mode(path.join(kb.host, '.git', 'config'))).toBe(0o600);
++  });
++
++  it('git rewriting the config keeps it private', async () => {
++    useOrigin(WITH_PASSWORD);
++    await syncHostRepo({ count: 1 });
++    expect(storedConfig()).toContain(`url = ${BARE}`);
++    expect(mode(path.join(kb.host, '.git', 'config'))).toBe(0o600);
++    expect(mode(kb.host)).toBe(0o700);
++  });
++});
++
++describe('a host repo made by an earlier version', () => {
++  /** As the earlier version left it: open modes, the token in the config. */
++  function makeOldHostRepo(stored: string): void {
++    vi.stubEnv('PROGRAM_ORIGIN_URL', kb.origin);
++    ensureHostRepo();
++    fs.chmodSync(kb.host, 0o755);
++    fs.chmodSync(path.join(kb.host, '.git', 'config'), 0o644);
++    git(kb.host, ['config', 'remote.origin.url', stored]);
++    git(kb.host, [
++      'config',
++      'remote.origin.fetch',
++      '+refs/heads/main:refs/remotes/origin/main',
++    ]);
++    expect(storedConfig()).toContain(TOKEN);
++    _resetHostRepoStateForTests(); // a new process
++  }
++
++  it.each([
++    ['a user and a token', WITH_PASSWORD],
++    ['a token as the user name', TOKEN_AS_USER],
++  ])(
++    'is repaired at start: %s leaves the stored URL, and the modes are tightened',
++    (_name, url) => {
++      makeOldHostRepo(url);
++      useOrigin(url);
++      const recorder = recordGitProcesses(kb.root);
++
++      ensureHostRepo(); // what main() calls at start; no network
++
++      expect(storedConfig()).not.toContain(TOKEN);
++      expect(storedConfig()).toContain(`url = ${BARE}`);
++      expect(storedConfig()).toContain(
++        'fetch = +refs/heads/main:refs/remotes/origin/main',
++      );
++      expect(mode(kb.host)).toBe(0o700);
++      expect(mode(path.join(kb.host, '.git', 'config'))).toBe(0o600);
++      // The repair itself shows the token to nobody.
++      expect(recorder.argvText()).not.toContain(TOKEN);
++      expect(logged.join('\n')).not.toContain(TOKEN);
++      expect(logged.join('\n')).toMatch(/rewritten without it/);
++      expect(logged.join('\n')).toMatch(/now private to its owner/);
++      // Git still gets the credential, from the setting.
++      expect(hostGitEnv({ credentialed: true }).GIT_CONFIG_KEY_0).toBe(
++        `url.${url}.insteadOf`,
++      );
++    },
++  );
++
++  it('is repaired even when the origin setting is now missing or refused', () => {
++    makeOldHostRepo(WITH_PASSWORD);
++    vi.stubEnv('PROGRAM_ORIGIN_URL', '');
++    vi.stubEnv('PROGRAM_ORIGIN_PATTERN', '^https://git[.]example[.]edu/');
++    ensureHostRepo();
++    expect(storedConfig()).not.toContain(TOKEN);
++    expect(storedConfig()).toContain(`url = ${BARE}`);
++  });
++
++  it('is repaired once per process, and a sync repeats the check', async () => {
++    makeOldHostRepo(WITH_PASSWORD);
++    useOrigin(WITH_PASSWORD);
++    ensureHostRepo();
++    // Something puts the full URL back while the host runs.
++    git(kb.host, ['config', 'remote.origin.url', WITH_PASSWORD]);
++    const result = await syncHostRepo({ count: 1 });
++    expect(JSON.stringify(result)).not.toContain(TOKEN);
++    expect(storedConfig()).not.toContain(TOKEN);
++  });
++
++  it('keeps working with its local history: entries are committed, and nothing is lost', async () => {
++    // The fixture origin is a local path (no credential): the upgrade changes
++    // nothing for it but the modes.
++    vi.stubEnv('PROGRAM_ORIGIN_URL', kb.origin);
++    ensureHostRepo();
++    fs.chmodSync(kb.host, 0o755);
++    _resetHostRepoStateForTests();
++    const before = storedConfig();
++    const result = await syncHostRepo({ count: 0, fetchOrigin: true });
++    expect(result.failed).toBeUndefined();
++    expect(mode(kb.host)).toBe(0o700);
++    expect(storedConfig()).toContain(before.trim().split('\n')[0]);
++    expect(storedConfig()).toContain(`url = ${kb.origin}`);
++  });
++});
 diff --git a/src/host-repo.test.ts b/src/host-repo.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..bd514b7fedddef7d62dbbecedef86e54edd1e82c
@@ -12085,10 +13381,10 @@ index 0000000000000000000000000000000000000000..bd514b7fedddef7d62dbbecedef86e54
 +});
 diff --git a/src/host-repo.ts b/src/host-repo.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f9830916262a26
+index 0000000000000000000000000000000000000000..8b5085a50c451c1b835fa27fd8198c7b24d5d3a4
 --- /dev/null
 +++ b/src/host-repo.ts
-@@ -0,0 +1,1291 @@
+@@ -0,0 +1,1417 @@
 +/**
 + * The host-owned copy of the program repo, and the only place where the host
 + * runs git with a working tree or a credential.
@@ -12131,6 +13427,12 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +
 +import { protectedGovernanceRule } from './governance-protection.js';
 +import { BOT_GIT_AUTHOR_EMAIL } from './instance-identity.js';
++import {
++  hasOriginCredential,
++  originCredentialEnv,
++  redactOriginCredential,
++  splitOriginCredential,
++} from './origin-credential.js';
 +import { logger } from './logger.js';
 +import { CHECKOUT_OWNER, getProgramRepoPath } from './program-repo.js';
 +import {
@@ -12214,14 +13516,15 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +  );
 +}
 +
++/** The last origin read from the settings, as set. For redaction only. */
++let lastOriginAsSet = '';
++
 +/**
-+ * The origin the host fetches from and pushes to. It comes from the host's
-+ * own settings only: PROGRAM_ORIGIN_URL, or else the origin of the read
-+ * mirror (a host-owned repository). Never from the checkout, whose config the
-+ * agent can write. When PROGRAM_ORIGIN_PATTERN is set the URL must match it.
-+ * Null when the host has no origin (a development run, the tests).
++ * The origin as the host's settings give it, credential included. Private to
++ * this module: the value may hold a token, so it goes to git's environment
++ * (hostGitEnv) and nowhere else.
 + */
-+export function expectedOriginUrl(): { url: string | null; problem?: string } {
++function originAsSet(): { url: string | null; problem?: string } {
 +  let url = process.env.PROGRAM_ORIGIN_URL || '';
 +  let source = 'PROGRAM_ORIGIN_URL';
 +  if (!url) {
@@ -12240,7 +13543,26 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +      url: null,
 +      problem: `the origin from ${source} does not match PROGRAM_ORIGIN_PATTERN`,
 +    };
++  lastOriginAsSet = url;
 +  return { url };
++}
++
++/**
++ * The origin the host fetches from and pushes to. It comes from the host's
++ * own settings only: PROGRAM_ORIGIN_URL, or else the origin of the read
++ * mirror (a host-owned repository). Never from the checkout, whose config the
++ * agent can write. When PROGRAM_ORIGIN_PATTERN is set the URL as set must
++ * match it. Null when the host has no origin (a development run, the tests).
++ *
++ * The URL returned holds no credential: a user name, password or token
++ * written in the setting is taken out (origin-credential.ts), so the value
++ * may be stored in the host repo's config, put on a command line or logged.
++ * Credentialed git gets the credential through its environment.
++ */
++export function expectedOriginUrl(): { url: string | null; problem?: string } {
++  const origin = originAsSet();
++  if (!origin.url) return origin;
++  return { url: splitOriginCredential(origin.url).bare };
 +}
 +
 +// ── running git ─────────────────────────────────────────────────────────
@@ -12317,6 +13639,10 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +    env.HOME = CHECKOUT_OWNER.home;
 +    for (const key of CREDENTIAL_ENV)
 +      if (process.env[key]) env[key] = process.env[key];
++    // A credential written in the origin setting: the host repo's config and
++    // every command line name the origin without it, and git puts it back
++    // from here. Only a process of the same user (or root) can read this.
++    Object.assign(env, originCredentialEnv(originAsSet().url));
 +  } else {
 +    env.HOME = '/nonexistent';
 +    env.XDG_CONFIG_HOME = '/nonexistent';
@@ -12364,9 +13690,18 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +  code?: number | string | null;
 +}
 +
++/**
++ * What git or Node said, for a log line, an alert or a result. Git hides a
++ * password in most messages but not in all ("could not read Password for
++ * 'https://<user>@host'"), and Node's "Command failed: ..." quotes the whole
++ * command line, so every form of the origin's credential is taken out here.
++ */
 +function errorText(err: unknown): string {
 +  const e = err as GitError;
-+  return String(e?.stderr || e?.message || err)
++  return redactOriginCredential(String(e?.stderr || e?.message || err), [
++    process.env.PROGRAM_ORIGIN_URL,
++    lastOriginAsSet,
++  ])
 +    .trim()
 +    .slice(0, 500);
 +}
@@ -12451,6 +13786,81 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +  if (isRoot()) fs.chownSync(dir, CHECKOUT_OWNER.uid, CHECKOUT_OWNER.gid);
 +}
 +
++/** Set the mode of a path the host owns; a failure is logged, not thrown. */
++function makePrivate(target: string, mode: number): void {
++  try {
++    fs.chmodSync(target, mode);
++  } catch (err) {
++    logger.error(
++      { err: errorText(err), path: target },
++      'Host repo: could not make this path private to its owner',
++    );
++  }
++}
++
++/** Host repos already made private and checked by this process. */
++const securedHostRepos = new Set<string>();
++
++/**
++ * Make the host repo private to its owner and take any credential out of its
++ * stored origin. Runs once per process for a repo that exists, so the first
++ * start after an upgrade repairs a repo made by an earlier version:
++ *
++ *  - the folder becomes mode 0700 and `.git/config` 0600 (an earlier version
++ *    created them 0755 and 0644 under the usual umask, and the config could
++ *    hold the origin's token);
++ *  - a `remote.origin.url` with a user name, password or token is rewritten
++ *    without it. The credential now reaches git through its environment.
++ *
++ * The container is not affected: it mounts `.git/objects` and the export,
++ * never this folder or its config. A failure here is logged and is not
++ * fatal; the sync's own check (ensureOriginRemote) repeats the rewrite.
++ */
++function secureHostRepo(): void {
++  const host = getHostRepoPath();
++  if (securedHostRepos.has(host)) return;
++  const targets: Array<[string, number]> = [
++    [host, 0o700],
++    [path.join(host, '.git', 'config'), 0o600],
++  ];
++  try {
++    for (const [target, mode] of targets) {
++      const st = fs.lstatSync(target);
++      if (st.isSymbolicLink() || (st.mode & 0o077) === 0) continue;
++      fs.chmodSync(target, mode);
++      logger.warn(
++        { path: target, was: (st.mode & 0o777).toString(8) },
++        'Host repo: was readable by other users of this machine; now private to its owner',
++      );
++    }
++    let stored = '';
++    try {
++      stored = gitSync(['config', '--get', 'remote.origin.url']).trim();
++    } catch {
++      /* no origin stored yet */
++    }
++    if (hasOriginCredential(stored)) {
++      gitSync([
++        'config',
++        'remote.origin.url',
++        splitOriginCredential(stored).bare,
++      ]);
++      logger.warn(
++        { host },
++        'Host repo: the stored origin URL held a credential; it was rewritten without it. ' +
++          'The credential is now read from the origin setting at each fetch and push. ' +
++          'Treat the old token as exposed if other people have accounts on this machine, and replace it.',
++      );
++    }
++    securedHostRepos.add(host);
++  } catch (err) {
++    logger.error(
++      { err: errorText(err), host },
++      'Host repo: could not make the repository private or check its stored origin',
++    );
++  }
++}
++
 +function writeOwned(file: string, content: string): void {
 +  const tmp = `${file}.tmp-${process.pid}`;
 +  fs.writeFileSync(tmp, content);
@@ -12484,12 +13894,19 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +  // "the host repo" could be the agent's checkout itself.
 +  const problem = hostRepoPlacementProblem();
 +  if (problem) throw new Error(`host repo refused: ${problem}`);
-+  if (hostRepoExists()) return;
++  if (hostRepoExists()) {
++    secureHostRepo();
++    return;
++  }
 +  const host = getHostRepoPath();
 +  // A test fixture may provide a bare ".git" folder with nothing in it.
 +  if (fs.existsSync(path.join(host, '.git'))) return;
 +  mkdirOwned(host);
++  // Private from the first moment, whatever the umask: git creates the
++  // config inside a folder no other user can enter.
++  makePrivate(host, 0o700);
 +  gitSync(['init', '-q', '--template=', host], LOCAL, host);
++  makePrivate(path.join(host, '.git', 'config'), 0o600);
 +  gitSync(['symbolic-ref', 'HEAD', BRANCH_REF]);
 +  for (const [key, value] of [
 +    ['core.symlinks', 'false'],
@@ -12714,6 +14131,8 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +/** Test hook: forget the cached probe result. */
 +export function _resetHostRepoStateForTests(): void {
 +  probeCache = null;
++  securedHostRepos.clear();
++  lastOriginAsSet = '';
 +  alerted.clear();
 +  alerter = null;
 +  queue = Promise.resolve();
@@ -13001,6 +14420,9 @@ index 0000000000000000000000000000000000000000..d8d6165640494370ef2fefcd37f98309
 +  } catch {
 +    /* not set yet */
 +  }
++  // `url` holds no credential (expectedOriginUrl), so neither does this
++  // command line nor the config it writes. A stored URL that still has one
++  // differs from `url` and is replaced here.
 +  if (current === url) return;
 +  await gitAsync(['config', 'remote.origin.url', url], LOCAL, t());
 +  await gitAsync(
@@ -13855,7 +15277,7 @@ index 0000000000000000000000000000000000000000..8d5ed4ff95e4e60490caee25e48a6e1e
 +  );
 +}
 diff --git a/src/index.ts b/src/index.ts
-index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bfc54f59ef 100644
+index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..696240e84aac43afe9927cdb839b82745ffdde2b 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -13,6 +13,13 @@ import {
@@ -13881,10 +15303,12 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
  } from './container-runtime.js';
  import {
    getAllChats,
-@@ -48,6 +55,7 @@ import {
+@@ -47,7 +54,8 @@ import {
+   storeChatMetadata,
    storeMessage,
  } from './db.js';
- import { readEnvFile } from './env.js';
+-import { readEnvFile } from './env.js';
++import { checkEnvFilePermissions, readEnvFile } from './env.js';
 +import { setProviderChangeNotifier } from './model-provider.js';
  import { GroupQueue } from './group-queue.js';
  import {
@@ -13905,7 +15329,15 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
    logCcContextSuppressionOnce,
    logDeadLetterOnce,
    logDeliveryProblem,
-@@ -121,6 +129,13 @@ import {
+@@ -111,6 +119,7 @@ import { resolveEmailGateContext } from './email-gate-context.js';
+ import { buildRecentWorkSection } from './recent-work.js';
+ import {
+   clearDeliveryState,
++  initDeliveryStateKeys,
+   loadDeliveryState,
+   saveDeliveryState,
+ } from './delivery-state.js';
+@@ -121,6 +130,13 @@ import {
    type SentAuditArgs,
  } from './delivery-processor.js';
  import { stripMarkdown } from './email-format.js';
@@ -13919,7 +15351,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
  import {
    shutdownOutboundEmailQueue,
    startOutboundEmailQueue,
-@@ -134,7 +149,7 @@ let messageLoopRunning = false;
+@@ -134,7 +150,7 @@ let messageLoopRunning = false;
  
  const channels: Channel[] = [];
  const queue = new GroupQueue();
@@ -13928,7 +15360,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
    logger.error({ text }, 'Alert channel is not initialized');
    // Never resolve silently: an unsent alert must not look delivered to the
    // shortfall-replay layer, which deletes an alert only on confirmation.
-@@ -583,18 +598,22 @@ function auditPreparedSent(args: SentAuditArgs): AuditWriteResult {
+@@ -583,18 +599,22 @@ function auditPreparedSent(args: SentAuditArgs): AuditWriteResult {
              );
              return 'write-failed' as const;
            }
@@ -13963,7 +15395,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
          })();
  
    if (auditResult === 'written') {
-@@ -647,6 +666,9 @@ async function runAgent(
+@@ -647,6 +667,9 @@ async function runAgent(
      if (output.result !== null && output.result !== undefined) {
        sawUsableResult = true;
      }
@@ -13973,7 +15405,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
      if (onOutput) await onOutput(output);
    };
  
-@@ -689,6 +711,9 @@ async function runAgent(
+@@ -689,6 +712,9 @@ async function runAgent(
      .join('\n\n');
  
    try {
@@ -13983,12 +15415,15 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
      const imageAttachments =
        agentMode === 'normal' ? parseImageReferences(prompt) : [];
  
-@@ -866,6 +891,25 @@ function ensureContainerSystemRunning(): void {
+@@ -866,16 +892,50 @@ function ensureContainerSystemRunning(): void {
  }
  
  async function main(): Promise<void> {
 +  // Before anything starts: a real program repo needs real identity settings.
 +  assertIdentitySettingsConfigured();
++  // .env holds every secret: one clear error when other users of this
++  // machine can read it; a refusal only with REQUIRE_PRIVATE_ENV_FILE=true.
++  checkEnvFilePermissions();
 +
 +  // OUTBOUND_MAIL_PROVIDER=smtp: only an encrypted, authenticated submission.
 +  assertOutboundMailConfigured();
@@ -14009,7 +15444,21 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
    ensureContainerSystemRunning();
    initDatabase();
    logger.info('Database initialized');
-@@ -875,7 +919,7 @@ async function main(): Promise<void> {
++  // Read the delivery-state signing key once, with the other secrets.
++  const deliveryKeys = initDeliveryStateKeys();
++  if (
++    deliveryKeys.source &&
++    deliveryKeys.source !== 'DELIVERY_STATE_SIGNING_KEY'
++  )
++    logger.warn(
++      { reused: deliveryKeys.source },
++      `Delivery state is signed with ${deliveryKeys.source}, a secret that exists for another purpose. ` +
++        'Set DELIVERY_STATE_SIGNING_KEY to its own long random value (openssl rand -hex 32) in .env and restart. ' +
++        'State saved before the change still loads.',
++    );
+   loadState();
+   restoreRemoteControl();
+ 
    // Start credential proxy (containers route API calls through this)
    const proxyServer = await startCredentialProxy(
      CREDENTIAL_PROXY_PORT,
@@ -14018,7 +15467,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
    );
  
    // Graceful shutdown handlers
-@@ -1028,7 +1072,10 @@ async function main(): Promise<void> {
+@@ -1028,7 +1088,10 @@ async function main(): Promise<void> {
    // fire-and-forget catch it themselves; the shortfall-alert replay layer needs
    // the rejection, because a swallowed failure there reads as a confirmed
    // delivery and drops the alert permanently (round-3 review P1).
@@ -14030,7 +15479,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
      const alertJid = resolveDeadLetterJid();
      const alertChannel = findChannel(channels, alertJid);
      if (!alertChannel) {
-@@ -1044,18 +1091,36 @@ async function main(): Promise<void> {
+@@ -1044,18 +1107,36 @@ async function main(): Promise<void> {
        throw new Error(`Alert delivery failed: ${outcome.reason}`);
      }
    };
@@ -14070,7 +15519,7 @@ index 080c587b140c487bfb6acb5cd8ee4d648cfa7ab0..488680f749901144451e1bcef73f82bf
    /**
     * G46-gated send for non-streaming paths (scheduler forwards, IPC
     * messages): validates against the owning channel's declared profile.
-@@ -1149,6 +1214,13 @@ async function main(): Promise<void> {
+@@ -1149,6 +1230,13 @@ async function main(): Promise<void> {
      notify: (text) => sendDeadLetterAlert(text),
      logProblem: logDeliveryProblem,
    });
@@ -15073,6 +16522,300 @@ index 0000000000000000000000000000000000000000..9a5633d48939b9082b34d2fb707e6fe6
 +    }
 +  }
 +  return chosen;
++}
+diff --git a/src/origin-credential.test.ts b/src/origin-credential.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3aeecf5b04c4f3fbd350852a2edfe1859769c848
+--- /dev/null
++++ b/src/origin-credential.test.ts
+@@ -0,0 +1,169 @@
++import { execFileSync } from 'child_process';
++import fs from 'fs';
++import os from 'os';
++import path from 'path';
++
++import { afterEach, beforeEach, describe, expect, it } from 'vitest';
++
++import {
++  hasOriginCredential,
++  originCredentialEnv,
++  redactOriginCredential,
++  splitOriginCredential,
++} from './origin-credential.js';
++
++// Obviously fake, and assembled so that no line holds a URL with a password.
++const USER = 'kb-bot';
++const TOKEN = ['not', 'a', 'real', 'token', '0000'].join('-');
++const HOST_PATH = 'git.example.edu/team/program-repo.git';
++const WITH_PASSWORD = `https://${USER}:${TOKEN}@${HOST_PATH}`;
++const TOKEN_AS_USER = `https://${TOKEN}@${HOST_PATH}`;
++const BARE = `https://${HOST_PATH}`;
++
++describe('splitOriginCredential', () => {
++  it('takes a user and password out of an HTTPS URL', () => {
++    expect(splitOriginCredential(WITH_PASSWORD)).toEqual({
++      bare: BARE,
++      full: WITH_PASSWORD,
++      userinfo: `${USER}:${TOKEN}`,
++    });
++  });
++
++  it('takes a token written as the user name out of an HTTPS URL', () => {
++    expect(splitOriginCredential(TOKEN_AS_USER).bare).toBe(BARE);
++    expect(splitOriginCredential(TOKEN_AS_USER).userinfo).toBe(TOKEN);
++  });
++
++  it('keeps a port, and splits at the last @ of the authority', () => {
++    expect(
++      splitOriginCredential(`https://a:p@ss@git.example.edu:8443/x.git`),
++    ).toMatchObject({
++      bare: 'https://git.example.edu:8443/x.git',
++      userinfo: 'a:p@ss',
++    });
++  });
++
++  it('does not treat an @ in the path as a credential', () => {
++    expect(hasOriginCredential('https://git.example.edu/a@b/x.git')).toBe(
++      false,
++    );
++  });
++
++  it('leaves every other URL shape as it is', () => {
++    for (const url of [
++      BARE,
++      'git@git.example.edu:team/program-repo.git',
++      'ssh://git@git.example.edu/team/program-repo.git',
++      '/srv/repos/origin.git',
++      'file:///srv/repos/origin.git',
++    ]) {
++      expect(splitOriginCredential(url)).toEqual({
++        bare: url,
++        full: url,
++        userinfo: '',
++      });
++      expect(originCredentialEnv(url)).toEqual({});
++    }
++  });
++});
++
++describe('originCredentialEnv', () => {
++  it('is empty without a URL', () => {
++    expect(originCredentialEnv(null)).toEqual({});
++    expect(originCredentialEnv('')).toEqual({});
++  });
++
++  it('maps the URL without the credential to the URL with it', () => {
++    expect(originCredentialEnv(WITH_PASSWORD)).toEqual({
++      GIT_CONFIG_COUNT: '1',
++      GIT_CONFIG_KEY_0: `url.${WITH_PASSWORD}.insteadOf`,
++      GIT_CONFIG_VALUE_0: BARE,
++    });
++  });
++
++  it('adds its entry after entries the environment already has', () => {
++    expect(
++      originCredentialEnv(WITH_PASSWORD, { GIT_CONFIG_COUNT: '2' }),
++    ).toEqual({
++      GIT_CONFIG_COUNT: '3',
++      GIT_CONFIG_KEY_2: `url.${WITH_PASSWORD}.insteadOf`,
++      GIT_CONFIG_VALUE_2: BARE,
++    });
++  });
++
++  describe('with the git on this machine', () => {
++    let dir: string;
++    beforeEach(() => {
++      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-credential-'));
++    });
++    afterEach(() => {
++      fs.rmSync(dir, { recursive: true, force: true });
++    });
++
++    it('git resolves the stored URL to the credentialed one from its environment alone', () => {
++      const env = {
++        PATH: process.env.PATH,
++        HOME: '/nonexistent',
++        GIT_CONFIG_GLOBAL: '/dev/null',
++        GIT_CONFIG_NOSYSTEM: '1',
++      };
++      const run = (args: string[], extra: Record<string, string> = {}) =>
++        execFileSync('git', args, {
++          cwd: dir,
++          encoding: 'utf-8',
++          env: { ...env, ...extra },
++        }).trim();
++      run(['init', '-q', '--template=', '.']);
++      run(['config', 'remote.origin.url', BARE]);
++      // What is on disk never holds the credential.
++      expect(
++        fs.readFileSync(path.join(dir, '.git', 'config'), 'utf8'),
++      ).not.toContain(TOKEN);
++      // Without the environment entry git would ask the origin anonymously.
++      expect(run(['ls-remote', '--get-url', 'origin'])).toBe(BARE);
++      // With it, git addresses the origin exactly as if the full URL were stored.
++      for (const full of [WITH_PASSWORD, TOKEN_AS_USER])
++        expect(
++          run(['ls-remote', '--get-url', 'origin'], originCredentialEnv(full)),
++        ).toBe(full);
++    });
++  });
++});
++
++describe('redactOriginCredential', () => {
++  it('removes the credential in every form it can appear', () => {
++    const said = [
++      `Command failed: git clone --mirror -- ${WITH_PASSWORD} /srv/x`,
++      `fatal: could not read Password for 'https://${TOKEN}@git.example.edu'`,
++      `remote: token ${TOKEN} is not valid for ${USER}`,
++    ].join('\n');
++    const out = redactOriginCredential(said, [WITH_PASSWORD]);
++    expect(out).not.toContain(TOKEN);
++    expect(out).not.toContain(`${USER}:`);
++    expect(out).toContain('https://***@git.example.edu');
++  });
++
++  it('removes a percent-encoded password in its decoded form too', () => {
++    const out = redactOriginCredential('git said: p@ss-word-1 was refused', [
++      'https://bot:p%40ss-word-1@git.example.edu/x.git',
++    ]);
++    expect(out).toBe('git said: *** was refused');
++  });
++
++  it('hides the user-info of any URL in the text, also with no URL given', () => {
++    expect(redactOriginCredential(`unable to access '${TOKEN_AS_USER}/'`)).toBe(
++      `unable to access 'https://***@${HOST_PATH}/'`,
++    );
++  });
++
++  it('does not blank ordinary words for a very short user name', () => {
++    expect(
++      redactOriginCredential('git: a x b', [`https://x:${TOKEN}@h.example/r`]),
++    ).toBe('git: a x b');
++  });
++
++  it('leaves text without a credential alone', () => {
++    const text = `fatal: unable to access '${BARE}/': Could not resolve host`;
++    expect(redactOriginCredential(text, [BARE, null, undefined])).toBe(text);
++  });
++});
+diff --git a/src/origin-credential.ts b/src/origin-credential.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a67dcd9436659c32354fcb7a920681746fde3fba
+--- /dev/null
++++ b/src/origin-credential.ts
+@@ -0,0 +1,113 @@
++/**
++ * A credential written inside the origin URL ("https://user:token@host/...").
++ *
++ * The host keeps such a URL in one place only: the setting it came from
++ * (PROGRAM_ORIGIN_URL in the service's environment). Git is given the URL
++ * without the credential, on the command line and in a repository's config,
++ * and gets the credential through its environment: a `url.<with
++ * credential>.insteadOf = <without>` entry passed with GIT_CONFIG_COUNT.
++ * Git then talks to the origin exactly as it did when the full URL was in
++ * its config, and:
++ *
++ *  - no git config file holds the credential;
++ *  - no process argument holds it (arguments are visible to every local
++ *    user; a process's environment only to its own user and root);
++ *  - no container can read it (the host's environment is not mounted).
++ *
++ * Needs git 2.31 or later for GIT_CONFIG_COUNT. An older git ignores the
++ * entry and the request goes out without a credential: it fails, and nothing
++ * leaks.
++ */
++
++export interface SplitOrigin {
++  /** The URL without the user-info part. Safe in a config file or a log. */
++  bare: string;
++  /** The URL as it was set. Differs from `bare` only with a credential. */
++  full: string;
++  /** The text between "https://" and "@", or '' when there is none. */
++  userinfo: string;
++}
++
++/**
++ * Split an HTTPS URL into the address and the credential. Every other URL
++ * shape (ssh, scp-like, file, a path) is returned unchanged: the user name of
++ * an SSH address is not a secret, and SSH takes no password from a URL.
++ */
++export function splitOriginCredential(url: string): SplitOrigin {
++  const none = { bare: url, full: url, userinfo: '' };
++  const m = /^(https:\/\/)([^/?#]*)(.*)$/i.exec(url);
++  if (!m) return none;
++  const at = m[2].lastIndexOf('@');
++  if (at < 0) return none;
++  return {
++    bare: `${m[1]}${m[2].slice(at + 1)}${m[3]}`,
++    full: url,
++    userinfo: m[2].slice(0, at),
++  };
++}
++
++/** True when the URL carries a user name, a password or a token. */
++export function hasOriginCredential(url: string): boolean {
++  return splitOriginCredential(url).userinfo !== '';
++}
++
++/**
++ * Environment entries that hand git the credential of `url`, added after any
++ * GIT_CONFIG_COUNT entries already in `base`. Empty when the URL has none.
++ */
++export function originCredentialEnv(
++  url: string | null | undefined,
++  base: NodeJS.ProcessEnv = {},
++): Record<string, string> {
++  if (!url) return {};
++  const { bare, full, userinfo } = splitOriginCredential(url);
++  if (!userinfo) return {};
++  const count = /^\d+$/.test(base.GIT_CONFIG_COUNT || '')
++    ? Number(base.GIT_CONFIG_COUNT)
++    : 0;
++  return {
++    GIT_CONFIG_COUNT: String(count + 1),
++    [`GIT_CONFIG_KEY_${count}`]: `url.${full}.insteadOf`,
++    [`GIT_CONFIG_VALUE_${count}`]: bare,
++  };
++}
++
++function decoded(text: string): string {
++  try {
++    return decodeURIComponent(text);
++  } catch {
++    return text;
++  }
++}
++
++/**
++ * `text` with every form of the credentials of `urls` replaced by "***": the
++ * whole user-info, the user name and the password each, as written and
++ * percent-decoded. Also any other "//user-info@" in the text. For log lines
++ * and error messages that quote git or a URL.
++ */
++export function redactOriginCredential(
++  text: string,
++  urls: Array<string | null | undefined> = [],
++): string {
++  const secrets = new Set<string>();
++  for (const url of urls) {
++    if (!url) continue;
++    const { userinfo } = splitOriginCredential(url);
++    if (!userinfo) continue;
++    const colon = userinfo.indexOf(':');
++    const parts =
++      colon < 0
++        ? [userinfo]
++        : [userinfo, userinfo.slice(0, colon), userinfo.slice(colon + 1)];
++    for (const part of parts) {
++      // A very short piece ("x", "git") would blank ordinary words.
++      if (part.length >= 4) secrets.add(part);
++      if (decoded(part).length >= 4) secrets.add(decoded(part));
++    }
++  }
++  let out = text;
++  for (const secret of [...secrets].sort((a, b) => b.length - a.length))
++    out = out.split(secret).join('***');
++  return out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]+@/gi, '$1***@');
 +}
 diff --git a/src/outbound-email-outbox.ts b/src/outbound-email-outbox.ts
 index cd64854b84882639176395800c9cd8e12ad33d76..2200d6cbca9b73839782809a6134e3e8dbed00ff 100644
@@ -18729,6 +20472,151 @@ index 30e89a240d80cb17d8806781f5bb2035cec9b120..6c84c58fbf7f22dbf030fb231c6e4a07
 +export function getProgramRepoPath(): string {
 +  return process.env.PROGRAM_REPO || DEFAULT_PROGRAM_REPO;
  }
+diff --git a/src/repo-reader-origin-credential.test.ts b/src/repo-reader-origin-credential.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c2ea7dc08366edee92649e6b3faa51d454fc691a
+--- /dev/null
++++ b/src/repo-reader-origin-credential.test.ts
+@@ -0,0 +1,139 @@
++/**
++ * Issue 53, the read mirror: the token of PROGRAM_ORIGIN_URL is not on the
++ * clone or fetch command line, not in the mirror's config and not in a log
++ * line. A mirror that already stores it is repaired at start.
++ */
++import fs from 'fs';
++import path from 'path';
++
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++import { logger } from './logger.js';
++import { RepoReader } from './repo-reader.js';
++import { recordGitProcesses } from './test-support/git-argv-recorder.js';
++import {
++  git,
++  makeKbFixture,
++  type KbFixture,
++} from './test-support/kb-fixture.js';
++
++// Obviously fake, and assembled so that no line holds a URL with a password.
++const USER = 'kb-bot';
++const TOKEN = ['not', 'a', 'real', 'token', '5354'].join('-');
++const ADDRESS = '127.0.0.1:9/team/program-repo.git';
++const BARE = `https://${ADDRESS}`;
++const FULL = `https://${USER}:${TOKEN}@${ADDRESS}`;
++const PATTERN = '^https://([A-Za-z0-9_.~:-]+@)?127[.]0[.]0[.]1:9/team/';
++
++let kb: KbFixture;
++let logged: string[];
++
++function mirrorConfig(): string {
++  return fs.readFileSync(path.join(kb.mirror, 'config'), 'utf8');
++}
++
++/** A mirror as an earlier version or a person made it, with `stored` as origin. */
++function makeMirror(stored: string): void {
++  git(kb.root, [
++    'clone',
++    '-q',
++    '--mirror',
++    '--template=',
++    kb.origin,
++    kb.mirror,
++  ]);
++  git(kb.mirror, ['config', 'remote.origin.url', stored]);
++  fs.chmodSync(path.join(kb.mirror, 'config'), 0o644);
++}
++
++beforeEach(() => {
++  kb = makeKbFixture();
++  logged = [];
++  for (const level of ['debug', 'info', 'warn', 'error', 'fatal'] as const)
++    vi.spyOn(logger, level).mockImplementation((...args: unknown[]) => {
++      logged.push(
++        JSON.stringify(args, (_k, v) =>
++          v instanceof Error ? `${v.message}\n${v.stack}` : v,
++        ),
++      );
++    });
++  for (const key of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'])
++    vi.stubEnv(key, '');
++  vi.stubEnv('GIT_TERMINAL_PROMPT', '0');
++  vi.stubEnv('PROGRAM_ORIGIN_URL', FULL);
++  vi.stubEnv('PROGRAM_ORIGIN_PATTERN', PATTERN);
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  kb.cleanup();
++});
++
++describe('read mirror and a token in PROGRAM_ORIGIN_URL', () => {
++  it('the bootstrap clone has the token in its environment only: not in its arguments, not in a log line', () => {
++    const recorder = recordGitProcesses(kb.root);
++    const reader = new RepoReader(kb.mirror);
++
++    expect(reader.init()).toBe(false); // the closed port: the clone fails
++
++    const clone = recorder.argv().find((a) => a.startsWith('clone --mirror'));
++    expect(clone).toBe(`clone --mirror -- ${BARE} ${kb.mirror}`);
++    expect(
++      recorder.configKeys().some((k) => k.includes(`url.${FULL}.insteadOf`)),
++    ).toBe(true);
++    expect(recorder.argvText()).not.toContain(TOKEN);
++    expect(logged.join('\n')).toMatch(/mirror bootstrap clone failed/);
++    expect(logged.join('\n')).not.toContain(TOKEN);
++  });
++
++  it('a stored origin equal to the setting is rewritten without the token at start, and the fetch gets it from the environment', () => {
++    makeMirror(FULL);
++    const recorder = recordGitProcesses(kb.root);
++    const reader = new RepoReader(kb.mirror);
++
++    expect(reader.init()).toBe(true);
++    expect(mirrorConfig()).not.toContain(TOKEN);
++    expect(mirrorConfig()).toContain(`url = ${BARE}`);
++    expect(logged.join('\n')).toMatch(/rewritten without it/);
++
++    reader.refresh({ force: true }); // fails at the closed port, as it must
++    const fetch = recorder
++      .argv()
++      .findIndex((a) => a.includes(' fetch origin '));
++    expect(fetch).toBeGreaterThanOrEqual(0);
++    expect(recorder.configKeys()[fetch]).toContain(`url.${FULL}.insteadOf`);
++    expect(recorder.argvText()).not.toContain(TOKEN);
++    expect(logged.join('\n')).toMatch(/fetch failed; serving last-good SHA/);
++    expect(logged.join('\n')).not.toContain(TOKEN);
++    // The pinned revision is still served.
++    expect(reader.currentSha).toMatch(/^[0-9a-f]{40}$/);
++  });
++
++  it('a stored token the setting does not have is kept (it has no other home), made private, and reported without being shown', () => {
++    makeMirror(FULL);
++    vi.stubEnv('PROGRAM_ORIGIN_URL', '');
++    const reader = new RepoReader(kb.mirror);
++
++    expect(reader.init()).toBe(true);
++    expect(mirrorConfig()).toContain(TOKEN);
++    expect(fs.statSync(path.join(kb.mirror, 'config')).mode & 0o777).toBe(
++      0o600,
++    );
++    expect(logged.join('\n')).toMatch(/holds a credential in its origin URL/);
++    expect(logged.join('\n')).not.toContain(TOKEN);
++  });
++
++  it('a mirror without a credential is left exactly as it is', () => {
++    makeMirror(kb.origin);
++    vi.stubEnv('PROGRAM_ORIGIN_URL', kb.origin);
++    vi.stubEnv('PROGRAM_ORIGIN_PATTERN', '');
++    const before = mirrorConfig();
++    const reader = new RepoReader(kb.mirror);
++    expect(reader.init()).toBe(true);
++    expect(reader.refresh({ force: true }).sha).toMatch(/^[0-9a-f]{40}$/);
++    expect(mirrorConfig()).toBe(before);
++    expect(fs.statSync(path.join(kb.mirror, 'config')).mode & 0o777).toBe(
++      0o644,
++    );
++  });
++});
 diff --git a/src/repo-reader.test.ts b/src/repo-reader.test.ts
 index 6fdeb411c5695287431951c4b37115fc2c4f6a0d..dca08b4698c5445476ce1c964366ec54ca066f0a 100644
 --- a/src/repo-reader.test.ts
@@ -18892,14 +20780,23 @@ index 6fdeb411c5695287431951c4b37115fc2c4f6a0d..dca08b4698c5445476ce1c964366ec54
      // No live checkout either — bootstrap has no origin URL to clone from.
      vi.stubEnv('PROGRAM_REPO', path.join(dir, 'no-live-checkout'));
 diff --git a/src/repo-reader.ts b/src/repo-reader.ts
-index 131b719890aaef78b21a5c5c97d4776e22b64adf..8972c1c2a828a9e6851829bfdf380def0eb32e13 100644
+index 131b719890aaef78b21a5c5c97d4776e22b64adf..0b77f35c652c79f162c8ef83fcf4df2d2cd8ba56 100644
 --- a/src/repo-reader.ts
 +++ b/src/repo-reader.ts
-@@ -3,8 +3,17 @@ import { promisify } from 'util';
+@@ -1,10 +1,26 @@
+ import { execFile, execFileSync } from 'child_process';
++import fs from 'fs';
+ import { promisify } from 'util';
  import path from 'path';
  
  import { logger } from './logger.js';
 -import { checkoutGitOptions, getProgramRepoPath } from './program-repo.js';
++import {
++  hasOriginCredential,
++  originCredentialEnv,
++  redactOriginCredential,
++  splitOriginCredential,
++} from './origin-credential.js';
 +import {
 +  checkoutOriginUrl,
 +  isExpectedOrigin,
@@ -18914,7 +20811,33 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..8972c1c2a828a9e6851829bfdf380def
  
  const execFileAsync = promisify(execFile);
  
-@@ -39,35 +48,41 @@ interface PathCommitAuthor {
+@@ -18,6 +34,25 @@ const execFileAsync = promisify(execFile);
+  * fail stale after that (fetch failure keeps the last-good SHA — stale beats
+  * half-pulled). Both paths log loudly.
+  */
++/**
++ * The environment of a git process that talks to the origin for the mirror:
++ * the host's own, plus the credential of PROGRAM_ORIGIN_URL when it has one.
++ * The mirror's config and the command line name the origin without it.
++ */
++function mirrorGitEnv(): NodeJS.ProcessEnv {
++  return {
++    ...process.env,
++    ...originCredentialEnv(process.env.PROGRAM_ORIGIN_URL, process.env),
++  };
++}
++
++/** An error's message for a log line, without the origin's credential. */
++function mirrorErrorText(err: any): string {
++  return redactOriginCredential(String(err?.message ?? err), [
++    process.env.PROGRAM_ORIGIN_URL,
++  ]);
++}
++
+ /** Benign "the file/revision just isn't there" stderr patterns from git. */
+ const BENIGN_MISSING_RE =
+   /does not exist in|Not a valid object name|bad revision|path .* does not exist/i;
+@@ -39,35 +74,41 @@ interface PathCommitAuthor {
  }
  
  /**
@@ -18983,7 +20906,15 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..8972c1c2a828a9e6851829bfdf380def
  }
  
  export class RepoReader {
-@@ -99,7 +114,7 @@ export class RepoReader {
+@@ -92,6 +133,7 @@ export class RepoReader {
+     if (!this.sha && this.bootstrapMirror()) {
+       this.sha = this.resolveSha();
+     }
++    if (this.sha) this.secureStoredOrigin();
+     if (this.sha) {
+       this.reconcileAllowlistSha(this.sha);
+     }
+@@ -99,7 +141,7 @@ export class RepoReader {
        logger.error(
          { mirror: this.mirrorPath },
          'RepoReader: no readable SHA at init — repo reads will fail closed. ' +
@@ -18992,7 +20923,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..8972c1c2a828a9e6851829bfdf380def
            this.mirrorPath,
        );
      }
-@@ -107,34 +122,26 @@ export class RepoReader {
+@@ -107,59 +149,122 @@ export class RepoReader {
    }
  
    /**
@@ -19037,16 +20968,143 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..8972c1c2a828a9e6851829bfdf380def
        );
        return false;
      }
-@@ -148,7 +155,7 @@ export class RepoReader {
++    // The mirror's config and this command line get the URL without its
++    // credential; git reads the credential from its environment
++    // (origin-credential.ts). Logged: the URL without it.
++    const origin = splitOriginCredential(originUrl).bare;
+     try {
+       execFileSync(
+         'git',
+-        ['clone', '--mirror', '--', originUrl, this.mirrorPath],
++        ['clone', '--mirror', '--', origin, this.mirrorPath],
+         {
+           timeout: 120_000,
++          env: mirrorGitEnv(),
+         },
        );
        logger.info(
-         { originUrl, mirror: this.mirrorPath },
+-        { originUrl, mirror: this.mirrorPath },
 -        'RepoReader: bootstrapped read mirror from live checkout origin',
++        { originUrl: origin, mirror: this.mirrorPath },
 +        'RepoReader: bootstrapped read mirror from PROGRAM_ORIGIN_URL',
        );
        return true;
      } catch (err: any) {
-@@ -333,7 +340,7 @@ export class RepoReader {
+       logger.warn(
+-        { err: err?.message, originUrl, mirror: this.mirrorPath },
++        {
++          err: mirrorErrorText(err),
++          originUrl: origin,
++          mirror: this.mirrorPath,
++        },
+         'RepoReader: mirror bootstrap clone failed',
+       );
+       return false;
+     }
+   }
+ 
++  /**
++   * A mirror made by an earlier version, or cloned by hand, can hold the
++   * origin's token in its config. When PROGRAM_ORIGIN_URL is that same URL,
++   * the stored one is rewritten without the credential (git then reads it
++   * from the setting). Otherwise the config is the credential's only home:
++   * it is left as it is, made readable by its owner only, and a warning
++   * says how to move it. Never throws.
++   */
++  private secureStoredOrigin(): void {
++    try {
++      const stored = execFileSync(
++        'git',
++        ['-C', this.mirrorPath, 'config', '--get', 'remote.origin.url'],
++        {
++          encoding: 'utf-8',
++          timeout: 10_000,
++          stdio: ['ignore', 'pipe', 'pipe'],
++        },
++      ).trim();
++      if (!hasOriginCredential(stored)) return;
++      const configFile = path.join(this.mirrorPath, 'config');
++      const st = fs.lstatSync(configFile);
++      if (!st.isSymbolicLink() && (st.mode & 0o077) !== 0) {
++        fs.chmodSync(configFile, 0o600);
++        logger.warn(
++          { path: configFile, was: (st.mode & 0o777).toString(8) },
++          'RepoReader: the read mirror config holds a credential and was readable by other users; now private to its owner',
++        );
++      }
++      if (stored === (process.env.PROGRAM_ORIGIN_URL || '')) {
++        execFileSync(
++          'git',
++          [
++            '-C',
++            this.mirrorPath,
++            'config',
++            'remote.origin.url',
++            splitOriginCredential(stored).bare,
++          ],
++          { timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] },
++        );
++        logger.warn(
++          { mirror: this.mirrorPath },
++          'RepoReader: the read mirror stored the origin URL with a credential; it was rewritten without it. ' +
++            'The credential is now read from PROGRAM_ORIGIN_URL at each fetch.',
++        );
++      } else {
++        logger.warn(
++          { mirror: this.mirrorPath },
++          'RepoReader: the read mirror config holds a credential in its origin URL. ' +
++            'To take it out of the file, set PROGRAM_ORIGIN_URL to the same URL and restart, ' +
++            'or use an SSH deploy key.',
++        );
++      }
++    } catch (err: any) {
++      logger.debug(
++        { err: mirrorErrorText(err), mirror: this.mirrorPath },
++        'RepoReader: stored origin of the read mirror not checked',
++      );
++    }
++  }
++
+   get currentSha(): string | null {
+     return this.sha;
+   }
+@@ -208,11 +313,15 @@ export class RepoReader {
+           'origin',
+           '+refs/heads/main:refs/heads/main',
+         ],
+-        { timeout: 30_000 },
++        { timeout: 30_000, env: mirrorGitEnv() },
+       );
+     } catch (err: any) {
+       logger.warn(
+-        { err: err?.message, mirror: this.mirrorPath, lastGood: this.sha },
++        {
++          err: mirrorErrorText(err),
++          mirror: this.mirrorPath,
++          lastGood: this.sha,
++        },
+         'RepoReader: fetch failed; serving last-good SHA',
+       );
+       return { advanced: false, sha: this.sha };
+@@ -246,11 +355,15 @@ export class RepoReader {
+           'origin',
+           '+refs/heads/main:refs/heads/main',
+         ],
+-        { timeout: 30_000 },
++        { timeout: 30_000, env: mirrorGitEnv() },
+       );
+     } catch (err: any) {
+       logger.warn(
+-        { err: err?.message, mirror: this.mirrorPath, lastGood: this.sha },
++        {
++          err: mirrorErrorText(err),
++          mirror: this.mirrorPath,
++          lastGood: this.sha,
++        },
+         'RepoReader: async fetch failed; serving last-good SHA',
+       );
+       return { advanced: false, sha: this.sha };
+@@ -333,7 +446,7 @@ export class RepoReader {
        );
        const [sha, author] = history.trim().split('\n')[0].split('\0');
        // A delayed webhook must never select a later agent-authored version.
@@ -19055,7 +21113,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..8972c1c2a828a9e6851829bfdf380def
          return null;
        const { stdout } = await execFileAsync(
          'git',
-@@ -613,9 +620,7 @@ let singleton: RepoReader | null = null;
+@@ -613,9 +726,7 @@ let singleton: RepoReader | null = null;
  /** Process-wide reader over the program-repo read mirror. */
  export function getRepoReader(): RepoReader {
    if (!singleton) {
@@ -19087,6 +21145,164 @@ index cc2c2810d96d86f312f77509c25326b1c7834d1b..7e7a7dae5fdf67d6052e2b976b97e5cd
      );
      if (matches.length !== 1) {
        return {
+diff --git a/src/secret-compare.test.ts b/src/secret-compare.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..56c4b2a53a3a569a2ba6fea8bce449a6494b2c66
+--- /dev/null
++++ b/src/secret-compare.test.ts
+@@ -0,0 +1,110 @@
++/**
++ * Issue 55: a secret presented by a request is compared in constant time,
++ * with no early return on a different length.
++ */
++import fs from 'fs';
++import path from 'path';
++
++import { describe, expect, it } from 'vitest';
++
++import { bearerMatches, secretsEqual } from './secret-compare.js';
++
++const SECRET = 'test-secret-value';
++
++describe('secretsEqual', () => {
++  it('accepts the same value only', () => {
++    expect(secretsEqual(SECRET, SECRET)).toBe(true);
++    expect(secretsEqual(`${SECRET}x`, SECRET)).toBe(false);
++    expect(secretsEqual(SECRET.slice(0, -1), SECRET)).toBe(false);
++    expect(secretsEqual(SECRET.toUpperCase(), SECRET)).toBe(false);
++  });
++
++  it('refuses a missing, empty or non-string value without throwing', () => {
++    for (const presented of [undefined, null, '', 0, [], [SECRET], {}])
++      expect(secretsEqual(presented, SECRET)).toBe(false);
++  });
++
++  it('never matches an empty expected secret', () => {
++    expect(secretsEqual('', '')).toBe(false);
++    expect(secretsEqual(undefined, '')).toBe(false);
++  });
++
++  it('handles a value of any length without throwing (timingSafeEqual alone throws on a length difference)', () => {
++    for (const presented of ['', 'x', SECRET, 'y'.repeat(100_000)])
++      expect(() => secretsEqual(presented, SECRET)).not.toThrow();
++    expect(secretsEqual('y'.repeat(100_000), 'y'.repeat(100_000))).toBe(true);
++  });
++});
++
++describe('bearerMatches', () => {
++  it('accepts exactly "Bearer <secret>"', () => {
++    expect(bearerMatches(`Bearer ${SECRET}`, SECRET)).toBe(true);
++  });
++
++  it.each([
++    [
++      'a wrong secret of the same length',
++      `Bearer ${'x'.repeat(SECRET.length)}`,
++    ],
++    ['a shorter secret', `Bearer ${SECRET.slice(0, 4)}`],
++    ['a longer secret', `Bearer ${SECRET}${SECRET}`],
++    ['the secret without the scheme', SECRET],
++    ['another scheme', `Basic ${SECRET}`],
++    ['a lower-case scheme', `bearer ${SECRET}`],
++    ['a trailing space', `Bearer ${SECRET} `],
++    ['an empty header', ''],
++    ['"Bearer " alone', 'Bearer '],
++    ['a missing header', undefined],
++    ['a repeated header', [`Bearer ${SECRET}`, `Bearer ${SECRET}`]],
++  ])('refuses %s', (_name, header) => {
++    expect(bearerMatches(header, SECRET)).toBe(false);
++  });
++
++  it('refuses everything when the host has no secret', () => {
++    expect(bearerMatches('Bearer ', '')).toBe(false);
++    expect(bearerMatches('Bearer undefined', '')).toBe(false);
++  });
++});
++
++describe('no request secret is compared with a plain operator', () => {
++  const root = path.join(__dirname, '..');
++  const files: string[] = [];
++  const walk = (dir: string) => {
++    for (const entry of fs.readdirSync(path.join(root, dir), {
++      withFileTypes: true,
++    })) {
++      const rel = path.posix.join(dir, entry.name);
++      if (entry.isDirectory()) walk(rel);
++      else if (/\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name))
++        files.push(rel);
++    }
++  };
++  walk('src');
++
++  it('scans the source (the scan itself works)', () => {
++    expect(files.length).toBeGreaterThan(50);
++    expect(files).toContain('src/channels/webhook.ts');
++  });
++
++  it('no source file compares a header with === or !== against a Bearer value or a secret', () => {
++    const bad: string[] = [];
++    const plain =
++      /[!=]==?\s*`Bearer \$\{|`Bearer \$\{[^`]*`\s*[!=]==?|\b\w*(auth|Auth)\w*\s*[!=]==?\s*\w*(secret|Secret|SECRET)\b|\b\w*(secret|Secret|SECRET)\s*[!=]==?\s*\w*(auth|Auth|header|Header|presented|token)\w*\b/;
++    for (const rel of files) {
++      const lines = fs.readFileSync(path.join(root, rel), 'utf8').split('\n');
++      lines.forEach((line, i) => {
++        if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
++        if (plain.test(line)) bad.push(`${rel}:${i + 1}: ${line.trim()}`);
++      });
++    }
++    expect(bad).toEqual([]);
++  });
++
++  it.each([
++    ['src/channels/webhook.ts', 'WEBHOOK_SECRET'],
++    ['src/channels/web-chat.ts', 'WEBCHAT_SECRET'],
++  ])('%s checks %s with bearerMatches', (rel) => {
++    const text = fs.readFileSync(path.join(root, rel), 'utf8');
++    expect(text).toMatch(/if \(!bearerMatches\(authHeader, secret\)\) \{/);
++  });
++});
+diff --git a/src/secret-compare.ts b/src/secret-compare.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ec171a4716af4e63daa1dee5cd70bf65ab3b55c0
+--- /dev/null
++++ b/src/secret-compare.ts
+@@ -0,0 +1,36 @@
++/**
++ * Compare a secret that a request presented with the one the host expects.
++ *
++ * A plain `===` stops at the first byte that differs, so how long it takes
++ * tells a caller how much of a guess was right. Here both values are run
++ * through HMAC-SHA256 with a key made when the process starts, and the two
++ * digests (always 32 bytes) are compared with `timingSafeEqual`. So:
++ *
++ *  - the time taken does not depend on where the values differ;
++ *  - a value of another length is handled the same way as one of the right
++ *    length (no early return, nothing thrown);
++ *  - a missing or non-string value is compared as the empty string and then
++ *    refused, after the same work.
++ *
++ * An empty expected secret never matches: a listener without a secret must
++ * not be opened by an empty header.
++ */
++import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
++
++const PROCESS_KEY = randomBytes(32);
++
++function digest(value: string): Buffer {
++  return createHmac('sha256', PROCESS_KEY).update(value, 'utf8').digest();
++}
++
++export function secretsEqual(presented: unknown, expected: string): boolean {
++  const given = typeof presented === 'string' ? presented : '';
++  const same = timingSafeEqual(digest(given), digest(expected));
++  return same && typeof presented === 'string' && expected.length > 0;
++}
++
++/** True when `header` is exactly "Bearer <secret>". */
++export function bearerMatches(header: unknown, secret: string): boolean {
++  const same = secretsEqual(header, `Bearer ${secret}`);
++  return same && secret.length > 0;
++}
 diff --git a/src/sender-allowlist.test.ts b/src/sender-allowlist.test.ts
 index 5bb8569419edb91015544649b2b83e8fd0ccda84..57aed7ddeae55891f49ca46e3b5b2f34df43ca57 100644
 --- a/src/sender-allowlist.test.ts
@@ -19319,6 +21535,65 @@ index 48915fac34f7932485ce8d03bcdd10201ae237ff..5c9b0eeb9d26360b2a85c31fbd2cb14a
          if (streamedOutput.result) {
            result = streamedOutput.result;
            // Forward result to user (sendMessage handles formatting). The
+diff --git a/src/test-support/git-argv-recorder.ts b/src/test-support/git-argv-recorder.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a9aed05388f34df48cb833f81f3f4e5a56ad151
+--- /dev/null
++++ b/src/test-support/git-argv-recorder.ts
+@@ -0,0 +1,53 @@
++/**
++ * Test support: a `git` placed first on PATH that records the arguments and
++ * the credential-carrying environment of every git process the code under
++ * test starts, then runs the real git. Lets a test show what a local user
++ * could have read in the process list.
++ */
++import { execFileSync } from 'child_process';
++import fs from 'fs';
++import path from 'path';
++
++import { vi } from 'vitest';
++
++export interface GitRecorder {
++  /** One entry per git process: its arguments joined by spaces. */
++  argv(): string[];
++  /** The GIT_CONFIG_KEY_<n> entries each process had, on one line ('' for none). */
++  configKeys(): string[];
++  /** Everything recorded, as one string. */
++  argvText(): string;
++}
++
++export function recordGitProcesses(dir: string): GitRecorder {
++  const realGit = execFileSync('which', ['git'], { encoding: 'utf-8' }).trim();
++  const bin = path.join(dir, 'recorder-bin');
++  const argvLog = path.join(dir, 'git-argv.log');
++  const envLog = path.join(dir, 'git-env.log');
++  fs.mkdirSync(bin, { recursive: true });
++  fs.writeFileSync(argvLog, '');
++  fs.writeFileSync(envLog, '');
++  fs.writeFileSync(
++    path.join(bin, 'git'),
++    [
++      '#!/bin/sh',
++      `printf '%s\\n' "$*" >> '${argvLog}'`,
++      `{ env | grep '^GIT_CONFIG_KEY_' | tr '\\n' ' '; echo; } >> '${envLog}'`,
++      `exec '${realGit}' "$@"`,
++      '',
++    ].join('\n'),
++    { mode: 0o755 },
++  );
++  // Files other users of the test machine may append to (the host runs git
++  // as the checkout owner when it is root).
++  fs.chmodSync(argvLog, 0o666);
++  fs.chmodSync(envLog, 0o666);
++  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
++  const lines = (file: string) =>
++    fs.readFileSync(file, 'utf8').split('\n').slice(0, -1);
++  return {
++    argv: () => lines(argvLog),
++    configKeys: () => lines(envLog),
++    argvText: () => fs.readFileSync(argvLog, 'utf8'),
++  };
++}
 diff --git a/src/test-support/host-repo-setup.ts b/src/test-support/host-repo-setup.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..a8c80822e1a815ca28833872df512cb5f4806234

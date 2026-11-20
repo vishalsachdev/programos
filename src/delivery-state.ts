@@ -72,18 +72,78 @@ function stateKey(jid: string): string {
   return `${STATE_KEY_PREFIX}${jid}`;
 }
 
-function signingKey(): string | undefined {
+/**
+ * The keys that sign and check saved delivery state.
+ *
+ * `sign` is DELIVERY_STATE_SIGNING_KEY (process environment, or `.env`) when
+ * it is set. Without it the host falls back, as it always has, to the first
+ * one set of WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN and RESEND_API_KEY in
+ * `.env`: a secret that exists for another purpose, so a leak of it also
+ * lets its holder forge delivery state, and rotating it makes state saved
+ * before the rotation fail the check.
+ *
+ * `verify` lists every key a saved state may have been signed with: the
+ * signing key, then the fallback. So state signed before a dedicated key was
+ * set (or before this setting was documented) still loads.
+ */
+export interface DeliveryStateKeys {
+  sign: string | undefined;
+  verify: string[];
+  /** The setting the signing key came from, or null when state is unsigned. */
+  source:
+    | 'DELIVERY_STATE_SIGNING_KEY'
+    | 'WEBHOOK_SECRET'
+    | 'TELEGRAM_BOT_TOKEN'
+    | 'RESEND_API_KEY'
+    | null;
+}
+
+const FALLBACK_KEY_SETTINGS = [
+  'WEBHOOK_SECRET',
+  'TELEGRAM_BOT_TOKEN',
+  'RESEND_API_KEY',
+] as const;
+
+export function resolveDeliveryStateKeys(): DeliveryStateKeys {
   const env = readEnvFile([
-    'WEBHOOK_SECRET',
-    'TELEGRAM_BOT_TOKEN',
-    'RESEND_API_KEY',
+    'DELIVERY_STATE_SIGNING_KEY',
+    ...FALLBACK_KEY_SETTINGS,
   ]);
-  return (
-    process.env.DELIVERY_STATE_SIGNING_KEY ||
-    env.WEBHOOK_SECRET ||
-    env.TELEGRAM_BOT_TOKEN ||
-    env.RESEND_API_KEY
-  );
+  const dedicated =
+    process.env.DELIVERY_STATE_SIGNING_KEY || env.DELIVERY_STATE_SIGNING_KEY;
+  const fallbackSetting = FALLBACK_KEY_SETTINGS.find((name) => env[name]);
+  const fallback = fallbackSetting ? env[fallbackSetting] : undefined;
+  const sign = dedicated || fallback;
+  return {
+    sign,
+    verify: [...new Set([dedicated, fallback].filter(isNonEmptyString))],
+    source: dedicated
+      ? 'DELIVERY_STATE_SIGNING_KEY'
+      : (fallbackSetting ?? null),
+  };
+}
+
+/** Set once at startup; null in tests and scripts that never start the host. */
+let startupKeys: DeliveryStateKeys | null = null;
+
+/**
+ * Read the keys once, as the listeners read their secrets once at start: an
+ * edit of `.env` then takes effect at the restart, for all of them together.
+ * Returns the keys so the caller can warn about a reused secret. Before this
+ * is called (tests, scripts) the settings are read at each use.
+ */
+export function initDeliveryStateKeys(): DeliveryStateKeys {
+  startupKeys = resolveDeliveryStateKeys();
+  return startupKeys;
+}
+
+/** @internal */
+export function _resetDeliveryStateKeysForTests(): void {
+  startupKeys = null;
+}
+
+function currentKeys(): DeliveryStateKeys {
+  return startupKeys ?? resolveDeliveryStateKeys();
 }
 
 function macFor(payload: string, key: string): string {
@@ -96,8 +156,8 @@ function macFor(payload: string, key: string): string {
 function unwrapSignedState(
   serialized: string,
 ): { ok: true; payload: string } | { ok: false; reason: string } {
-  const key = signingKey();
-  if (!key) return { ok: true, payload: serialized };
+  const keys = currentKeys().verify;
+  if (keys.length === 0) return { ok: true, payload: serialized };
   let wrapper: unknown;
   try {
     wrapper = JSON.parse(serialized);
@@ -112,11 +172,15 @@ function unwrapSignedState(
   ) {
     return { ok: false, reason: 'missing-state-signature' };
   }
-  const expected = Buffer.from(macFor(wrapper.payload, key), 'hex');
   const actual = Buffer.from(wrapper.mac, 'hex');
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-    return { ok: false, reason: 'invalid-state-signature' };
+  // Every key is tried, with no early exit: which one matched is not timed.
+  let matched = false;
+  for (const key of keys) {
+    const expected = Buffer.from(macFor(wrapper.payload, key), 'hex');
+    if (expected.length === actual.length && timingSafeEqual(expected, actual))
+      matched = true;
   }
+  if (!matched) return { ok: false, reason: 'invalid-state-signature' };
   return { ok: true, payload: wrapper.payload };
 }
 
@@ -261,7 +325,7 @@ export function saveDeliveryState(
   if (Buffer.byteLength(serialized, 'utf8') > CONTAINER_MAX_OUTPUT_SIZE) {
     return { status: 'invalid', reason: 'state-too-large' };
   }
-  const key = signingKey();
+  const key = currentKeys().sign;
   const stored = key
     ? JSON.stringify({
         signatureVersion: SIGNATURE_VERSION,

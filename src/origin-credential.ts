@@ -59,13 +59,29 @@ export function splitOriginCredential(url: string): SplitOrigin {
 export function originCredentialProblem(
   url: string | null | undefined,
 ): string | null {
-  const m = /^([a-z][a-z0-9+.-]*):\/\/([^\s]*)$/i.exec((url ?? '').trim());
+  // Anything after "://" counts, spaces included: a URL git would refuse
+  // still reaches a log line first.
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([\s\S]*)$/i.exec((url ?? '').trim());
   if (!m) return null;
   const scheme = m[1].toLowerCase();
-  if (scheme === 'https' || scheme === 'file') return null;
-  const at = m[2].lastIndexOf('@');
-  if (at < 0) return null;
-  const userinfo = m[2].slice(0, at);
+  if (scheme === 'file') return null;
+  // A token in the query string or the fragment is part of the address on
+  // every scheme: it cannot be handed to git apart from the URL.
+  if (/[?#]/.test(m[2]))
+    return `the origin URL has a "?" or a "#" part. A token written there is part of the address and would reach git's command line and the log. Put the credential before the host name of an https:// URL (https://user:token@host/...), or use an SSH key.`;
+  if (scheme === 'https') return null;
+  // The user-info ends at the last "@" before the path. A password pasted
+  // with a "/" in it cuts the host part short: then what stands before the
+  // first "/" has a ":" that is not followed by a port number, and an "@"
+  // comes later.
+  const slash = m[2].indexOf('/');
+  const authority = slash < 0 ? m[2] : m[2].slice(0, slash);
+  let userinfo = authority.includes('@')
+    ? authority.slice(0, authority.lastIndexOf('@'))
+    : '';
+  if (!userinfo && m[2].includes('@') && /:(?!\d*$)/.test(authority))
+    userinfo = m[2].slice(0, m[2].lastIndexOf('@'));
+  if (!userinfo) return null;
   if (scheme === 'ssh' && !userinfo.includes(':')) return null;
   return scheme === 'ssh'
     ? 'the origin URL is an ssh:// address with a password in it. SSH takes no password from a URL, and git would be given it on its command line. Remove the password and use an SSH key.'
@@ -98,12 +114,29 @@ export function originCredentialEnv(
   };
 }
 
+/** Percent-decoded, one escape at a time: a bad escape stays as written. */
 function decoded(text: string): string {
-  try {
-    return decodeURIComponent(text);
-  } catch {
-    return text;
-  }
+  return text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run;
+    }
+  });
+}
+
+/**
+ * Every spelling of one piece of a credential that a program may print: as
+ * written, decoded, and encoded again with the escapes in either letter
+ * case.
+ */
+function spellings(part: string): string[] {
+  const plain = decoded(part);
+  const encoded = encodeURIComponent(plain);
+  const lower = encoded.replace(/%[0-9A-F]{2}/g, (e) => e.toLowerCase());
+  const asWrittenUpper = part.replace(/%[0-9a-f]{2}/gi, (e) => e.toUpperCase());
+  const asWrittenLower = part.replace(/%[0-9a-f]{2}/gi, (e) => e.toLowerCase());
+  return [part, plain, encoded, lower, asWrittenUpper, asWrittenLower];
 }
 
 /**
@@ -114,18 +147,26 @@ function decoded(text: string): string {
  *    a well-formed URL);
  *  - up to the last "@" of the whole URL, for a token with a "/" in it.
  * Any scheme, so a URL this host refuses to use is still taken out of text
- * that quotes it.
+ * that quotes it. The one exception: the user name of an SSH address with
+ * no password is not a secret ("git"), and taking it out would blank that
+ * word wherever it stands.
  */
 function userinfoReadings(url: string): string[] {
-  const m = /^[a-z][a-z0-9+.-]*:\/\/([^\s]*)$/i.exec(url.trim());
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([\s\S]*)$/i.exec(url.trim());
   if (!m) return [];
-  const rest = m[1];
+  const rest = m[2];
   const out = new Set<string>();
   const authority = rest.split(/[/?#]/)[0];
   if (authority.includes('@'))
     out.add(authority.slice(0, authority.lastIndexOf('@')));
   if (rest.includes('@')) out.add(rest.slice(0, rest.lastIndexOf('@')));
-  return [...out].filter(Boolean);
+  const readings = [...out].filter(Boolean);
+  if (m[1].toLowerCase() === 'ssh' && authority.includes('@'))
+    return readings.filter(
+      (r) =>
+        r.includes(':') && r === authority.slice(0, authority.lastIndexOf('@')),
+    );
+  return readings;
 }
 
 /**
@@ -153,8 +194,8 @@ export function redactOriginCredential(
       }
       for (const part of parts) {
         // A very short piece ("x", "git") would blank ordinary words.
-        if (part.length >= 4) secrets.add(part);
-        if (decoded(part).length >= 4) secrets.add(decoded(part));
+        for (const form of spellings(part))
+          if (form.length >= 4) secrets.add(form);
       }
     }
   }
@@ -162,8 +203,8 @@ export function redactOriginCredential(
   for (const secret of [...secrets].sort((a, b) => b.length - a.length))
     out = out.split(secret).join('***');
   // Any "scheme://...@" left in the text: everything up to the last "@" of
-  // the word goes. A user name or a token may hold "@", ":" and "/" as
-  // written, so no shorter match is safe. The cost: a URL with no
+  // the word goes. A user name or a token may hold "@", ":", "/" and quotes
+  // as written, so no shorter match is safe. The cost: a URL with no
   // credential and an "@" in its path loses its host in the log line.
-  return out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s'"]*@/gi, '$1***@');
+  return out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s]*@/gi, '$1***@');
 }

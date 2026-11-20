@@ -151,6 +151,12 @@ describe('the check at start', () => {
     );
   });
 
+  it('a process value of spaces does not hide the value in .env', () => {
+    writeWithMode(0o644, 'REQUIRE_PRIVATE_ENV_FILE=true\n');
+    vi.stubEnv('REQUIRE_PRIVATE_ENV_FILE', '   ');
+    expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);
+  });
+
   it('"on" in .env is a refusal for a readable file', () => {
     writeWithMode(0o644, 'REQUIRE_PRIVATE_ENV_FILE=on\n');
     expect(() => checkEnvFilePermissions()).toThrow(/refusing to start/);

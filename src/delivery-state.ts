@@ -8,6 +8,8 @@ import {
 } from './config.js';
 import { deleteRouterState, getRouterState, setRouterState } from './db.js';
 import { readEnvFile } from './env.js';
+import { logger } from './logger.js';
+import { realPathOfNearestExisting } from './real-path.js';
 import type { PreparedDelivery } from './types.js';
 
 const STATE_VERSION = 1 as const;
@@ -130,23 +132,14 @@ function isInside(child: string, parent: string): boolean {
   );
 }
 
-/** The folder as the file system knows it, when it exists. */
-function realOrSame(target: string): string {
-  try {
-    return fs.realpathSync(target);
-  } catch {
-    return path.resolve(target);
-  }
-}
-
 /**
  * Why the key file must not be used at this place, or null. The project
  * root is mounted into the main group's container, so a key under it is a
  * key the agent can read.
  */
 export function deliveryStateKeyFileProblem(keyFile: string): string | null {
-  const dir = realOrSame(path.dirname(keyFile));
-  const root = realOrSame(process.cwd());
+  const dir = realPathOfNearestExisting(path.dirname(keyFile));
+  const root = realPathOfNearestExisting(process.cwd());
   if (isInside(dir, root)) {
     return (
       `The delivery-state key file would be at ${keyFile}, inside the project folder ${root}, which the main group's container can read. ` +
@@ -212,24 +205,39 @@ function readKeyFile(keyFile: string): string | undefined {
 function createKeyFile(keyFile: string): string {
   const problem = deliveryStateKeyFileProblem(keyFile);
   if (problem) throw new Error(problem);
-  fs.mkdirSync(path.dirname(keyFile), { recursive: true, mode: 0o700 });
   const key = randomBytes(32).toString('hex');
+  const tmp = `${keyFile}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
-    // "wx": never follows a link that is already there and never replaces a
-    // file; another start that got there first wins.
-    fs.writeFileSync(keyFile, `${key}\n`, { mode: 0o600, flag: 'wx' });
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+    fs.mkdirSync(path.dirname(keyFile), { recursive: true, mode: 0o700 });
+    // The folder may have been made through a link that was not there when
+    // the placement was judged; judge the place the file will really be in.
+    const late = deliveryStateKeyFileProblem(keyFile);
+    if (late) throw new Error(late);
+    // Written whole under another name, then given its name with a hard
+    // link: the name never exists with half a key in it (a stop between
+    // the two steps leaves no key file), a link never replaces a file that
+    // is there, and it does not follow a symbolic link at that name. A
+    // start that got there first wins.
+    fs.writeFileSync(tmp, `${key}\n`, { mode: 0o600, flag: 'wx' });
+    if (process.platform !== 'win32') fs.chmodSync(tmp, 0o600);
+    try {
+      fs.linkSync(tmp, keyFile);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       const existing = readKeyFile(keyFile);
       if (existing) return existing;
+      throw err;
     }
+    return key;
+  } catch (err) {
+    if (err instanceof Error && !('code' in err)) throw err;
     throw new Error(
       `Cannot create the delivery-state key file ${keyFile}: ${(err as NodeJS.ErrnoException).code ?? 'error'}. ` +
         'Make its folder writable by the host user, or set DELIVERY_STATE_SIGNING_KEY in .env.',
     );
+  } finally {
+    fs.rmSync(tmp, { force: true });
   }
-  if (process.platform !== 'win32') fs.chmodSync(keyFile, 0o600);
-  return key;
 }
 
 /** One key per process for a process that never ran the start-up step. */
@@ -257,7 +265,20 @@ export function resolveDeliveryStateKeys(keyFile?: string): DeliveryStateKeys {
     // A key file under the project folder is never read: the agent could
     // have read it, or written it.
     const misplaced = deliveryStateKeyFileProblem(keyFile);
-    if (!misplaced) fileKey = readKeyFile(keyFile);
+    if (!misplaced) {
+      try {
+        fileKey = readKeyFile(keyFile);
+      } catch (err) {
+        // With a key configured the file is only one more key to check
+        // old state with. A host that never needed it must not stop over
+        // it (a HOME the service user cannot enter, a stray file there).
+        if (!configured) throw err;
+        logger.warn(
+          { keyFile, reason: err instanceof Error ? err.message : 'error' },
+          'Delivery state: the key file was not read; a signing key is configured, so it is not needed. State signed with a key from that file, if any, will fail its check',
+        );
+      }
+    }
     if (!configured && !fileKey) fileKey = createKeyFile(keyFile);
   } else if (!configured) {
     processKey ??= randomBytes(32).toString('hex');

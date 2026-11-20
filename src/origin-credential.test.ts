@@ -234,6 +234,53 @@ describe('redaction of a user name or a token with "@", ":" or "/" in it', () =>
     expect(out).not.toContain(SECRET);
   });
 
+  it('takes out a credential next to a quote or a space, and in each spelling of its escapes', () => {
+    const q = String.fromCharCode(34);
+    // No URL given: a quote inside the user-info does not end the match.
+    for (const userinfo of [
+      `kb-bot:${SECRET}${q}x${at}y`,
+      `kb-bot:${SECRET}'x`,
+    ]) {
+      const out = redactOriginCredential(
+        `fatal: unable to access 'https://${userinfo}${at}${HOST}/x/'`,
+      );
+      expect(out, userinfo.replace(SECRET, '…')).not.toContain(SECRET);
+    }
+    // A space in the token, with the URL known.
+    const spaced = `https://kb-bot:${SECRET} part2${at}${HOST}/x`;
+    expect(
+      redactOriginCredential(`bad token ${SECRET} part2 for ${spaced}`, [
+        spaced,
+      ]),
+    ).not.toContain(SECRET);
+    // Written with "@" as is, printed encoded; and escapes in either case.
+    expect(
+      redactOriginCredential(`bad token ${SECRET}%40v2`, [
+        `https://kb-bot:${SECRET}${at}v2${at}${HOST}/x`,
+      ]),
+    ).toBe('bad token ***');
+    expect(
+      redactOriginCredential(`bad token ${SECRET}%2fv2`, [
+        `https://kb-bot:${SECRET}%2Fv2${at}${HOST}/x`,
+      ]),
+    ).toBe('bad token ***');
+    // An escape that cannot be decoded does not stop the others.
+    expect(
+      redactOriginCredential(`bad token ${SECRET}/v2%zz`, [
+        `https://kb-bot:${SECRET}%2Fv2%zz${at}${HOST}/x`,
+      ]),
+    ).toBe('bad token ***');
+  });
+
+  it('does not blank the user name of an SSH address, which is not a secret', () => {
+    const text = 'ssh: connect to host gitlab.example.edu port 22: refused';
+    expect(
+      redactOriginCredential(text, [
+        'ssh://gitlab@gitlab.example.edu/team/repo.git',
+      ]),
+    ).toBe(text);
+  });
+
   it('leaves a URL with a port and no credential alone', () => {
     const text = `fatal: unable to access 'https://${HOST}:8443/team/repo.git/'`;
     expect(
@@ -267,6 +314,32 @@ describe('originCredentialProblem', () => {
         `http://kb-bot:${SECRET}${at}git.example.edu/team/repo.git`,
       ),
     ).toMatch(/http:\/\/.*not encrypted.*https:\/\//);
+  });
+
+  it('refuses a URL with spaces in it, and a token in the query string or the fragment on any scheme', () => {
+    for (const url of [
+      `http://kb bot:${SECRET}${at}git.example.edu/team/repo.git`,
+      `http://kb-bot:${SECRET}${at}git.example.edu/team/re po.git`,
+      `http://git.example.edu/team/repo.git?private_token=${SECRET}`,
+      `https://git.example.edu/team/repo.git?access_token=${SECRET}`,
+      `https://git.example.edu/team/repo.git#${SECRET}`,
+    ]) {
+      const problem = originCredentialProblem(url);
+      expect(problem, url.replace(SECRET, '…')).toBeTruthy();
+      expect(problem).not.toContain(SECRET);
+      expect(problem).not.toContain('git.example.edu');
+    }
+  });
+
+  it('reads the user part up to the path: an "@" in the path of an SSH address is not a password', () => {
+    for (const url of [
+      'ssh://git@git.example.edu:2222/team/repo@v2.git',
+      'ssh://git.example.edu:2222/team/repo@v2.git',
+      'http://git.example.edu:8080/team/repo@v2.git',
+      'http://git.example.edu/team/repo@v2.git',
+    ]) {
+      expect(originCredentialProblem(url), url).toBeNull();
+    }
   });
 
   it('has nothing to say about the forms the host handles', () => {

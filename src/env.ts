@@ -116,7 +116,8 @@ export function booleanSetting(
 export function checkEnvFilePermissions(file = envFilePath()): void {
   const strict = booleanSetting(
     'REQUIRE_PRIVATE_ENV_FILE',
-    process.env.REQUIRE_PRIVATE_ENV_FILE ||
+    // Trimmed first: a process value of spaces must not hide the file's.
+    (process.env.REQUIRE_PRIVATE_ENV_FILE ?? '').trim() ||
       readEnvFile(['REQUIRE_PRIVATE_ENV_FILE']).REQUIRE_PRIVATE_ENV_FILE,
     false,
   );

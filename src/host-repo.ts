@@ -47,6 +47,7 @@ import {
   redactOriginCredential,
   splitOriginCredential,
 } from './origin-credential.js';
+import { realPathOfNearestExisting } from './real-path.js';
 import { logger } from './logger.js';
 import { CHECKOUT_OWNER, getProgramRepoPath } from './program-repo.js';
 import {
@@ -401,12 +402,14 @@ export function hostRepoPlacementProblem(): string | null {
  * such a folder.
  */
 function hostRepoLinkProblem(host: string, checkout: string): string | null {
-  const real = realOrResolved(host);
+  // The nearest existing folder decides: at the first start the repo's own
+  // folder is not there yet, and a link above it must still be seen.
+  const real = realPathOfNearestExisting(host);
   if (real === path.resolve(host)) return null;
-  const realCheckout = realOrResolved(checkout);
+  const realCheckout = realPathOfNearestExisting(checkout);
   if (inside(realCheckout, real) || inside(real, realCheckout))
     return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, which is inside PROGRAM_REPO or contains it. The agent can write there`;
-  if (inside(realOrResolved(process.cwd()), real))
+  if (inside(realPathOfNearestExisting(process.cwd()), real))
     return `PROGRAM_HOST_REPO leads through a symbolic link to ${real}, inside the project folder, which the main group's container can read`;
   let st: fs.Stats;
   try {

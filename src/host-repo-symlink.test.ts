@@ -97,6 +97,25 @@ describe('PROGRAM_HOST_REPO is a symbolic link', () => {
     expect(hostRepoPlacementProblem()).toMatch(/inside the project folder/);
   });
 
+  it('below a link into the checkout or the project folder, when the repo folder does not exist yet: refused, and nothing is created', () => {
+    // The first start: the setting is "<link>/program-repo-host" and only
+    // the link is there.
+    fs.symlinkSync(kb.checkout, link);
+    vi.stubEnv('PROGRAM_HOST_REPO', path.join(link, 'program-repo-host'));
+    expect(hostRepoPlacementProblem()).toMatch(/inside PROGRAM_REPO/);
+    expect(() => ensureHostRepo()).toThrow(/host repo refused/);
+    expect(fs.existsSync(path.join(kb.checkout, 'program-repo-host'))).toBe(
+      false,
+    );
+
+    const project = path.join(kb.root, 'project');
+    fs.mkdirSync(path.join(project, 'store'), { recursive: true });
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+    fs.rmSync(link);
+    fs.symlinkSync(path.join(project, 'store'), link);
+    expect(hostRepoPlacementProblem()).toMatch(/inside the project folder/);
+  });
+
   it('to something that is not a folder: refused', () => {
     const file = path.join(kb.root, 'a-file');
     fs.writeFileSync(file, 'x');

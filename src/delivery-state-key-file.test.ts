@@ -320,6 +320,69 @@ describe('the key file', () => {
     ).toThrow(/inside the project folder/);
   });
 
+  it('is refused when a folder above it is a link into the project folder and the last folders do not exist yet', () => {
+    // The first start: "~/.config" leads into the store, "nanoclaw" is not
+    // there yet.
+    const config = path.join(root, 'home2', '.config');
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    fs.mkdirSync(path.join(project, 'store'));
+    fs.symlinkSync(path.join(project, 'store'), config);
+    const viaLink = path.join(config, 'nanoclaw', 'delivery-state.key');
+    expect(deliveryStateKeyFileProblem(viaLink)).toMatch(
+      /inside the project folder/,
+    );
+    expect(() => initDeliveryStateKeys(viaLink)).toThrow(
+      /inside the project folder/,
+    );
+    expect(fs.readdirSync(path.join(project, 'store'))).toEqual([]);
+  });
+
+  it('never has a name with half a key under it, and leaves no other file behind', () => {
+    initDeliveryStateKeys(keyFile);
+    expect(fs.readdirSync(path.dirname(keyFile))).toEqual([
+      'delivery-state.key',
+    ]);
+    // Created by a hard link of a finished file: the two steps are a write
+    // under another name and a link, so the key's name appears complete.
+    const source = fs.readFileSync(
+      path.join(__dirname, 'delivery-state.ts'),
+      'utf8',
+    );
+    const create = source.slice(source.indexOf('function createKeyFile'));
+    expect(create.indexOf('fs.writeFileSync(tmp')).toBeGreaterThan(0);
+    expect(create.indexOf('fs.linkSync(tmp, keyFile)')).toBeGreaterThan(
+      create.indexOf('fs.writeFileSync(tmp'),
+    );
+  });
+
+  it('with a key configured, a key file that cannot be read does not stop the host', () => {
+    fs.writeFileSync(
+      path.join(project, '.env'),
+      'WEBHOOK_SECRET=fake-webhook-secret\n',
+      { mode: 0o600 },
+    );
+    fs.mkdirSync(path.dirname(keyFile), { recursive: true });
+    for (const make of [
+      () => fs.writeFileSync(keyFile, ''),
+      () => fs.writeFileSync(keyFile, 'not a key'),
+      () => fs.mkdirSync(keyFile),
+    ]) {
+      fs.rmSync(keyFile, { recursive: true, force: true });
+      make();
+      expect(initDeliveryStateKeys(keyFile)).toEqual({
+        sign: 'fake-webhook-secret',
+        verify: ['fake-webhook-secret'],
+        source: 'WEBHOOK_SECRET',
+      });
+    }
+    // A folder of that name where a file is expected on the way.
+    const blocked = path.join(root, 'a-file');
+    fs.writeFileSync(blocked, 'x');
+    expect(
+      initDeliveryStateKeys(path.join(blocked, 'nanoclaw', 'k.key')).source,
+    ).toBe('WEBHOOK_SECRET');
+  });
+
   it('by default lives in the host settings folder, outside the project folder and every fixed mount', () => {
     expect(path.dirname(DELIVERY_STATE_KEY_PATH)).toBe(HOST_CONFIG_DIR);
     const realCwd = vi.mocked(process.cwd).getMockImplementation();

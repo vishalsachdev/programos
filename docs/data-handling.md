@@ -124,6 +124,7 @@ Take the table to the people who approve data use at your institution. Get an an
 - [ ] What senders are told about where their mail goes (`AGENTS.md`, ASK 5).
 - [ ] Whether the agent gets web tools (`AGENT_WEB_TOOLS`) or an open network (`CONTAINER_NETWORK=open`). Both are off by default on Docker Engine on Linux.
 - [ ] Whether state snapshots are used, and to which repo they go.
+- [ ] Who owns each account the bot depends on (model, mail, domain, git, hosting, Telegram), as a role and not a person, and what happens to them when the operator leaves ([`service-ownership.md`](./service-ownership.md)).
 
 **A conservative default for a first pilot:**
 

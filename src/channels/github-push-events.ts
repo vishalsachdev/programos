@@ -518,7 +518,7 @@ async function handleGithubPush(
       alertFailures.push(err);
     }
     // The settings are stored in lower case; git keeps the author's case.
-    if (BOT_AUTHORS.has((c.author.email ?? '').toLowerCase())) {
+    if (BOT_AUTHORS.has((c.author?.email ?? '').toLowerCase())) {
       skippedBot++;
       continue;
     }

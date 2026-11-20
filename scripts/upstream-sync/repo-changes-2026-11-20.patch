@@ -6958,7 +6958,7 @@ index a17e57f62621e4dd387983b5f793e790640a80f1..4425df2e980134028d9987211d31e76c
      expect(
        logReplySuppressedOnce({
 diff --git a/src/audit-log.ts b/src/audit-log.ts
-index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..6f7bb6546ebb14cb79655cda0861a73fe6889607 100644
+index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..f9fd18eecb513c790693f386c07a2c2835241f4b 100644
 --- a/src/audit-log.ts
 +++ b/src/audit-log.ts
 @@ -4,21 +4,32 @@
@@ -7351,7 +7351,7 @@ index df54eb1a5ef36bcdc39c90cdafc160a66ab29658..6f7bb6546ebb14cb79655cda0861a73f
 +    else
 +      logger.info(
 +        { entries: count, pushed: result.pushed },
-+        'Audit log: no new commit in this run; entries not yet committed stay as files for a later run',
++        'Audit log: this run made no new commit (an earlier run committed the entries, or the host repo is waiting for the origin and they stay as files)',
 +      );
 +  }
 +  return result;
@@ -8038,7 +8038,7 @@ index 0000000000000000000000000000000000000000..4dc24ddd289b0d2d82696d0e79085590
 +  });
 +});
 diff --git a/src/channels/github-push-events.ts b/src/channels/github-push-events.ts
-index dcfc99a3aae04f554770670008896535f14bff02..c278cf52c1589106766a198b5781a2273d44221c 100644
+index dcfc99a3aae04f554770670008896535f14bff02..d302cb860c6320ea8af768d4c1e6be5761c0bfba 100644
 --- a/src/channels/github-push-events.ts
 +++ b/src/channels/github-push-events.ts
 @@ -13,6 +13,10 @@ import {
@@ -8079,7 +8079,7 @@ index dcfc99a3aae04f554770670008896535f14bff02..c278cf52c1589106766a198b5781a227
      }
 -    if (BOT_AUTHORS.has(c.author.email)) {
 +    // The settings are stored in lower case; git keeps the author's case.
-+    if (BOT_AUTHORS.has((c.author.email ?? '').toLowerCase())) {
++    if (BOT_AUTHORS.has((c.author?.email ?? '').toLowerCase())) {
        skippedBot++;
        continue;
      }
@@ -11823,10 +11823,10 @@ index 2dd01c1c3ea91c3850e160b469caacb7df0db5a5..14c833941dd7240bb701b5bcf8955581
      return ['--add-host=host.docker.internal:host-gateway'];
 diff --git a/src/credential-proxy-providers.test.ts b/src/credential-proxy-providers.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..311d21db05dab8982fc5bf756e1d11d459782c6d
+index 0000000000000000000000000000000000000000..92a75551c352498ba9243cf11af55171e729be15
 --- /dev/null
 +++ b/src/credential-proxy-providers.test.ts
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,370 @@
 +/**
 + * Credential proxy: routing by provider, the Foundry credential, the
 + * path-prefix token, and the base URL path prefix. Uses local fake upstreams.
@@ -11845,6 +11845,7 @@ index 0000000000000000000000000000000000000000..311d21db05dab8982fc5bf756e1d11d4
 +}));
 +
 +import {
++  isModelCall,
 +  startCredentialProxy,
 +  registerProxyCaller,
 +  revokeProxyCaller,
@@ -12152,12 +12153,37 @@ index 0000000000000000000000000000000000000000..311d21db05dab8982fc5bf756e1d11d4
 +      await send(proxyPort, '/v1/models', {
 +        'x-nanoclaw-proxy-token': anthropicToken,
 +      });
++      // Token counting answers 2xx while model turns fail: not a model turn.
++      await send(proxyPort, '/v1/messages/count_tokens', {
++        'x-nanoclaw-proxy-token': anthropicToken,
++      });
 +      anthropicStatus = 529;
 +      await send(proxyPort, '/v1/messages', {
 +        'x-nanoclaw-proxy-token': anthropicToken,
 +      });
 +    }
 +    expect(selectProvider()).toBe('foundry');
++  });
++
++  it('isModelCall: a POST to v1/messages or v1/complete itself, on any base path', () => {
++    for (const path of [
++      '/v1/messages',
++      '/v1/messages/',
++      '/v1/messages?beta=true',
++      '/v1/complete',
++      '/anthropic/v1/messages',
++    ])
++      expect(isModelCall('POST', path), path).toBe(true);
++    for (const path of [
++      '/v1/messages/count_tokens',
++      '/v1/messages/batches',
++      '/v1/models',
++      '/api/oauth/claude_cli/create_api_key',
++      '/v1/messages/../models',
++    ])
++      expect(isModelCall('POST', path), path).toBe(false);
++    expect(isModelCall('GET', '/v1/messages')).toBe(false);
++    expect(isModelCall(undefined, '/v1/messages')).toBe(false);
 +  });
 +
 +  it('feeds the breaker: an unreachable upstream counts as a failure', async () => {
@@ -12526,7 +12552,7 @@ index b46bbd8cfe1ca28bbe60456580a0a66fd4a00caa..b3214a228e03ba8f5129aec1a34d7811
      proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
  
 diff --git a/src/credential-proxy.ts b/src/credential-proxy.ts
-index 5990016ef0c61fde23168aaba7b004d41574a259..1c7c47d5c7bd8972b56bf3a7416279852bcfe039 100644
+index 5990016ef0c61fde23168aaba7b004d41574a259..9791c374cb12fcc415d9aee527da8a7e7c471faa 100644
 --- a/src/credential-proxy.ts
 +++ b/src/credential-proxy.ts
 @@ -9,6 +9,10 @@
@@ -12540,7 +12566,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..1c7c47d5c7bd8972b56bf3a741627985
   */
  import { createServer, Server } from 'http';
  import { request as httpsRequest } from 'https';
-@@ -17,6 +21,17 @@ import { timingSafeEqual } from 'crypto';
+@@ -17,35 +21,108 @@ import { timingSafeEqual } from 'crypto';
  
  import { readEnvFile } from './env.js';
  import { logger } from './logger.js';
@@ -12558,7 +12584,25 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..1c7c47d5c7bd8972b56bf3a741627985
  
  export type AuthMode = 'api-key' | 'oauth';
  
-@@ -26,26 +41,72 @@ export interface ProxyConfig {
++/**
++ * A request whose 2xx shows the provider can serve a model turn: a POST to
++ * `.../v1/messages` or `.../v1/complete` itself. Token counting, batches, the
++ * model list and the OAuth key exchange are not: their success must not
++ * reset the failover count while model turns fail.
++ */
++export function isModelCall(
++  method: string | undefined,
++  requestPath: string,
++): boolean {
++  if (method !== 'POST' || classifyProxyPath(requestPath) !== 'model')
++    return false;
++  const path = requestPath.split('?')[0].replace(/\/$/, '').toLowerCase();
++  return /\/v1\/(messages|complete)$/.test(path);
++}
++
+ export interface ProxyConfig {
+   authMode: AuthMode;
+ }
  
  const PROXY_TOKEN_HEADER = 'x-nanoclaw-proxy-token';
  const MAX_PROXY_BODY_BYTES = 20 * 1024 * 1024;
@@ -12639,7 +12683,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..1c7c47d5c7bd8972b56bf3a741627985
  }
  
  export function startCredentialProxy(
-@@ -69,17 +130,39 @@ export function startCredentialProxy(
+@@ -69,17 +146,39 @@ export function startCredentialProxy(
    const upstreamUrl = new URL(
      secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
    );
@@ -12682,7 +12726,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..1c7c47d5c7bd8972b56bf3a741627985
  
        const rejectOversize = () => {
          res.writeHead(413);
-@@ -106,11 +189,56 @@ export function startCredentialProxy(
+@@ -106,11 +205,56 @@ export function startCredentialProxy(
        });
        req.on('end', () => {
          if (tooLarge) return;
@@ -12741,7 +12785,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..1c7c47d5c7bd8972b56bf3a741627985
              'content-length': body.length,
            };
  
-@@ -120,7 +248,14 @@ export function startCredentialProxy(
+@@ -120,7 +264,14 @@ export function startCredentialProxy(
          delete headers['transfer-encoding'];
          delete headers[PROXY_TOKEN_HEADER];
  
@@ -12757,7 +12801,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..1c7c47d5c7bd8972b56bf3a741627985
            // API key mode: inject x-api-key on every request
            delete headers['x-api-key'];
            headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
-@@ -139,21 +274,32 @@ export function startCredentialProxy(
+@@ -139,21 +290,32 @@ export function startCredentialProxy(
  
          const upstream = makeRequest(
            {
@@ -12779,7 +12823,7 @@ index 5990016ef0c61fde23168aaba7b004d41574a259..1c7c47d5c7bd8972b56bf3a741627985
 +            recordProviderResult(
 +              provider,
 +              { status: upRes.statusCode },
-+              { modelCall: classifyProxyPath(requestPath) === 'model' },
++              { modelCall: isModelCall(req.method, requestPath) },
 +            );
              res.writeHead(upRes.statusCode!, upRes.headers);
              upRes.pipe(res);
@@ -24886,12 +24930,126 @@ index 30e89a240d80cb17d8806781f5bb2035cec9b120..c930e6889a5761a1cbeabef202b292b4
 +export function getProgramRepoPath(): string {
 +  return process.env.PROGRAM_REPO || DEFAULT_PROGRAM_REPO;
  }
+diff --git a/src/repo-reader-git-stderr.test.ts b/src/repo-reader-git-stderr.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..56bf3bea45fe411efe98be4823a82844f13bac02
+--- /dev/null
++++ b/src/repo-reader-git-stderr.test.ts
+@@ -0,0 +1,108 @@
++/**
++ * Found by the independent read of the credential-handling change (PR 71):
++ * the read mirror ran its clone and its fetch with git's stderr joined to
++ * the host's own. When a git host refuses a login, git names the URL it
++ * used, and a token written as the user name (`https://<token>@host/...`)
++ * is part of that URL. The line then reached the host's error log without
++ * passing the redaction.
++ *
++ * A stand-in `git` writes that message for the two network commands and
++ * passes everything else to the real git. The host code runs in a process
++ * of its own so that its raw stderr can be read.
++ */
++import { spawnSync } from 'child_process';
++import fs from 'fs';
++import path from 'path';
++
++import { afterEach, beforeEach, describe, expect, it } from 'vitest';
++
++import {
++  git,
++  makeKbFixture,
++  type KbFixture,
++} from './test-support/kb-fixture.js';
++
++const TOKEN = ['not', 'a', 'real', 'token', '7171'].join('-');
++const ADDRESS = '127.0.0.1:9/team/program-repo.git';
++const SETTING = `https://${TOKEN}@${ADDRESS}`;
++const PATTERN = '^https://([A-Za-z0-9_.~:-]+@)?127[.]0[.]0[.]1:9/team/';
++
++let kb: KbFixture;
++let bin: string;
++
++function realGit(): string {
++  const found = (process.env.PATH ?? '')
++    .split(path.delimiter)
++    .map((d) => path.join(d, 'git'))
++    .find((p) => fs.existsSync(p));
++  if (!found) throw new Error('test setup: git not found on PATH');
++  return found;
++}
++
++beforeEach(() => {
++  kb = makeKbFixture();
++  bin = path.join(kb.root, 'fake-bin');
++  fs.mkdirSync(bin);
++  // What git 2.43 prints when the server answers 401 to a URL whose user
++  // name is the token and no password can be asked for.
++  fs.writeFileSync(
++    path.join(bin, 'git'),
++    `#!/bin/bash
++for arg in "$@"; do
++  if [ "$arg" = clone ] || [ "$arg" = fetch ]; then
++    echo "fatal: could not read Password for 'https://${TOKEN}@127.0.0.1:9': No such device or address" >&2
++    exit 128
++  fi
++done
++exec ${realGit()} "$@"
++`,
++    { mode: 0o755 },
++  );
++});
++
++afterEach(() => kb.cleanup());
++
++function runHost(mirror: string): string {
++  const r = spawnSync(
++    path.resolve('node_modules/.bin/tsx'),
++    [path.resolve('src/test-support/mirror-child.ts'), mirror],
++    {
++      encoding: 'utf8',
++      timeout: 60_000,
++      env: {
++        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
++        HOME: kb.root,
++        TMPDIR: process.env.TMPDIR ?? '',
++        GIT_TERMINAL_PROMPT: '0',
++        PROGRAM_ORIGIN_URL: SETTING,
++        PROGRAM_ORIGIN_PATTERN: PATTERN,
++      },
++    },
++  );
++  return `${r.stdout ?? ''}${r.stderr ?? ''}`;
++}
++
++describe('read mirror: what git writes to stderr stays out of the host stderr', () => {
++  it('the bootstrap clone: a refused login is logged without the token', () => {
++    const all = runHost(kb.mirror);
++    expect(all).toMatch(/mirror bootstrap clone failed/);
++    expect(all).toMatch(/could not read Password/); // the reason is kept
++    expect(all).not.toContain(TOKEN);
++  });
++
++  it('the fetch of an existing mirror: a refused login is logged without the token', () => {
++    git(kb.root, [
++      'clone',
++      '-q',
++      '--mirror',
++      '--template=',
++      kb.origin,
++      kb.mirror,
++    ]);
++    git(kb.mirror, ['config', 'remote.origin.url', `https://${ADDRESS}`]);
++    const all = runHost(kb.mirror);
++    expect(all).toMatch(/fetch failed; serving last-good SHA/);
++    expect(all).toMatch(/could not read Password/);
++    expect(all).not.toContain(TOKEN);
++  });
++});
 diff --git a/src/repo-reader-origin-credential.test.ts b/src/repo-reader-origin-credential.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ef07297c6385aa0ff05df12ec8d1201ec332c380
+index 0000000000000000000000000000000000000000..b8bf0bf8f9226242119014c92fc025674cb97a28
 --- /dev/null
 +++ b/src/repo-reader-origin-credential.test.ts
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,189 @@
 +/**
 + * Issue 53, the read mirror: the token of PROGRAM_ORIGIN_URL is not on the
 + * clone or fetch command line, not in the mirror's config and not in a log
@@ -25030,10 +25188,14 @@ index 0000000000000000000000000000000000000000..ef07297c6385aa0ff05df12ec8d1201e
 +    expect(logged.join('\n')).not.toContain(TOKEN);
 +  });
 +
-+  it('a stored token is kept when the setting names another address, or the same address with no credential', () => {
++  it('a stored token is kept when the setting names another address, or the same address with no secret of its own', () => {
 +    for (const setting of [
 +      `https://${USER}:${TOKEN}@127.0.0.1:9/other/program-repo.git`,
 +      BARE,
++      // A user name and no password: found by the independent read of this
++      // change. The first version of the fix dropped the stored token here.
++      `https://${USER}@${ADDRESS}`,
++      `https://${USER}:@${ADDRESS}`,
 +    ]) {
 +      fs.rmSync(kb.mirror, { recursive: true, force: true });
 +      makeMirror(FULL);
@@ -25246,7 +25408,7 @@ index 6fdeb411c5695287431951c4b37115fc2c4f6a0d..4fa5cb610d7ee1fbcf84f371e2cf51ed
      // No live checkout either — bootstrap has no origin URL to clone from.
      vi.stubEnv('PROGRAM_REPO', path.join(dir, 'no-live-checkout'));
 diff --git a/src/repo-reader.ts b/src/repo-reader.ts
-index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c30099f34da04 100644
+index 131b719890aaef78b21a5c5c97d4776e22b64adf..29cf1be51406ec07d11420d1be19df837595aaa7 100644
 --- a/src/repo-reader.ts
 +++ b/src/repo-reader.ts
 @@ -1,10 +1,26 @@
@@ -25340,7 +25502,17 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
 +export function realProgramRepoReason(): string | null {
 +  if (process.env.PROGRAM_ORIGIN_PATTERN) {
 +    return 'PROGRAM_ORIGIN_PATTERN is set';
-+  }
+   }
+-  return (
+-    u.protocol === 'https:' &&
+-    u.hostname === 'github.com' &&
+-    u.port === '' &&
+-    u.search === '' &&
+-    u.hash === '' &&
+-    !url.includes('?') &&
+-    !url.includes('#') &&
+-    /^\/example-org\/program-repo(\.git)?$/.test(u.pathname)
+-  );
 +  const set = process.env.PROGRAM_ORIGIN_URL;
 +  if (set && !isPlaceholderOrigin(set)) return 'PROGRAM_ORIGIN_URL is set';
 +  const sources: Array<[string, () => string]> = [
@@ -25357,17 +25529,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
 +    if (url && !isPlaceholderOrigin(url)) {
 +      return `the origin of the ${name} is not the placeholder example-org/program-repo`;
 +    }
-   }
--  return (
--    u.protocol === 'https:' &&
--    u.hostname === 'github.com' &&
--    u.port === '' &&
--    u.search === '' &&
--    u.hash === '' &&
--    !url.includes('?') &&
--    !url.includes('#') &&
--    /^\/example-org\/program-repo(\.git)?$/.test(u.pathname)
--  );
++  }
 +  return null;
  }
  
@@ -25389,7 +25551,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
            this.mirrorPath,
        );
      }
-@@ -107,59 +149,132 @@ export class RepoReader {
+@@ -107,59 +149,143 @@ export class RepoReader {
    }
  
    /**
@@ -25446,6 +25608,10 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
          {
            timeout: 120_000,
 +          env: mirrorGitEnv(),
++          // git's own stderr is kept out of the host's: on a refused login
++          // it names the URL it used, with a token written as the user name.
++          // The text still reaches the log below, through mirrorErrorText.
++          stdio: ['ignore', 'pipe', 'pipe'],
          },
        );
        logger.info(
@@ -25471,10 +25637,11 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
  
 +  /**
 +   * A mirror made by an earlier version, or cloned by hand, can hold the
-+   * origin's token in its config. When PROGRAM_ORIGIN_URL names the same
-+   * address and holds a credential (the same one or a newer one), the stored
-+   * URL is rewritten without the credential (git then reads it from the
-+   * setting). Otherwise the config is the credential's only home:
++   * origin's token in its config. When PROGRAM_ORIGIN_URL is that same URL,
++   * or names the same address with a password or token of its own (a newer
++   * one, after a rotation), the stored URL is rewritten without the
++   * credential (git then reads it from the setting). The setting is taken as
++   * the current one. Otherwise the config is the credential's only home:
 +   * it is left as it is, made readable by its owner only, and a warning
 +   * says how to move it. Never throws.
 +   */
@@ -25499,15 +25666,21 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
 +          'RepoReader: the read mirror config holds a credential and was readable by other users; now private to its owner',
 +        );
 +      }
-+      // Same address, and the setting carries a credential of its own: the
-+      // stored one is not needed. It may be an older token than the setting's
-+      // (rotated before this start); git would go on using the stored one,
-+      // because the rewrite from the setting matches the bare address only.
++      // The stored credential is not needed when the setting is the same
++      // URL, or names the same address and carries a password or token of
++      // its own (`user:secret@`). The second case is a token rotated before
++      // this start: git would go on using the stored one, because the rewrite
++      // from the setting matches the bare address only. A setting with a
++      // user name and no password proves no secret of its own (it may be a
++      // name, it may be a token written as the name), so only an exact match
++      // counts there and the stored credential is otherwise kept.
 +      const setting = process.env.PROGRAM_ORIGIN_URL || '';
++      const fromSetting = splitOriginCredential(setting);
++      const settingHasSecret = /^[^:]*:.+$/.test(fromSetting.userinfo);
 +      if (
-+        hasOriginCredential(setting) &&
-+        splitOriginCredential(stored).bare ===
-+          splitOriginCredential(setting).bare
++        stored === setting ||
++        (settingHasSecret &&
++          splitOriginCredential(stored).bare === fromSetting.bare)
 +      ) {
 +        execFileSync(
 +          'git',
@@ -25544,12 +25717,17 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
    get currentSha(): string | null {
      return this.sha;
    }
-@@ -208,11 +323,15 @@ export class RepoReader {
+@@ -208,11 +334,20 @@ export class RepoReader {
            'origin',
            '+refs/heads/main:refs/heads/main',
          ],
 -        { timeout: 30_000 },
-+        { timeout: 30_000, env: mirrorGitEnv() },
++        {
++          timeout: 30_000,
++          env: mirrorGitEnv(),
++          // As for the clone: git's stderr can name the URL with a token.
++          stdio: ['ignore', 'pipe', 'pipe'],
++        },
        );
      } catch (err: any) {
        logger.warn(
@@ -25562,7 +25740,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
          'RepoReader: fetch failed; serving last-good SHA',
        );
        return { advanced: false, sha: this.sha };
-@@ -246,11 +365,15 @@ export class RepoReader {
+@@ -246,11 +381,15 @@ export class RepoReader {
            'origin',
            '+refs/heads/main:refs/heads/main',
          ],
@@ -25580,7 +25758,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
          'RepoReader: async fetch failed; serving last-good SHA',
        );
        return { advanced: false, sha: this.sha };
-@@ -333,7 +456,11 @@ export class RepoReader {
+@@ -333,7 +472,11 @@ export class RepoReader {
        );
        const [sha, author] = history.trim().split('\n')[0].split('\0');
        // A delayed webhook must never select a later agent-authored version.
@@ -25593,7 +25771,7 @@ index 131b719890aaef78b21a5c5c97d4776e22b64adf..a6a24a72508c2330711fba52a99c3009
          return null;
        const { stdout } = await execFileAsync(
          'git',
-@@ -613,9 +740,7 @@ let singleton: RepoReader | null = null;
+@@ -613,9 +756,7 @@ let singleton: RepoReader | null = null;
  /** Process-wide reader over the program-repo read mirror. */
  export function getRepoReader(): RepoReader {
    if (!singleton) {
@@ -28190,6 +28368,22 @@ index 0000000000000000000000000000000000000000..5930dc8a8a62e7ecb414851c1cf10ef4
 +    },
 +  };
 +}
+diff --git a/src/test-support/mirror-child.ts b/src/test-support/mirror-child.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f76efb15c2a77afa1853b9baa3c2ef2bc002edef
+--- /dev/null
++++ b/src/test-support/mirror-child.ts
+@@ -0,0 +1,10 @@
++/**
++ * Run by src/repo-reader-git-stderr.test.ts in a process of its own, so the
++ * test can read everything that process writes to its stderr.
++ * argv[2]: the mirror path. Starts the read mirror and refreshes it once.
++ */
++import { RepoReader } from '../repo-reader.js';
++
++const reader = new RepoReader(process.argv[2]);
++reader.init();
++reader.refresh({ force: true });
 diff --git a/src/test-support/smtp-test-server.ts b/src/test-support/smtp-test-server.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..3e2a1d7e760afb150b72e3992b4b074362de2dd9

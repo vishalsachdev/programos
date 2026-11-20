@@ -107,7 +107,7 @@ The per-run proxy token travels in a header and also in the base URL path (`/_t/
 
 ## 5. How failover behaves
 
-- The proxy counts results per provider. A network error or a 401, 403, 429 or 5xx answer is a failure. A 2xx answer to a model call resets the count; a 2xx answer to anything else (the sign-in key exchange, the model list) does not, because it says nothing about model calls. Other answers (a 400, for example) change nothing.
+- The proxy counts results per provider. A network error or a 401, 403, 429 or 5xx answer is a failure. A 2xx answer to a model call (a POST to `v1/messages` or `v1/complete` itself) resets the count; a 2xx answer to anything else (the sign-in key exchange, the model list, token counting, batches) does not, because it says nothing about model calls. Other answers (a 400, for example) change nothing.
 - At the threshold the provider is set aside for the cooldown. New runs use the next provider in the list. Answers that arrive during the cooldown, from runs that began before it, change nothing: a late success does not end it and a late failure does not extend it.
 - After the cooldown the first provider is tried again. One failure sets it aside again at once; a 2xx restores the full threshold.
 - If every provider is set aside, the first in the list is used.

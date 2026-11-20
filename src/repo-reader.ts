@@ -183,6 +183,10 @@ export class RepoReader {
         {
           timeout: 120_000,
           env: mirrorGitEnv(),
+          // git's own stderr is kept out of the host's: on a refused login
+          // it names the URL it used, with a token written as the user name.
+          // The text still reaches the log below, through mirrorErrorText.
+          stdio: ['ignore', 'pipe', 'pipe'],
         },
       );
       logger.info(
@@ -205,10 +209,11 @@ export class RepoReader {
 
   /**
    * A mirror made by an earlier version, or cloned by hand, can hold the
-   * origin's token in its config. When PROGRAM_ORIGIN_URL names the same
-   * address and holds a credential (the same one or a newer one), the stored
-   * URL is rewritten without the credential (git then reads it from the
-   * setting). Otherwise the config is the credential's only home:
+   * origin's token in its config. When PROGRAM_ORIGIN_URL is that same URL,
+   * or names the same address with a password or token of its own (a newer
+   * one, after a rotation), the stored URL is rewritten without the
+   * credential (git then reads it from the setting). The setting is taken as
+   * the current one. Otherwise the config is the credential's only home:
    * it is left as it is, made readable by its owner only, and a warning
    * says how to move it. Never throws.
    */
@@ -233,15 +238,21 @@ export class RepoReader {
           'RepoReader: the read mirror config holds a credential and was readable by other users; now private to its owner',
         );
       }
-      // Same address, and the setting carries a credential of its own: the
-      // stored one is not needed. It may be an older token than the setting's
-      // (rotated before this start); git would go on using the stored one,
-      // because the rewrite from the setting matches the bare address only.
+      // The stored credential is not needed when the setting is the same
+      // URL, or names the same address and carries a password or token of
+      // its own (`user:secret@`). The second case is a token rotated before
+      // this start: git would go on using the stored one, because the rewrite
+      // from the setting matches the bare address only. A setting with a
+      // user name and no password proves no secret of its own (it may be a
+      // name, it may be a token written as the name), so only an exact match
+      // counts there and the stored credential is otherwise kept.
       const setting = process.env.PROGRAM_ORIGIN_URL || '';
+      const fromSetting = splitOriginCredential(setting);
+      const settingHasSecret = /^[^:]*:.+$/.test(fromSetting.userinfo);
       if (
-        hasOriginCredential(setting) &&
-        splitOriginCredential(stored).bare ===
-          splitOriginCredential(setting).bare
+        stored === setting ||
+        (settingHasSecret &&
+          splitOriginCredential(stored).bare === fromSetting.bare)
       ) {
         execFileSync(
           'git',
@@ -323,7 +334,12 @@ export class RepoReader {
           'origin',
           '+refs/heads/main:refs/heads/main',
         ],
-        { timeout: 30_000, env: mirrorGitEnv() },
+        {
+          timeout: 30_000,
+          env: mirrorGitEnv(),
+          // As for the clone: git's stderr can name the URL with a token.
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
       );
     } catch (err: any) {
       logger.warn(

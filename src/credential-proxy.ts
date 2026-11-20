@@ -35,6 +35,22 @@ import {
 
 export type AuthMode = 'api-key' | 'oauth';
 
+/**
+ * A request whose 2xx shows the provider can serve a model turn: a POST to
+ * `.../v1/messages` or `.../v1/complete` itself. Token counting, batches, the
+ * model list and the OAuth key exchange are not: their success must not
+ * reset the failover count while model turns fail.
+ */
+export function isModelCall(
+  method: string | undefined,
+  requestPath: string,
+): boolean {
+  if (method !== 'POST' || classifyProxyPath(requestPath) !== 'model')
+    return false;
+  const path = requestPath.split('?')[0].replace(/\/$/, '').toLowerCase();
+  return /\/v1\/(messages|complete)$/.test(path);
+}
+
 export interface ProxyConfig {
   authMode: AuthMode;
 }
@@ -289,7 +305,7 @@ export function startCredentialProxy(
             recordProviderResult(
               provider,
               { status: upRes.statusCode },
-              { modelCall: classifyProxyPath(requestPath) === 'model' },
+              { modelCall: isModelCall(req.method, requestPath) },
             );
             res.writeHead(upRes.statusCode!, upRes.headers);
             upRes.pipe(res);

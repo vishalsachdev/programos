@@ -136,10 +136,14 @@ describe('read mirror and a token in PROGRAM_ORIGIN_URL', () => {
     expect(logged.join('\n')).not.toContain(TOKEN);
   });
 
-  it('a stored token is kept when the setting names another address, or the same address with no credential', () => {
+  it('a stored token is kept when the setting names another address, or the same address with no secret of its own', () => {
     for (const setting of [
       `https://${USER}:${TOKEN}@127.0.0.1:9/other/program-repo.git`,
       BARE,
+      // A user name and no password: found by the independent read of this
+      // change. The first version of the fix dropped the stored token here.
+      `https://${USER}@${ADDRESS}`,
+      `https://${USER}:@${ADDRESS}`,
     ]) {
       fs.rmSync(kb.mirror, { recursive: true, force: true });
       makeMirror(FULL);

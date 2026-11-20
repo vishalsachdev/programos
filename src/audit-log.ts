@@ -860,7 +860,7 @@ async function runSyncWithPending(
     else
       logger.info(
         { entries: count, pushed: result.pushed },
-        'Audit log: no new commit in this run; entries not yet committed stay as files for a later run',
+        'Audit log: this run made no new commit (an earlier run committed the entries, or the host repo is waiting for the origin and they stay as files)',
       );
   }
   return result;

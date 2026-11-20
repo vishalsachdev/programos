@@ -16,6 +16,7 @@ vi.mock('./logger.js', () => ({
 }));
 
 import {
+  isModelCall,
   startCredentialProxy,
   registerProxyCaller,
   revokeProxyCaller,
@@ -323,12 +324,37 @@ describe('credential-proxy providers', () => {
       await send(proxyPort, '/v1/models', {
         'x-nanoclaw-proxy-token': anthropicToken,
       });
+      // Token counting answers 2xx while model turns fail: not a model turn.
+      await send(proxyPort, '/v1/messages/count_tokens', {
+        'x-nanoclaw-proxy-token': anthropicToken,
+      });
       anthropicStatus = 529;
       await send(proxyPort, '/v1/messages', {
         'x-nanoclaw-proxy-token': anthropicToken,
       });
     }
     expect(selectProvider()).toBe('foundry');
+  });
+
+  it('isModelCall: a POST to v1/messages or v1/complete itself, on any base path', () => {
+    for (const path of [
+      '/v1/messages',
+      '/v1/messages/',
+      '/v1/messages?beta=true',
+      '/v1/complete',
+      '/anthropic/v1/messages',
+    ])
+      expect(isModelCall('POST', path), path).toBe(true);
+    for (const path of [
+      '/v1/messages/count_tokens',
+      '/v1/messages/batches',
+      '/v1/models',
+      '/api/oauth/claude_cli/create_api_key',
+      '/v1/messages/../models',
+    ])
+      expect(isModelCall('POST', path), path).toBe(false);
+    expect(isModelCall('GET', '/v1/messages')).toBe(false);
+    expect(isModelCall(undefined, '/v1/messages')).toBe(false);
   });
 
   it('feeds the breaker: an unreachable upstream counts as a failure', async () => {

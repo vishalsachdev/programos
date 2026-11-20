@@ -91,6 +91,38 @@ describe('credential-proxy', () => {
     return (proxyServer.address() as AddressInfo).port;
   }
 
+  it('refuses a web tool request while AGENT_WEB_TOOLS is off, and forwards it when on', async () => {
+    const webSearch = JSON.stringify({
+      messages: [],
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    });
+    const post = (port: number) =>
+      makeRequest(
+        port,
+        {
+          method: 'POST',
+          path: '/v1/messages',
+          headers: { 'content-type': 'application/json' },
+        },
+        webSearch,
+      );
+
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+    const refused = await post(proxyPort);
+    expect(refused.statusCode).toBe(403);
+    expect(refused.body).toContain('turned off');
+    expect(lastUpstreamHeaders).toEqual({});
+
+    await new Promise<void>((r) => proxyServer.close(() => r()));
+    proxyPort = await startProxy({
+      ANTHROPIC_API_KEY: 'sk-ant-real-key',
+      AGENT_WEB_TOOLS: '1',
+    });
+    const allowed = await post(proxyPort);
+    expect(allowed.statusCode).toBe(200);
+    expect(lastUpstreamHeaders['x-api-key']).toBe('sk-ant-real-key');
+  });
+
   it('API-key mode injects x-api-key and strips placeholder', async () => {
     proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
 

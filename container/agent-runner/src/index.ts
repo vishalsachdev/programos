@@ -23,6 +23,7 @@ import {
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { disallowedTools, normalAllowedTools } from './allowed-tools.js';
 import { createAgentHooks } from './protected-write-guard.js';
 
 interface ContainerInput {
@@ -101,27 +102,7 @@ const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
-const NORMAL_ALLOWED_TOOLS = [
-  'Bash',
-  'Read',
-  'Write',
-  'Edit',
-  'Glob',
-  'Grep',
-  'WebSearch',
-  'WebFetch',
-  'Task',
-  'TaskOutput',
-  'TaskStop',
-  'TeamCreate',
-  'TeamDelete',
-  'SendMessage',
-  'TodoWrite',
-  'ToolSearch',
-  'Skill',
-  'NotebookEdit',
-  'mcp__nanoclaw__*',
-];
+const NORMAL_ALLOWED_TOOLS = normalAllowedTools(process.env);
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -586,6 +567,9 @@ async function runQuery(
           }
         : undefined,
       allowedTools: isDeliveryRepair ? [] : NORMAL_ALLOWED_TOOLS,
+      // allowedTools only pre-approves, and bypassPermissions approves
+      // everything else: the web tools are removed here.
+      disallowedTools: disallowedTools(process.env),
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,

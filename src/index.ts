@@ -13,6 +13,11 @@ import {
   TIMEZONE,
   DATA_DIR,
 } from './config.js';
+import {
+  pushCheckoutAfterTurn,
+  setCheckoutPushAlerter,
+  syncCheckoutBeforeTurn,
+} from './checkout-sync.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -28,7 +33,7 @@ import {
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
-  PROXY_BIND_HOST,
+  resolveProxyBindHost,
 } from './container-runtime.js';
 import {
   getAllChats,
@@ -647,6 +652,9 @@ async function runAgent(
     if (output.result !== null && output.result !== undefined) {
       sawUsableResult = true;
     }
+    // Push what the agent committed before the reply is handed on (the
+    // container has no git credential; see checkout-sync.ts).
+    if (output.status === 'success') await pushCheckoutAfterTurn();
     if (onOutput) await onOutput(output);
   };
 
@@ -689,6 +697,7 @@ async function runAgent(
     .join('\n\n');
 
   try {
+    await syncCheckoutBeforeTurn();
     const imageAttachments =
       agentMode === 'normal' ? parseImageReferences(prompt) : [];
 
@@ -875,7 +884,7 @@ async function main(): Promise<void> {
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
-    PROXY_BIND_HOST,
+    resolveProxyBindHost(),
   );
 
   // Graceful shutdown handlers
@@ -1051,6 +1060,9 @@ async function main(): Promise<void> {
   setDeliveryShortfallAlerter(async (shortfall) => {
     await sendDeadLetterAlert(formatShortfallAlert(shortfall));
   });
+
+  // A failed knowledge-base push goes to the same operator channel.
+  setCheckoutPushAlerter((text) => sendDeadLetterAlert(text));
 
   // Start the durable email outbox queue only AFTER the owner alert channel is
   // wired, so replayed terminal outcomes and retained shortfalls alert the owner.

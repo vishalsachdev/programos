@@ -45,6 +45,7 @@ import {
   revokeProxyCaller,
 } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import { webToolsEnabled } from './web-tools.js';
 import {
   CONTAINER_WORKING_CONTEXT_DIR,
   getWorkingContextDir,
@@ -404,7 +405,10 @@ function buildContainerArgs(
     }
   }
 
-  // Runtime-specific args for host gateway resolution
+  // Web tools are off unless the host turns them on (AGENT_WEB_TOOLS).
+  if (webToolsEnabled()) args.push('-e', 'NANOCLAW_WEB_TOOLS=1');
+
+  // The container's network (CONTAINER_NETWORK) and host gateway resolution
   args.push(...hostGatewayArgs());
 
   // Run as host user so bind-mounted files are accessible.

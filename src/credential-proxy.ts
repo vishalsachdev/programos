@@ -17,6 +17,7 @@ import { timingSafeEqual } from 'crypto';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { declaresWebTool, webToolsEnabled } from './web-tools.js';
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -70,6 +71,8 @@ export function startCredentialProxy(
     secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
   );
   const isHttps = upstreamUrl.protocol === 'https:';
+  // Read once at start: changing AGENT_WEB_TOOLS needs a restart.
+  const webTools = webToolsEnabled();
   const makeRequest = isHttps ? httpsRequest : httpRequest;
 
   return new Promise((resolve, reject) => {
@@ -107,6 +110,26 @@ export function startCredentialProxy(
       req.on('end', () => {
         if (tooLarge) return;
         const body = Buffer.concat(chunks);
+        // Web tools off (AGENT_WEB_TOOLS): refuse a model request that asks
+        // the provider to search or fetch the web. See src/web-tools.ts.
+        if (!webTools && declaresWebTool(body)) {
+          logger.warn(
+            { url: req.url },
+            'Credential proxy refused a web tool request (AGENT_WEB_TOOLS is off)',
+          );
+          res.writeHead(403, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              type: 'error',
+              error: {
+                type: 'permission_error',
+                message:
+                  'Web search and web fetch are turned off on this deployment.',
+              },
+            }),
+          );
+          return;
+        }
         const headers: Record<string, string | number | string[] | undefined> =
           {
             ...(req.headers as Record<string, string>),

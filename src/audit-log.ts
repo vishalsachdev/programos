@@ -749,6 +749,20 @@ function gitAsCheckoutOwner(args: string[]): Promise<void> {
 let commitInFlight: Promise<void> = Promise.resolve();
 
 /**
+ * Run another git sequence in the checkout after the audit commit that is in
+ * flight, and make later audit commits wait for it: two git processes in one
+ * working tree would fight over the index lock. Used by checkout-sync.ts.
+ */
+export function queueCheckoutGit<T>(fn: () => Promise<T>): Promise<T> {
+  const result = commitInFlight.then(fn);
+  commitInFlight = result.then(
+    () => {},
+    () => {},
+  );
+  return result;
+}
+
+/**
  * Returns a promise that settles when this commit (and any already running)
  * has finished, so shutdown can await it: the git steps are separate child
  * processes now, and process.exit would cut the sequence short. A failed

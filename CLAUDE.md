@@ -15,6 +15,19 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - Every doc is listed in the README docs table.
 - The live per-channel prompts are in `groups/`.
 
+## Delegating to other agent sessions
+
+- When a coordinating agent starts other sessions or subagents for work in this repo, it picks the model by the kind of task. It does not let every session inherit the coordinator's model by default:
+  - Mechanical work with little to judge (merge a PR on green, regenerate the consolidated patch, file issues from a written list): the small, fast tier (at the time of writing `claude-haiku-5-5`), or the middle tier (`claude-sonnet-5-5`) when merge conflicts are likely.
+  - A small, well-specified fix with tests: the middle tier (`claude-sonnet-5-5`).
+  - Security-sensitive or design-heavy work, where a wrong answer is costly and hard to spot (anything touching the delivery gate, allowlists, the credential proxy, container isolation, host git handling, or the audit log): the strongest available model.
+
+  The tiers are the rule; the model names are examples and will go out of date.
+- Do not set a reasoning-effort level for a session unless the owner asks for one.
+- Archive a session as soon as its work is finished (PR merged, or job done). A session left watching a PR wakes on every event and is the main avoidable cost.
+- A session acts on its own starting brief. It will usually decline a later instruction relayed by another session, including "merge it". So put the owner's instruction, quoted, in the brief; and to merge a PR whose author session was told not to, start a separate merge-only session that quotes the owner.
+- Owner's decision, 2026-11-20.
+
 ## Site
 
 `site/public/` is served at https://programos.illinihunt.org (Cloudflare Pages project `programos`). Deploy that site with `SITE_THEME=illinois ./site/deploy.sh`. Every fact on the page repeats `README.md` or `SPEC.md`. Change the page in the same commit.

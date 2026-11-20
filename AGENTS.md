@@ -74,11 +74,11 @@ Search for each placeholder (include tests; exclude `node_modules`):
 | `Program`, `program-email`, `program-telegram`, `web-chat-program`, `tg-program` | The program or project name and its channel group names | `groups/` folder names, `seed-db.cjs`, `src/index.ts`, `src/task-scheduler.ts` and others |
 | `program-repo`, `/workspace/extra/program-repo` | The knowledge-base repo and its mount point in the container | `PROGRAM_REPO` (process environment), `src/program-repo.ts`, prompts, container skills |
 | `example-org/program-repo` | The git origin the host accepts for the program repo. A different origin is refused and the read mirror is not created. | `isExpectedOrigin` in `src/repo-reader.ts`; set `PROGRAM_ORIGIN_PATTERN` (process environment). Any git host works, including a GitHub Enterprise host; `config/instance.env.example` has example patterns |
-| `example.edu` | The institution mail domain. It is used in logic: the "access closed" courtesy reply (`src/channels/webhook.ts`) and approver addresses in `src/routed-approvals.ts` | Setting: `INSTITUTION_DOMAIN` in `.env`. The operator's address, the shared mailbox in `src/trusted-body-mailboxes.ts`, prompts and tests still hold `example.edu` as text |
+| `example.edu` | The institution mail domain. It is used in logic: the "access closed" courtesy reply (`src/channels/webhook.ts`) and approver addresses in `src/routed-approvals.ts` | Setting: `INSTITUTION_DOMAIN` in `.env`. **Required for a real program repo:** the host refuses to start when it is missing or `example.edu` (`src/identity-settings-check.ts`). The operator's address, the shared mailbox in `src/trusted-body-mailboxes.ts`, prompts and tests still hold `example.edu` as text |
 | `example.org` | The bot's own mail domain: the default bot address, the Message-ID domain, and the bot's git author `program-bot@example.org` | Setting: `BOT_MAIL_DOMAIN` in `.env`. Prompts in `groups/` and skills in `container/skills/` name the git author as text; change them to match. The site address `program-repo.example.org` in `src/behaviour-sensor.ts` is not covered by the setting |
 | `email-inbox@example.org` | The git author of the inbound mail intake service (see "Inbound mail") | Setting: `INTAKE_GIT_AUTHOR_EMAIL` in `.env` |
 | `Avery Morgan`, `avery@example.edu`, `tg-avery@program` | The operator (admin). Outreach, routed approvals and admin checks name this person | `src/config.ts`, `src/outreach-recipient-roster.ts`, `src/routed-approvals.ts`, `src/channels/webhook.ts`, prompts |
-| `ADMIN_AUTHOR_EMAILS` (`avery@example.edu`, `avery.personal@gmail.com`, a `users.noreply.github.com` address) | The git author identities allowed to change protected governance files | Setting: `ADMIN_AUTHOR_EMAILS` in `.env`, separated by commas. Use the admin's real commit identities. The setting replaces the placeholder list; until it is set, the placeholder identities count as admin |
+| `ADMIN_AUTHOR_EMAILS` (`avery@example.edu`, `avery.personal@gmail.com`, a `users.noreply.github.com` address) | The git author identities allowed to change protected governance files | Setting: `ADMIN_AUTHOR_EMAILS` in `.env`, separated by commas. **Required for a real program repo.** Use the admin's real commit identities. The setting replaces the placeholder list. With a real program repo the host refuses to start when the setting is missing or names a placeholder address (`src/identity-settings-check.ts`); the placeholders count as admin only with the placeholder repo |
 | `/^greta\b/i` | A one-person exception in the outreach roster (a departed owner whose section is skipped) | `src/outreach-recipient-roster.ts`, near `unmatchedOwners`. Remove it or replace it with your own case. |
 | Other synthetic people (in `OWNER_ALIASES` in `src/outreach-recipient-roster.ts`) | A short-name table for the team | Replace with the user's team or empty it |
 | `PeerAgent`, `averybot@gmail.com` | A second automated agent that also mails the bot | `src/config.ts` (`AGENT_INBOX_ADDRESSES`); empty the list if the user has none |
@@ -150,7 +150,7 @@ and say so.
     as ordinary mail from the operator.
   - Weekly outreach summaries (`OUTREACH_SUMMARY_JID`) do not follow this setting.
   The bot logs an error at startup for each setting an enabled route lacks. Send a
-  test alert on each enabled route before go-live ("First start", step 7).
+  test alert on each enabled route before go-live ("First start", step 8).
 - **Model endpoint with a path prefix.** The credential proxy
   (`src/credential-proxy.ts`) joins a path in `ANTHROPIC_BASE_URL` to the request
   path: `https://gateway.example.edu/claude` receives `/claude/v1/messages`. The
@@ -335,7 +335,14 @@ Do these once, in this order, before the first test message:
    in its `~/.ssh`, or a token in its git credential store). Check it as that user:
    `git pull` and `git push --dry-run` in the checkout.
 6. Build the container image (`container/build.sh`).
-7. Test the operator alert routes. This sends real messages, so do it only when the
+7. Set `INSTITUTION_DOMAIN` and `ADMIN_AUTHOR_EMAILS` in `.env` before the first
+   start with the real program repo: the institution's mail domain, and the
+   admin's real git author emails. The host refuses to start when either is
+   missing or still a placeholder (`example.edu`, or a placeholder address in
+   the list) once the repo is a real one: `PROGRAM_ORIGIN_PATTERN` is set, or the
+   origin of the checkout or the read mirror is not `example-org/program-repo`.
+   The error names each setting to fix.
+8. Test the operator alert routes. This sends real messages, so do it only when the
    user says so. Start the bot once with `ADMIN_ALERT_TEST=1` in the process
    environment (for example `ADMIN_ALERT_TEST=1 npm start`). It sends one test alert on
    each route enabled by `ADMIN_ALERT_ROUTE` and logs `Admin alert test delivered` or

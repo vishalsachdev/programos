@@ -202,7 +202,7 @@ Checked: not run as a sequence.
 Go through this list at the end of the recipe.
 
 - The people who approve data use at your institution have seen [`data-handling.md`](./data-handling.md), and its "Decide before go-live" list has an answer on each line.
-- Operator alerts have a route that works. The default route is Telegram for the admin; `ADMIN_ALERT_ROUTE=email` mails them to the operator's address instead, and `telegram,email` does both. A test alert arrives on each route you enabled (`AGENTS.md`, "First start", step 7). The startup log has no `Admin alert setup` error.
+- Operator alerts have a route that works. The default route is Telegram for the admin; `ADMIN_ALERT_ROUTE=email` mails them to the operator's address instead, and `telegram,email` does both. A test alert arrives on each route you enabled (`AGENTS.md`, "First start", step 8). The startup log has no `Admin alert setup` error.
 - The reply sensor is off, or its destination is approved for your data.
 - `npx tsx scripts/check-container-egress.ts` prints PASS on every line: the container cannot reach the outside (restricted network), and a commit made in the container arrives on a remote through the host's push.
 - A failed knowledge-base push reaches the admin as an alert (to test: make the remote unreachable for one turn that commits).

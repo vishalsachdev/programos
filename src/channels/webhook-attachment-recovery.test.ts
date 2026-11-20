@@ -166,7 +166,8 @@ describe('webhook large-attachment recovery', () => {
   beforeEach(() => {
     repo = fs.mkdtempSync(path.join(os.tmpdir(), 'attachment-recovery-'));
     fs.mkdirSync(path.join(repo, '.git')); // checkout-fs refuses a non-checkout
-    vi.stubEnv('PROGRAM_REPO', repo);
+    // The audit log is written in the host-owned repository (host-repo.ts).
+    vi.stubEnv('PROGRAM_HOST_REPO', repo);
     mocks.extractEmailAttachments.mockClear();
     mocks.telegramFetch.mockClear();
     currentOnMessage = vi.fn<OnMessage>();
@@ -224,7 +225,7 @@ describe('webhook large-attachment recovery', () => {
   it('returns a retryable failure when the receipt cannot be written', async () => {
     const invalidRepo = path.join(repo, 'not-a-directory');
     fs.writeFileSync(invalidRepo, 'file');
-    vi.stubEnv('PROGRAM_REPO', invalidRepo);
+    vi.stubEnv('PROGRAM_HOST_REPO', invalidRepo);
     const response = await postJson({
       ...basePayload(),
       phase: 'accepted',

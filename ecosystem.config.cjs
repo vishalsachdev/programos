@@ -8,10 +8,10 @@
 // CLI, which left kill_timeout at pm2's 1.6 s default).
 //
 // kill_timeout: shutdown() in src/index.ts awaits every step in full so an
-// audit-log flush never dies mid `pull --rebase`. Its worst case: the flush
-// chains behind a commit already in flight, and a failed commit restores its
-// entries, so up to 2 x 7 git steps x 30 s execFile timeout, plus 2 x 10 s
-// queue grace = 440 s; 450 s adds margin. A normal shutdown exits on its own in under 2 s, so the cap only
+// audit-log flush never dies mid rebase in the host repo. Its worst case: the
+// flush chains behind a sync already in flight, so up to 2 x (180 s sync
+// budget + 30 s to undo a rebase; src/host-repo.ts), plus 2 x 10 s queue
+// grace = 440 s; 450 s adds margin. A normal shutdown exits on its own in under 2 s, so the cap only
 // costs time when git hangs. src/pm2-kill-timeout.test.ts keeps it in step.
 module.exports = {
   apps: [

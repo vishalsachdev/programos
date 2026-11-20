@@ -24,6 +24,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 import { createAgentHooks } from './protected-write-guard.js';
+import { syncFromUpstream } from './kb-upstream.js';
 
 interface ContainerInput {
   prompt: string;
@@ -728,6 +729,8 @@ async function main(): Promise<void> {
       /* may not exist */
     }
     log(`Received input for group: ${containerInput.groupFolder}`);
+    // Bring the program-repo checkout up to date from the host's export.
+    log(`Knowledge-base checkout: ${syncFromUpstream()}`);
   } catch (err) {
     writeOutput({
       status: 'error',

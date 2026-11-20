@@ -36,7 +36,7 @@ import {
 } from './model-provider.js';
 import { logger } from './logger.js';
 import { getRepoReader } from './repo-reader.js';
-import { getProgramRepoPath } from './program-repo.js';
+import { ensureHostRepo, getHostRepoPath } from './host-repo.js';
 import {
   appendToCheckout,
   readFromCheckout,
@@ -71,11 +71,13 @@ export interface GroundTruthReader {
 }
 
 /**
- * Write-side repo path (triage files). Read dynamically (not a module const)
- * so tests can point at a fixture repo.
+ * Write-side repo path (triage files, audit annotations): the host-owned
+ * repository, never the agent's checkout (see host-repo.ts). Read
+ * dynamically (not a module const) so tests can point at a fixture repo.
  */
 function getRepoPath(): string {
-  return getProgramRepoPath();
+  ensureHostRepo();
+  return getHostRepoPath();
 }
 
 const PROMPT_TEMPLATE = `You are a skeptical fact-checker reviewing the outbound response an AI agent (Coordinator) just sent. Your only job is to detect failure modes. Do not rewrite, soften, or judge tone.
@@ -211,7 +213,7 @@ function replacePlaceholder(
   // The audit file lives in the container-writable checkout: read and write
   // it as the checkout owner, never root (a planted link to a root-only file
   // would otherwise be read, rewritten, and pushed to GitHub).
-  const root = getProgramRepoPath();
+  const root = getRepoPath();
   const content = readFromCheckout(root, file);
   if (content === null) return;
   const idx = content.lastIndexOf(placeholder);

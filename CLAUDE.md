@@ -51,11 +51,14 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - [ ] Run `inbound/` against a live Cloudflare domain and mailbox (never done; `inbound/README.md`, "Not verified"). The host test for `inbound/` is exported code and is held in the consolidated patch
 - [ ] Proof numbers on the site, each from a dated query, in one data file
 - [ ] Foundry backup provider: live checks with a real key (`docs/model-providers.md`, section 6), then decide the provider order
+- [ ] Host-owned repository: verify on a real host (git host, real container, upgrade of an existing deployment); see `SPEC.md` section 11 for what it does not cover
 - [ ] Take fixes from the source through `scripts/upstream-sync/` (wrong-chat Telegram reply, timing test, others in SPEC section 11)
 
 ## Session Log
 
 ### 2026-11-20
+- Completed (draft PR, not merged): the host runs no git in the agent's checkout. New host-owned repository (`PROGRAM_HOST_REPO`, `src/host-repo.ts`): the audit log is written and committed there, commits leave the checkout through a fetch and are checked, the push goes to `PROGRAM_ORIGIN_URL`. The container pulls from a read-only export (`container/agent-runner/src/kb-upstream.ts`). Adversarial suite `src/host-git-trust.test.ts`; guard `src/host-git-guard.test.ts`; first-start check `scripts/check-host-git-trust.ts`. Exported-code edits are in the consolidated patch.
+- Next: run it on a real host (a git host, a real container; neither was run). If PR 40 merges second, its `src/checkout-sync.ts` goes away: `syncKnowledgeBase` in `src/audit-log.ts` already does the pull before a turn and the push after it.
 - Completed: merged PRs 25, 23, 19, 27, 28, 30, 29, 26, 31 into `main` (squash, in that order). Follow-up PR 38: one consolidated patch `scripts/upstream-sync/repo-changes-2026-11-20.patch` replaces the per-PR patches (PR 37's folded in too); `scripts/upstream-sync/repo_patch.py` regenerates it and CI runs it with `--check`; `docs/model-providers.md` is the neutral provider page, with a pointer under `docs/illinois/`. The `PROGRAM_ORIGIN_PATTERN` examples hold no backslash and no `%` (checked with `systemd-analyze verify` on systemd 255: `\.` drops the line, `\s` becomes a space); `src/documented-origin-patterns.test.ts` reads each example from the files and gives it to `isExpectedOrigin`. With PR 37 merged: 1,954 tests pass, plus 33 in `inbound/` and 22 for the export tool; AGENTS rule 3 states 1,954.
 - Next: the HTTPS example pattern accepts a token of letters, digits and `_ . ~ : -` only; a token with another character needs its own class. PR 39 made the two timing tests deterministic; its per-PR patch is folded into the consolidated patch.
 

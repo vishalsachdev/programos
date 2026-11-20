@@ -1422,11 +1422,14 @@ describe('runBehaviourSensor', () => {
   let repo: string;
   let auditFile: string;
   let sensorId: string;
+  let previousHostRepo: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     repo = makeRepo();
-    process.env.PROGRAM_REPO = repo;
+    // Triage files and annotations are written in the host-owned repository.
+    previousHostRepo = process.env.PROGRAM_HOST_REPO;
+    process.env.PROGRAM_HOST_REPO = repo;
     process.env.ANTHROPIC_API_KEY = 'test-key';
     sensorId = makeSensorId('12:00:00');
     auditFile = path.join(repo, 'discussions', 'audit-log', '2026-05-28.md');
@@ -1439,7 +1442,7 @@ describe('runBehaviourSensor', () => {
 
   afterEach(() => {
     fs.rmSync(repo, { recursive: true, force: true });
-    delete process.env.PROGRAM_REPO;
+    process.env.PROGRAM_HOST_REPO = previousHostRepo;
     delete process.env.ANTHROPIC_API_KEY;
   });
 

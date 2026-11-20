@@ -138,7 +138,8 @@ describe('admin alert route', () => {
     setDeliveryShortfallAlerter(null);
     repo = fs.mkdtempSync(path.join(os.tmpdir(), 'admin-alert-'));
     fs.mkdirSync(path.join(repo, '.git')); // checkout-fs refuses a non-checkout
-    vi.stubEnv('PROGRAM_REPO', repo);
+    // The audit log is written in the host-owned repository (host-repo.ts).
+    vi.stubEnv('PROGRAM_HOST_REPO', repo);
     vi.stubEnv('ADMIN_ALERT_ROUTE', '');
     vi.stubEnv('TELEGRAM_BOT_TOKEN', '');
     vi.stubEnv('TELEGRAM_ADMIN_CHAT_ID', '');

@@ -1,93 +1,140 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 
-import { runAuditCommit } from './audit-log.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-type Call = string[];
+vi.mock('./behaviour-sensor.js', () => ({
+  makeSensorId: () => 'sensor-test',
+  placeholderFor: () => '[sensor: pending:sensor-test]',
+  runBehaviourSensor: vi.fn(async () => undefined),
+}));
 
-function recorder(fail: (args: Call) => boolean = () => false) {
-  const calls: Call[] = [];
-  const run = async (args: string[]) => {
-    calls.push(args);
-    if (fail(args)) throw new Error(`git ${args[0]} failed`);
-  };
-  return { calls, run };
-}
+import {
+  _setPendingWritesForTests,
+  commitAuditLog,
+  flushAuditLog,
+  logDroppedEmail,
+  syncKnowledgeBase,
+} from './audit-log.js';
+import {
+  _resetHostRepoStateForTests,
+  type SyncOptions,
+  type SyncResult,
+} from './host-repo.js';
+import {
+  git,
+  makeKbFixture,
+  type KbFixture,
+} from './test-support/kb-fixture.js';
 
-describe('runAuditCommit', () => {
-  it('stages, commits and pushes with git argv only (no shell, no chown)', async () => {
-    const r = recorder();
-    await runAuditCommit(3, r.run);
-    expect(r.calls).toEqual([
-      ['add', 'discussions/audit-log/', 'discussions/kb-triage/'],
-      [
-        'commit',
-        '-m',
-        'Audit log: 3 entries',
-        '--author=Coordinator <program-bot@example.org>',
-        '--no-verify',
-      ],
-      ['push'],
-    ]);
-    expect(r.calls.flat().join(' ')).not.toMatch(/chown/);
+// This file replaced the tests of runAuditCommit, which asserted the git
+// argv run in the agent's checkout (add, commit, push, pull --rebase).
+// That sequence no longer exists: the commit and the push happen in the
+// host-owned repository (host-repo.ts). The same outcomes are asserted
+// here against real git and a local bare origin.
+
+const OK: SyncResult = { committed: true, imported: 0, pushed: true };
+
+describe('the audit commit, end to end', () => {
+  let kb: KbFixture;
+
+  beforeEach(() => {
+    _resetHostRepoStateForTests();
+    kb = makeKbFixture();
+  });
+
+  afterEach(async () => {
+    await flushAuditLog();
+    _setPendingWritesForTests(0);
+    kb.cleanup();
+  });
+
+  it('writes the entry in the host repo, not in the checkout, and commits and pushes it as the bot', async () => {
+    logDroppedEmail('stranger@example.org', 'hello');
+    await flushAuditLog();
+    expect(kb.originLog('%s|%an <%ae>')[0]).toBe(
+      'Audit log: 1 entries|Coordinator <program-bot@example.org>',
+    );
+    const files = git(kb.origin, [
+      'ls-tree',
+      '-r',
+      '--name-only',
+      'main',
+      'discussions/audit-log/',
+    ]).trim();
+    expect(files).toMatch(/^discussions\/audit-log\/\d{4}-\d\d-\d\d\.md$/);
+    expect(kb.originFile(files)).toContain('stranger@example.org');
+    // Nothing was written into the agent's checkout, and no git ran there.
+    expect(
+      fs.existsSync(path.join(kb.checkout, 'discussions', 'audit-log')),
+    ).toBe(false);
+    expect(git(kb.checkout, ['status', '--porcelain'])).toBe('');
   });
 
   it('on a rejected push, rebases onto origin and pushes again', async () => {
-    let pushes = 0;
-    const r = recorder((a) => a[0] === 'push' && pushes++ === 0);
-    await runAuditCommit(1, r.run);
-    expect(r.calls.slice(2)).toEqual([
-      ['push'],
-      ['pull', '--rebase', '--autostash', 'origin', 'main'],
-      ['push'],
+    await syncKnowledgeBase({ fetchOrigin: true });
+    kb.personCommit('notes/person.md', 'pushed first\n');
+    logDroppedEmail('stranger@example.org', 'hello');
+    await flushAuditLog();
+    expect(kb.originLog('%s').slice(0, 2)).toEqual([
+      'Audit log: 1 entries',
+      'person: notes/person.md',
     ]);
   });
 
-  it('aborts a failed rebase and reports failure', async () => {
-    const r = recorder((a) => a[0] === 'push' || a[0] === 'pull');
-    await expect(runAuditCommit(1, r.run)).rejects.toThrow();
-    expect(r.calls.at(-1)).toEqual(['rebase', '--abort']);
-  });
-
   it('with nothing new to commit, still pushes a stranded local commit', async () => {
-    // commit fails, but `git diff --cached --quiet` succeeds: nothing staged.
-    const r = recorder((a) => a[0] === 'commit');
-    await runAuditCommit(1, r.run);
-    expect(r.calls.map((c) => c[0])).toEqual(['add', 'commit', 'diff', 'push']);
+    await syncKnowledgeBase({ fetchOrigin: true });
+    const hook = path.join(kb.origin, 'hooks', 'pre-receive');
+    fs.mkdirSync(path.dirname(hook), { recursive: true });
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    logDroppedEmail('stranger@example.org', 'hello');
+    await flushAuditLog(); // committed in the host repo; the push is refused
+    expect(kb.originLog('%s')[0]).toBe('seed');
+    fs.rmSync(hook);
+    await flushAuditLog(); // the entries were kept pending: pushed now
+    expect(kb.originLog('%s')[0]).toBe('Audit log: 1 entries');
   });
 
-  it('stops before pushing when the commit fails with staged changes', async () => {
-    const r = recorder((a) => a[0] === 'commit' || a[0] === 'diff');
-    await expect(runAuditCommit(1, r.run)).rejects.toThrow();
-    expect(r.calls.map((c) => c[0])).toEqual(['add', 'commit', 'diff']);
+  it('pushes agent commits around a turn even when no audit entry is pending', async () => {
+    await syncKnowledgeBase({ fetchOrigin: true });
+    kb.agentCommit('notes/a.md', 'a\n');
+    const result = await syncKnowledgeBase();
+    expect(result).toMatchObject({ imported: 1, pushed: true });
+    expect(kb.originFile('notes/a.md')).toBe('a\n');
   });
 });
 
 describe('commitAuditLog (awaitable, retry-safe)', () => {
+  afterEach(() => _setPendingWritesForTests(0));
+
   it('resolves only after the push finishes, so shutdown can await it', async () => {
-    const { commitAuditLog, _setPendingWritesForTests } =
-      await import('./audit-log.js');
     _setPendingWritesForTests(2);
     const order: string[] = [];
-    const run = async (args: string[]) => {
+    const sync = async () => {
       await new Promise((r) => setTimeout(r, 5));
-      order.push(args[0]);
+      order.push('synced');
+      return OK;
     };
-    await commitAuditLog(run);
-    expect(order).toEqual(['add', 'commit', 'push']);
+    await commitAuditLog(sync);
+    order.push('returned');
+    expect(order).toEqual(['synced', 'returned']);
+  });
+
+  it('does not run when nothing is pending', async () => {
+    _setPendingWritesForTests(0);
+    const sync = vi.fn(async () => OK);
+    await commitAuditLog(sync);
+    expect(sync).not.toHaveBeenCalled();
   });
 
   it('keeps the entries pending after a failure, so the next cycle retries', async () => {
-    const { commitAuditLog, _setPendingWritesForTests } =
-      await import('./audit-log.js');
     _setPendingWritesForTests(2);
-    await commitAuditLog(async (args) => {
-      if (args[0] === 'commit' || args[0] === 'diff')
-        throw new Error('index.lock');
+    await commitAuditLog(async () => ({ ...OK, failed: 'commit: index.lock' }));
+    const counts: Array<number | undefined> = [];
+    await commitAuditLog(async (opts?: SyncOptions) => {
+      counts.push(opts?.count);
+      return OK;
     });
-    const calls: string[] = [];
-    await commitAuditLog(async (args) => {
-      calls.push(args.join(' '));
-    });
-    expect(calls[1]).toContain('Audit log: 2 entries');
+    expect(counts).toEqual([2]);
   });
 });

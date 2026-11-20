@@ -28,7 +28,8 @@ describe('idempotent delivery audit records', () => {
   beforeEach(() => {
     repo = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-audit-'));
     fs.mkdirSync(path.join(repo, '.git')); // checkout-fs refuses a non-checkout
-    vi.stubEnv('PROGRAM_REPO', repo);
+    // The audit log is written in the host-owned repository (host-repo.ts).
+    vi.stubEnv('PROGRAM_HOST_REPO', repo);
   });
 
   afterEach(() => {
@@ -210,7 +211,7 @@ describe('idempotent delivery audit records', () => {
   it('reports a durable-write failure instead of claiming success', () => {
     const invalidRepo = path.join(repo, 'not-a-directory');
     fs.writeFileSync(invalidRepo, 'file');
-    vi.stubEnv('PROGRAM_REPO', invalidRepo);
+    vi.stubEnv('PROGRAM_HOST_REPO', invalidRepo);
 
     expect(
       logReplySuppressedOnce({

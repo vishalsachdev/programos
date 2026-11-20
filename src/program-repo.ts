@@ -5,10 +5,13 @@
  * read: callers (and tests via vi.stubEnv) can override PROGRAM_REPO at
  * runtime, after this module is imported.
  *
- * The checkout is owned by uid 1000 (the container user). Agent containers can write this whole tree, including .git/hooks
- * and .git/config, so the host must never run git here as root: a planted
- * hook would run with root's privileges. Host git runs as CHECKOUT_OWNER via
- * checkoutGitOptions(), and host file writes go through host-fs-safety.ts.
+ * The checkout is owned by uid 1000 (the container user). Agent containers
+ * can write this whole tree, including .git/hooks and .git/config, and git
+ * obeys both. So the host runs NO git command with this checkout as its
+ * repository, as any user. Host git runs in the host-owned repository
+ * (host-repo.ts), which takes commits out of the checkout with a fetch.
+ * host-git-guard.test.ts fails when a new host git call appears outside the
+ * reviewed list. Host file reads and writes here go through checkout-fs.ts.
  *
  * CHECKOUT_OWNER_UID, CHECKOUT_OWNER_GID and CHECKOUT_OWNER_HOME (process
  * environment, read once at start) replace the defaults 1000, 1000 and
@@ -56,30 +59,4 @@ export const CHECKOUT_OWNER: Readonly<CheckoutOwner> = readCheckoutOwner();
 
 export function getProgramRepoPath(): string {
   return process.env.PROGRAM_REPO || DEFAULT_PROGRAM_REPO;
-}
-
-/**
- * execFile options for host git in the checkout: as the checkout owner when
- * the host is root, with HOME pointed at the owner's home so root's gitconfig
- * is not read.
- */
-export function checkoutGitOptions(
-  { isRoot }: { isRoot: boolean } = { isRoot: process.getuid?.() === 0 },
-): {
-  cwd: string;
-  uid?: number;
-  gid?: number;
-  env: NodeJS.ProcessEnv;
-  timeout: number;
-} {
-  const env = { ...process.env, HOME: CHECKOUT_OWNER.home };
-  return isRoot
-    ? {
-        cwd: getProgramRepoPath(),
-        uid: CHECKOUT_OWNER.uid,
-        gid: CHECKOUT_OWNER.gid,
-        env,
-        timeout: 30_000,
-      }
-    : { cwd: getProgramRepoPath(), env, timeout: 30_000 };
 }

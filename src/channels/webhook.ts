@@ -78,11 +78,8 @@ import { readFromCheckoutBuffer } from '../checkout-fs.js';
 import { deriveEmailChatJid, parseEmailIdentity } from './webhook-threading.js';
 import { logger } from '../logger.js';
 import { readEnvFile } from '../env.js';
-import {
-  emailAuthBlocks,
-  emailAuthVerdict,
-  readEmailAuthSettings,
-} from '../email-auth.js';
+import { emailAuthBlocks, emailAuthVerdict } from '../email-auth.js';
+import { currentEmailAuthSettings } from '../email-auth-settings.js';
 import { INSTITUTION_DOMAIN } from '../instance-identity.js';
 import { Channel, PreparedDelivery } from '../types.js';
 import {
@@ -950,11 +947,12 @@ registerChannel('webhook', (opts) => {
             // Sender authentication (src/email-auth.ts). The verdict is
             // recorded for every message; it changes what happens to the
             // message only with EMAIL_AUTH_MODE=enforce.
-            const emailAuth = readEmailAuthSettings();
+            const emailAuth = currentEmailAuthSettings();
             const authDecision = emailAuthVerdict(
               from,
               body.auth,
               emailAuth.trusted,
+              { requireFromDomain: emailAuth.requireFromDomain },
             );
             const authBlocked = emailAuthBlocks(
               emailAuth,

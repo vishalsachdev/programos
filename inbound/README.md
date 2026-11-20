@@ -214,7 +214,9 @@ The worker checks no signature itself. It reads what named mail servers wrote in
 | `FORWARDER_AUTHSERV_IDS` | empty | For a mailbox elsewhere that forwards to this address: the server name(s) that mail system writes. Comma-separated |
 | `FORWARDER_DOMAINS` | empty | The domain(s) that system's servers send forwarded mail as (the envelope sender after forwarding). Set together with the line above |
 
-With all three empty nothing is read: the payload carries `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`). A header is dropped whole when it holds two DMARC results or two SPF results, a comment that is still open at its end, or the same property twice in one result; a dropped forwarder header keeps its place, so no header below it is read in its stead. A wrong value (not a host name, a forwarder without a platform, one of the two forwarder settings alone) is a settings error: the message waits in the buffer until it is fixed.
+With all three empty nothing is read: the payload carries `"platform_status": "unset"` and `"results": []`, the Markdown copy says `X-Intake-Authentication: no trusted result`, and the host's verdict is `unknown`. A forwarder's header is read only when the platform's own result shows the message came through the forwarder (SPF pass for an envelope sender in `FORWARDER_DOMAINS`). A header is dropped whole when it holds no DMARC result or two, two SPF results for the same identity (one for the envelope sender and one for the HELO name is the form RFC 8601 allows, and is read), a platform SPF result for another domain than the envelope sender, a part that is not a result, a comment that is still open at its end, or the same property twice in one result; a dropped forwarder header keeps its place, so no header below it is read in its stead.
+
+`platform_status` says what became of the platform's result: `unset` (no platform named), `absent` (no header in the message carries the platform's name, or its header is the `none` form), `read`, `rejected` (a header with the platform's name is in the message and no result was taken from it). The host calls `unset` and `absent` `unknown`, and `rejected` `unauthenticated`: nothing a sender does to the header moves a message into `unknown`. A wrong value (not a host name, a forwarder without a platform, one of the two forwarder settings alone) is a settings error: the message waits in the buffer until it is fixed.
 
 To find the names, send yourself a message through the real path, open the committed `.eml`, and read the `Authentication-Results` headers from the top: the text before the first `;` is the server name. Put the same names in the host's `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`.
 
@@ -226,6 +228,8 @@ The payload field, for a message the platform checked:
   "envelope_from_domain": "mail.example.edu",
   "from_headers": 1,
   "from_mailboxes": 1,
+  "from_display_commas": false,
+  "platform_status": "read",
   "results": [
     { "source": "platform", "authserv_id": "mx.platform.example", "spf": "pass", "spf_domain": "mail.example.edu",
       "dkim": [{ "result": "pass", "domain": "example.edu" }], "dmarc": "pass", "dmarc_from": "example.edu", "arc": "" }
@@ -234,6 +238,34 @@ The payload field, for a message the platform checked:
 ```
 
 `from_mailboxes` counts the different addresses in the From header, display name included (a character outside ASCII in an address counts as one more). A display name that holds another address than the mailbox makes it 2, and the host then never calls the message authenticated; the same address written twice counts once. It is 1 only for a header every reader takes as the same single mailbox, and only when that mailbox is the `from` of the payload. It is 2 when `from` is the envelope sender (the parser read no address from the From header) or another address than the one counted, and for any form two readers can take differently: a comma, colon, semicolon or backslash outside a quoted display name, more than one address in angle brackets, a space or a comment next to `@`, a comment inside the brackets or beside an address without brackets, an unclosed quote or comment, a control character. So `Lee, Dana <dlee@example.edu>` (comma, no quotes) and `dlee@example.edu (Dana Lee)` count 2; `"Lee, Dana" <dlee@example.edu>` counts 1.
+
+`from_display_commas` is true when the count is 2 for one cause only: commas in the unquoted display name before the one address in angle brackets (`Lee, Dana <dlee@example.edu>`), or inside a comment beside it (`Dana (Alumni, East) <dlee@example.edu>`). The brackets must hold the address and nothing else, nothing but comments may follow them, the display name holds no encoded word, and the mail parser must have read the same address. The host accepts such a message only with a DMARC pass that names the domain of that address. Every other form above stays 2 with the flag false.
+
+## Check one real message offline
+
+Sender authentication was never run against live mail, and what a real platform writes decides whether the rule above works for you. Before `EMAIL_AUTH_MODE=enforce`, take one message the worker filed and run it through the same code:
+
+```
+npm ci && (cd inbound && npm ci)
+npx tsx inbound/scripts/check-message.ts path/to/message.eml \
+    --platform mx.cloudflare.net --envelope-from bounce@mail.example.edu
+```
+
+It reads the file, runs the worker's reader (`src/auth.ts`, `src/mail.ts`) and the host's verdict (`../src/email-auth.ts`), and prints each `Authentication-Results` header, what was read from it, `platform_status`, the verdict with its reason, and whether `enforce` would drop the message. It sends nothing, writes nothing, and reads no setting of a deployment.
+
+| Option | Meaning |
+|---|---|
+| `--platform` | Required. The value you would set as `PLATFORM_AUTHSERV_ID` |
+| `--envelope-from` | The envelope sender. A stored `.eml` does not hold it; without the option the `Return-Path` header is used when there is one, and the output says so. The platform's SPF result must be for this domain |
+| `--forwarder-ids`, `--forwarder-domains` | The two forwarder settings, together |
+| `--trusted` | The host's `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`. Default: every name given above |
+| `--require-from-domain` | The host's `EMAIL_AUTH_REQUIRE_FROM_DOMAIN` (`true` by default) |
+| `--unknown` | The host's `EMAIL_AUTH_UNKNOWN` (`block` by default) |
+| `--platform-header` | What `message.headers` reports for `Authentication-Results`. Default: every such header of the message joined with `, ` |
+
+What to look for: `platform_status` is `read`; the SPF line is for the envelope sender's domain; the DMARC line names a From domain (if it says `no From domain named`, see `EMAIL_AUTH_REQUIRE_FROM_DOMAIN` in `docs/setup-reference.md`); the verdict for a message you sent yourself is `authenticated`. A `rejected` status on genuine mail means the platform writes a form this code does not read: do not enforce, and report the header layout with the addresses replaced.
+
+A real message holds real names and addresses. Keep the file and the output out of the repo, issues and pull requests. `test/check-message.test.ts` runs the script's code on synthetic messages.
 
 ## Limits
 
@@ -247,7 +279,7 @@ The payload field, for a message the platform checked:
 
 No live Cloudflare account, domain, mailbox or GitHub repo was available. None of this has run end to end:
 
-- that `message.raw` holds the `Authentication-Results` header the platform prepends (its documentation names `message.headers`), that this header is always the first one, what the platform does with a header in the incoming message that already carries its name, and which properties (`header.d`, `header.from`) it writes. The worker compares the first raw header with what `message.headers` reports first and reads nothing when they differ, so a platform that keeps its header out of `message.raw` gives `unknown`. A platform whose `message.headers` reports a sender-written header first would have that header believed; this was not ruled out on a live domain;
+- that `message.raw` holds the `Authentication-Results` header the platform prepends (its documentation names `message.headers`), that this header is always the first one, what the platform does with a header in the incoming message that already carries its name, and which properties (`header.d`, `header.from`) it writes. Whether it writes one SPF result or two (HELO and envelope sender) is not documented; both forms are read. The worker compares the first raw header with what `message.headers` reports first and reads nothing when they differ; a platform that keeps its header out of `message.raw` gives `unknown` when no header in the raw message carries its name. "Check one real message offline" above answers these for one message. A platform whose `message.headers` reports a sender-written header first would have that header believed; this was not ruled out on a live domain;
 - any forwarding mail system: its server name, whether it removes a planted header carrying that name, and whether it rewrites the envelope sender;
 - that Email Routing delivers to this worker, and what `message.from`, `message.to`, `message.raw` and `message.rawSize` hold for real mail;
 - what `setReject` does at SMTP (temporary or permanent error), and what the sender sees;
@@ -257,7 +289,7 @@ No live Cloudflare account, domain, mailbox or GitHub repo was available. None o
 - the POST against a real host through a reverse proxy;
 - a routed-approval exchange with real mail. The host test proves it with files committed the way this worker commits them, on a local git mirror.
 
-What the tests do cover, with a mocked network: MIME parsing (multipart, attachment, inline part, non-ASCII subject and names, quoted-printable), which `Authentication-Results` headers are read and which are ignored, the exact Markdown and payload, the commit author, the Bearer header, the size limit, both failure paths, the backoff, and the host's acceptance of the result.
+What the tests do cover, with a mocked network: MIME parsing (multipart, attachment, inline part, non-ASCII subject and names, quoted-printable), which `Authentication-Results` headers are read and which are ignored, the offline check, the exact Markdown and payload, the commit author, the Bearer header, the size limit, both failure paths, the backoff, and the host's acceptance of the result.
 
 ## Tests
 

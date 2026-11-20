@@ -480,8 +480,14 @@
             <pre>Read AGENTS.md and help me adapt this for my project.</pre>
           </li>
           <li>
-            The agent asks you six questions before it changes anything: which AI service is allowed, who approves,
-            which address the bot uses, where data lives, what senders are told, and which channels you want.
+            The agent explains three ways to start and asks which you want: try it (one person, a laptop, Telegram
+            only), a pilot (a small always-on machine, email, a handful of allowlisted colleagues; the recommended
+            first version), or institutional (the same on services your institution has approved).
+          </li>
+          <li>
+            The agent asks you six policy questions before it changes anything: which AI service is allowed, who
+            approves, which address the bot uses, where data lives, what senders are told, and which channels you
+            want. It asks one thing at a time and writes your answers down.
           </li>
           <li>It creates your knowledge-base repository, fills in the settings, and keeps the tests passing.</li>
           <li>You review a test exchange. You decide when to deploy.</li>
@@ -516,7 +522,7 @@
         <h2>The code is the source of truth. The documents cover what code cannot say.</h2>
         <dl class="docs">
           <dt><a href="https://github.com/vishalsachdev/programos/blob/main/AGENTS.md">AGENTS.md</a></dt>
-          <dd>The guide for your coding agent: what to ask, what to replace, safety items, first start.</dd>
+          <dd>The guide for your coding agent: how to guide a person who is not technical, the three ways to start, every setup choice, what to replace, safety items, first start.</dd>
           <dt><a href="https://github.com/vishalsachdev/programos/blob/main/SPEC.md">SPEC.md</a></dt>
           <dd>The contract: components, channels, modes, knowledge-base layout, audit log.</dd>
           <dt><a href="https://github.com/vishalsachdev/programos/blob/main/docs/deployment.md">docs/deployment.md</a></dt>

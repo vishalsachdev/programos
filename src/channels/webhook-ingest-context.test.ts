@@ -2,12 +2,14 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { Parser } from 'htmlparser2';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const TEST_PORT = 39341;
 const receivedProbe = vi.hoisted(() => ({
   eml: '',
   readyTimer: undefined as Promise<number> | undefined,
+  onParsed: undefined as (() => void) | undefined,
 }));
 
 vi.mock('mailparser', async (importOriginal) => {
@@ -16,6 +18,9 @@ vi.mock('mailparser', async (importOriginal) => {
     ...original,
     simpleParser: async (input: string) => {
       const result = await original.simpleParser(input);
+      // Lets a test start counting only after MIME parsing (mailparser has its
+      // own HTML handling, which is not the code under test).
+      receivedProbe.onParsed?.();
       // R3-2: arm the ready timer AFTER real email parsing, before evidence collection.
       const start = performance.now();
       receivedProbe.readyTimer = new Promise((resolve) =>
@@ -69,6 +74,7 @@ vi.mock('../repo-reader.js', () => ({
 }));
 
 import './webhook.js';
+import { inboundEmailAddressesInHtml } from '../inbound-html-addresses.js';
 import { resolveChannelDeliveryContext } from '../channel-delivery.js';
 import { resolveEmailGateContext } from '../email-gate-context.js';
 import { processDelivery } from '../delivery-processor.js';
@@ -91,6 +97,7 @@ import { getChannelFactory } from './registry.js';
 describe('webhook inbound delivery context', () => {
   let disconnect: (() => Promise<void>) | undefined;
   let tempDir: string | undefined;
+  const parserSpies: Array<{ mockRestore: () => void }> = [];
 
   afterEach(async () => {
     await disconnect?.();
@@ -100,6 +107,8 @@ describe('webhook inbound delivery context', () => {
     tempDir = undefined;
     receivedProbe.eml = '';
     receivedProbe.readyTimer = undefined;
+    receivedProbe.onParsed = undefined;
+    for (const spy of parserSpies.splice(0)) spy.mockRestore();
   });
 
   // Catches losing addresses supplied in the actual inbound body across intake and restart.
@@ -282,8 +291,29 @@ describe('webhook inbound delivery context', () => {
   );
 
   // R8-3: the ready timer starts after MIME parsing, isolating the new evidence scan.
-  it('scans deeply mismatched received HTML without delaying a ready timer by 100ms', async () => {
+  //
+  // What is protected: 64,000 closing tags that match no open element must not
+  // each search the parser's stack of 64,000 open elements. That search is
+  // quadratic (about 9 s here on a 4-core machine; the scan as shipped takes
+  // about 50 ms) and it runs synchronously, so it would hold the event loop.
+  //
+  // The proof is a count, not a clock: htmlparser2's own `onclosetag` is the
+  // only place that searches the stack, so the scan must never reach it for an
+  // orphan closer. A count does not depend on machine speed. The earlier
+  // version asserted only "ready timer delayed by less than 100 ms", which
+  // failed on loaded CI runners at 101 to 103 ms with the scan unchanged. The
+  // timer is kept as a backstop against any other long synchronous stall, with
+  // a limit (1,000 ms) that sits about 20 times above the normal cost and about
+  // 9 times below the quadratic one.
+  it('scans deeply mismatched received HTML without the quadratic stack search or a long event-loop stall', async () => {
     _initTestDatabase();
+    const stackSearch = vi.spyOn(Parser.prototype, 'onclosetag');
+    const parserEnd = vi.spyOn(Parser.prototype, 'end');
+    parserSpies.push(stackSearch, parserEnd);
+    receivedProbe.onParsed = () => {
+      stackSearch.mockClear();
+      parserEnd.mockClear();
+    };
     const onMessage = vi.fn();
     const channel = getChannelFactory('webhook')!({
       onMessage,
@@ -313,7 +343,18 @@ describe('webhook inbound delivery context', () => {
     expect(response.status).toBe(200);
     expect(onMessage).toHaveBeenCalledOnce();
     expect(receivedProbe.readyTimer).toBeDefined();
-    expect(await receivedProbe.readyTimer).toBeLessThan(100);
+    const readyDelayMs = await receivedProbe.readyTimer;
+    // The evidence scan ran on this HTML after MIME parsing, through the same
+    // Parser class the spies watch...
+    expect(parserEnd).toHaveBeenCalledTimes(1);
+    expect(parserEnd).toHaveBeenCalledWith(html);
+    // ...and not one of the 64,000 orphan closers reached the stack search.
+    expect(stackSearch).not.toHaveBeenCalled();
+    // Control: the spy does count the stack search when a closer has an opener,
+    // so the zero above is not a spy that sees nothing.
+    inboundEmailAddressesInHtml('<p>text</p>');
+    expect(stackSearch).toHaveBeenCalledTimes(1);
+    expect(readyDelayMs).toBeLessThan(1_000);
   }, 20_000);
 
   // R3-2: reproduces 128,000 brackets in the original .eml delaying an already-ready timer at intake.

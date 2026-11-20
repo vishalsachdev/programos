@@ -128,7 +128,7 @@ npx tsx setup/index.ts --step register -- --jid webhook-email@program --name "Pr
 node seed-db.cjs
 ```
 
-The `register` step creates the database. `seed-db.cjs` then writes the email group again, with the program repo as a read-write mount at `/srv/program-repo`. Register the main group and the Telegram group as `AGENTS.md`, "First start", step 3 describes.
+The `register` step creates the database. `seed-db.cjs` then writes the email group again, with the program repo as a read-write mount at `/srv/program-repo`. Register the main group and the Telegram group as `AGENTS.md`, "First start", step 4 describes.
 
 Checked: the `register` step and `seed-db.cjs` ran, and the stored row holds the mount. `container/build.sh` was not run.
 
@@ -228,7 +228,7 @@ Go through this list at the end of the recipe.
 - `npx tsx scripts/check-host-git-trust.ts --network` shows no FAIL line, and a commit the agent makes in a test turn arrives on the git host.
 - One plain question passes end to end on each channel you enabled.
 - If email is on: the intake service files a test message (two files in `discussions/raw/`, by the expected git author), and one routed approval passes end to end. A sender who is not on the allowlist gets no answer, or the one courtesy reply if they are at your institution.
-- If email is on: the mail provider's events webhook answers 200 to a test event, and a bounce reaches the admin on Telegram (`AGENTS.md`, "Webhooks from other services").
+- If email is on: the mail provider's events webhook answers 200 to a test event, and a bounce produces an operator alert on each route you enabled ([`setup-reference.md`](./setup-reference.md), "Webhooks from other services").
 - If the program repo is on GitHub: its push webhook shows a 200 delivery, or you have decided to run without it.
 - If Telegram is on: only one chat uses it (see `AGENTS.md`, safety items), and a handle that is not on the list gets no answer.
 - If web chat is on: a call without the secret is refused. Web chat does not check the person.

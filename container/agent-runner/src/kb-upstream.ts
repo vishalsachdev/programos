@@ -16,10 +16,8 @@
 import { execFileSync } from 'child_process';
 import fs from 'fs';
 
-export interface KbUpstreamEnv {
-  KB_UPSTREAM_REPO?: string;
-  KB_CHECKOUT?: string;
-}
+/** Reads KB_UPSTREAM_REPO and KB_CHECKOUT, which the host sets. */
+export type KbUpstreamEnv = Record<string, string | undefined>;
 
 type Run = (args: string[], cwd?: string) => string;
 

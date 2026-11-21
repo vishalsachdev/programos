@@ -26,7 +26,7 @@ The bot answers questions from an allowlisted team by email (and Telegram for th
 
 ## Where the code comes from
 
-The code is a close copy of **K-ai**, a coordinator for one online master's program. It has been tested in production with one program since April 2026. K-ai is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) (MIT; see [`NOTICE`](./NOTICE)). We removed the program's content (people, addresses, policies, history) and put placeholders in its place. We did not redesign the code. The 1,761 tests that pass in K-ai pass here.
+The code is a close copy of **K-ai**, a coordinator for one online master's program. It has been tested in production with one program since April 2026. K-ai is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) (MIT; see [`NOTICE`](./NOTICE)). We removed the program's content (people, addresses, policies, history) and put placeholders in its place. We did not redesign the code. The 1,761 tests that pass in K-ai pass here. This repo adds 879 more, so CI runs 2,640 tests on every change.
 
 Two things follow from that choice:
 

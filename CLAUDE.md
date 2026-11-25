@@ -36,6 +36,12 @@ Keep edits funder-agnostic and institution-agnostic. Illinois-specific setup gui
 - Close an issue when a merged change meets every one of its acceptance criteria, and say in the closing comment what meets each one; when a change meets only some, leave the issue open with a comment listing what is done and what remains. Put closing keywords in a PR description only for issues it fully resolves.
 - Owner's decision, 2026-11-20, except the two rules marked as added by delegation.
 
+## Handoffs from other sessions
+
+- This repo is public, so handoffs never go in it: no `_agent-inbox/` here. Handoffs for this repo live in the maintainer's private inbox outside the repo, addressed `To: programos` (owner's decision, 2026-11-25).
+- At session start, run `python3 ~/.claude/scripts/fleet-inbox.py startup-check ~/code programos`. Items addressed `To: any` are assigned by the coordinating session, not taken here.
+- Act per the maintainer's cross-family protocol: before starting an item, check its status record for an active claim, then append your own claim.
+
 ## Site
 
 `site/public/` is served at https://programos.illinihunt.org (Cloudflare Pages project `programos`). Deploy that site with `SITE_THEME=illinois ./site/deploy.sh`. Every fact on the page repeats `README.md` or `SPEC.md`. Change the page in the same commit.

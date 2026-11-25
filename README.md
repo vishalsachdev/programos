@@ -26,7 +26,7 @@ The bot answers questions from an allowlisted team by email (and Telegram for th
 
 ## Where the code comes from
 
-The code is a close copy of **K-ai**, a coordinator for one online master's program. It has been tested in production with one program since April 2026. K-ai is built on [NanoClaw](https://github.com/qwibitai/nanoclaw) (MIT; see [`NOTICE`](./NOTICE)). We removed the program's content (people, addresses, policies, history) and put placeholders in its place. We did not redesign the code. The 1,761 tests that pass in K-ai pass here. This repo adds 879 more, so CI runs 2,640 tests on every change.
+The code is a close copy of **K-ai**, a coordinator for one online master's program. It has been tested in production with one program since April 2026. ProgramOS includes code from [NanoClaw](https://github.com/qwibitai/nanoclaw) ([MIT](./NOTICE)) through K-ai. We removed the program's content (people, addresses, policies, history) and put placeholders in its place. We did not redesign the code. The 1,761 tests that pass in K-ai pass here. This repo adds 879 more, so CI runs 2,640 tests on every change.
 
 Two things follow from that choice:
 
@@ -103,7 +103,6 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`site/`](./site/) | The public page and its deploy script | Yes |
 | [`docs/reminder-registry.md`](./docs/reminder-registry.md) | Template for the list of scheduled jobs | Yes |
 | [`docs/evaluation-protocol.md`](./docs/evaluation-protocol.md), [`docs/capability-scenarios.md`](./docs/capability-scenarios.md) | How the bot is evaluated | Yes |
-| [`docs/framework/`](./docs/framework/) | NanoClaw's own reference docs | Upstream text |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | How the repo takes changes: exported code and owned files, the patch-file rule, the checks to run | Yes |
 | [`SECURITY.md`](./SECURITY.md) | How to report a security problem and what is in scope | Yes |
 | [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) | The Contributor Covenant, adopted by reference | Contact address not yet filled in |
@@ -120,4 +119,4 @@ Fixes, adapters and doc corrections are welcome. Read [`CONTRIBUTING.md`](./CONT
 
 ## License
 
-MIT. The code derived from NanoClaw carries NanoClaw's MIT notice in [`NOTICE`](./NOTICE).
+MIT. See [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE).

@@ -17,7 +17,7 @@ How the parts of ProgramOS fit, and who owns each.
 └──────────────────────────────────────────┬───────────────────────────┘
                                            ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Host orchestration (src/, from the NanoClaw framework)              │
+│  Host orchestration (src/)                                           │
 │  • router, per-group queue, SQLite store                             │
 │  • scheduler and reminders        • routed approvals                 │
 │  • credential proxy (holds the model credentials)                    │

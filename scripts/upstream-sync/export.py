@@ -215,6 +215,8 @@ def main():
         if r.returncode != 0:
             sys.exit(f'hand-edits.patch did not apply; resolve by hand in {tmp}')
 
+    # Local patches can change the snapshot too. Drop upstream manuals last.
+    remove(inside(tmp, 'docs/framework'))
     new = files(tmp)
     bad = sorted(f for f in new if owned(f) or os.path.islink(os.path.join(tmp, f)))
     if bad:

@@ -1,5 +1,6 @@
 """Tests for the safety rules of export.py. Run: python3 -m unittest discover scripts/upstream-sync"""
 import os, subprocess, sys, tempfile, unittest
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -188,6 +189,31 @@ class ScrubTest(unittest.TestCase):
         subprocess.run([sys.executable, os.path.join(HERE, 'scrub.py'), tree, rules], check=True, capture_output=True)
         self.assertEqual(open(os.path.join(tree, 'a.txt')).read(), 'hello Newname')
         self.assertEqual(open(target).read(), 'Oldname')
+
+
+class ExportSnapshotTest(unittest.TestCase):
+    def test_framework_manuals_are_absent_from_export(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / 'source'
+            manuals = source / 'docs/framework'
+            manuals.mkdir(parents=True)
+            (manuals / 'manual.md').write_text('upstream manual')
+            (source / 'docs/other.md').write_text('other guide')
+            subprocess.run(['git', 'init', '-q'], cwd=source, check=True)
+            subprocess.run(['git', 'add', '.'], cwd=source, check=True)
+            subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.org',
+                            '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'],
+                           cwd=source, check=True)
+            (root / 'rules.tsv').touch()
+            (root / 'delete.txt').touch()
+            (root / 'deny.txt').write_text('unused-deny-term')
+            subprocess.run([sys.executable, os.path.join(HERE, 'export.py'),
+                            source, 'HEAD', root], check=True, capture_output=True,
+                           text=True, env={**os.environ, 'TMPDIR': folder})
+            snapshot, = root.glob('upstream-export-*')
+            self.assertFalse((snapshot / 'docs/framework').exists())
+            self.assertEqual((snapshot / 'docs/other.md').read_text(), 'other guide')
 
 
 class InputsGuardTest(unittest.TestCase):

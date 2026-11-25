@@ -21,7 +21,7 @@ The same contract serves an academic program, a research project, a grant team o
 
 | Component | Where | Notes |
 |-----------|-------|-------|
-| Container runtime, channel registry, message router, group queue, SQLite store | `src/` (from the NanoClaw framework) | Change only when you must |
+| Container runtime, channel registry, message router, group queue, SQLite store | `src/` | Change only when you must |
 | Channel handlers: email webhook, Telegram, web chat | `src/channels/` | Each validates the sender, builds the message, and formats the reply |
 | Credential proxy and model providers | `src/credential-proxy.ts`, `src/model-provider.ts` | The host's own credentials stay out of the container; the host injects them. In OAuth mode the container receives a temporary key from the exchange. With web tools off it parses every request and refuses one that would make the provider contact an outside host (section 11, "Web tools off"). `MODEL_PROVIDERS` orders the providers (`anthropic`, `foundry`; default `anthropic` only). The proxy routes each run to its provider and counts failures; after three in a row, new runs use the next provider for 30 minutes. Foundry: [`docs/illinois/model-foundry.md`](./docs/illinois/model-foundry.md) |
 | Container network | `src/container-runtime.ts` (`CONTAINER_NETWORK`) | `restricted`: an internal Docker network; the container reaches the host's credential proxy and no outside host. `open`: the runtime's default network. Default: `restricted` on Docker Engine on Linux, `open` on Docker Desktop. Section 11 lists what restricted does not block |

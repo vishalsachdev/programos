@@ -144,12 +144,12 @@ This requires a shared coordination surface — either a lightweight shared SQLi
 
 ```
 /root/
-  nanoclaw-msbai/       # MSBAi program agent
-  nanoclaw-mba/         # MBA program agent
-  nanoclaw-institution/ # Institution agent (lightweight, low traffic)
+  msbai-agent/          # MSBAi program agent
+  mba-agent/            # MBA program agent
+  institution-agent/    # Institution agent (lightweight, low traffic)
   repos/
-    msba-online/        # MSBAi KB (mounted into nanoclaw-msbai)
-    mba-online/         # MBA KB (mounted into nanoclaw-mba)
+    msba-online/        # MSBAi knowledge base for msbai-agent
+    mba-online/         # MBA knowledge base for mba-agent
     gies-kb/            # Shared KB (mounted read-only into all agents)
 ```
 

@@ -6,7 +6,7 @@ Usage:
   repo_patch.py           write the patch from the working tree
   repo_patch.py --check   exit 1 unless the patch reproduces the working tree
 
-The patch is the difference, on exported paths only (everything not in OWNED
+The patch is the difference, on exported paths only (everything outside OWNED and EXCLUDED
 in export.py), between the export baseline and the working tree. The baseline
 is the commit BASELINE with the patches in BEFORE applied in order.
 
@@ -62,6 +62,9 @@ def build_baseline(tmp):
                  'history (git fetch --unshallow) and run again.' % BASELINE)
     tar = git(REPO, 'archive', '--format=tar', BASELINE).stdout
     subprocess.run(['tar', '-x', '-C', tmp], input=tar, check=True)
+    # Older raw exports still contain paths the current export drops.
+    for rel in export.EXCLUDED:
+        export.remove(export.inside(tmp, rel))
     git(tmp, 'init', '-q')
     git(tmp, 'add', '-A', '-f')
     for name in BEFORE:
@@ -81,6 +84,8 @@ def working_tree_tree(tmp):
         full = os.path.join(REPO, rel)
         if export.owned(rel) or not os.path.lexists(full):
             continue  # owned, or deleted in the working tree
+        if any(rel == path or rel.startswith(path + '/') for path in export.EXCLUDED):
+            sys.exit('Excluded upstream path in the working tree: %s' % rel)
         if os.path.islink(full):
             sys.exit('Symlink in an exported path: %s' % rel)
         blob = git(tmp, 'hash-object', '-w', '--no-filters', full).stdout.decode().strip()

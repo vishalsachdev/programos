@@ -86,7 +86,7 @@ The fastest concrete setup, useful for most UIUC units.
 
 ### Mount it
 
-In your NanoClaw container-runner config, add a read-only bind mount alongside the program repo:
+Give the container read-only access to the source folder alongside the program repo.
 
 ```
 -v "/Users/<u>/Library/CloudStorage/Box-Box/<unit>/bot-content:/workspace/extra/box:ro"

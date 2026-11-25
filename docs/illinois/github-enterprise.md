@@ -1,51 +1,52 @@
-# Illinois: the knowledge-base repo on github.illinois.edu
+# The University of Illinois System Shared GitHub Service
 
-> **Not verified.** Nobody has run this repo's code against github.illinois.edu.
-> The host name comes from issue 14. The URL forms below are the standard
-> GitHub Enterprise Server forms and have not been checked on that host.
-> Whether a unit may keep this kind of data there, and which accounts may hold a
-> deploy key or token, are questions for the unit's IT staff; this page states
-> no university policy.
+The service provides GitHub Enterprise Cloud organisations on github.com. To request
+one, email githubsupport@uillinois.edu. Include the department name and website,
+the proposed organisation title and URL, and the names and NetIDs of two owners.
+The [campus GitHub guide](https://answers.uillinois.edu/illinois/129281)
+links to the service team's request instructions.
 
-The generic instructions are in `config/instance.env.example` (the
-`PROGRAM_ORIGIN_PATTERN` key) and in the placeholder table in `AGENTS.md`. This
-page only fills in the host name.
+Members use Illinois single sign-on (SSO) to link their NetID to a personal
+github.com account. To use a personal SSH key or personal access token with the
+organisation, authorise it for that organisation. Fine-grained tokens get this
+authorisation during creation. See the [Illinois owner instructions](https://answers.uillinois.edu/systemoffices/102099)
+and [GitHub's SSO guide](https://docs.github.com/en/enterprise-cloud@latest/authentication/authenticating-with-single-sign-on/about-authentication-with-single-sign-on).
 
-## The setting
+## What the repository may hold
 
-The host accepts a program repo only when its git origin URL matches
-`PROGRAM_ORIGIN_PATTERN` (`isExpectedOrigin` in `src/repo-reader.ts`). With the
-setting empty, only the placeholder repo on github.com passes, so a repo on
-github.illinois.edu is refused and the read mirror is not created.
+The [End User Service Agreement](https://answers.uillinois.edu/systemoffices/102098)
+bars High Risk data from every repository. This includes passwords and API keys.
+Sensitive data, including student records covered by FERPA, requires a private
+repository. The agreement gives no approval to store those records there.
+Ask the Privacy Office whether the unit may store its mail copies and audit log
+in this private repository. Record the office's written answer here.
 
-Export one of these in the process environment (a line in `.env` does nothing
-for this key). Replace `your-org/your-program-repo`.
+## Set the repository address
 
-For an SSH origin (`git@github.illinois.edu:your-org/your-program-repo.git`):
+Set both variables in the host process environment. Replace the organisation
+and repository placeholders with the unit's exact names. In the pattern, write
+any literal dot in a name as `[.]`. Keep both anchors so only that repository matches.
 
+```sh
+export PROGRAM_ORIGIN_URL='git@github.com:<illinois-org>/<repo>.git'
+export PROGRAM_ORIGIN_PATTERN='^git@github[.]com:<illinois-org>/<repo>([.]git)?$'
 ```
-PROGRAM_ORIGIN_PATTERN=^git@github[.]illinois[.]edu:your-org/your-program-repo([.]git)?$
+
+For HTTPS, use the repository's HTTPS address and the matching pattern:
+
+```sh
+export PROGRAM_ORIGIN_URL='https://github.com/<illinois-org>/<repo>.git'
+export PROGRAM_ORIGIN_PATTERN='^https://([A-Za-z0-9_.~:-]+@)?github[.]com/<illinois-org>/<repo>([.]git)?$'
 ```
 
-For an HTTPS origin, with or without a token in the URL:
+Use github.com for these settings. On 2026-11-25, `dig +short github.illinois.edu`
+returned the university web-hosting alias `github.uillinois.edu`, and
+`curl https://github.illinois.edu` failed during the TLS handshake (exit 35).
 
-```
-PROGRAM_ORIGIN_PATTERN=^https://([A-Za-z0-9_.~:-]+@)?github[.]illinois[.]edu/your-org/your-program-repo([.]git)?$
-```
+## Not verified
 
-Keep `^` and `$`. When the setting is present the URL is checked against the
-pattern only, so an open-ended pattern accepts more than you mean.
-
-## What is covered by a test, and what is not
-
-- Covered: `src/repo-reader.test.ts` checks both pattern shapes against a
-  GitHub Enterprise style host (`git.example.edu`), including the URLs they must
-  refuse.
-- Not covered: a clone, fetch or push against github.illinois.edu; campus login
-  (SSO) for a deploy key or token; the push webhook
-  (`src/channels/github-push-events.ts`) receiving deliveries from that host;
-  network reach from your bot host to github.illinois.edu.
-
-Before the first test message, run the check in `AGENTS.md` ("First start",
-step 5): `npx tsx scripts/check-host-git-trust.ts --network`. Only the host
-needs a credential for this git host; the container gets none.
+No live test has cloned, fetched or pushed a unit repository, authorised a
+credential, or received a GitHub push notification for this setup. Ask the
+service team which credential the host may use. Once it is approved, check
+access from the host with `npx tsx scripts/check-host-git-trust.ts --network`
+before the first test message.

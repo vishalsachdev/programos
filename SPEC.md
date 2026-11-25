@@ -59,7 +59,7 @@ A channel handler MUST do the following. Where this code does it on some channel
 - For email, take recipient addresses only from the allowlist or from the inbound message, never from model output alone. Web chat replies go to the session they came from. A Telegram reply goes to the chat that wrote most recently, which may not be the chat that asked (see section 11).
 - Trigger audit-log writes for accepted inbound messages and replies, and for delivery events (bounces, complaints) from the outbound provider. The default outbound provider reports such events; the SMTP provider (`OUTBOUND_MAIL_PROVIDER=smtp`) does not (section 11).
 
-Email-specific rules in the reference implementation: a blocked sender from the same institution gets one courtesy reply (tracked in memory, so a restart resets it); mail where the bot is only copied is filed as context with no reply; a reply to a direct request keeps the thread's audience, allowlisted addresses only. The last two need the original mail with verified headers. Without it the host may send an acknowledgement, and the reply goes to the sender alone.
+Email-specific rules in the reference implementation: a blocked sender from the same institution gets one courtesy reply (tracked in memory, so a restart resets it); mail where the ProgramOS agent is only copied is filed as context with no reply; a reply to a direct request keeps the thread's audience, allowlisted addresses only. The last two need the original mail with verified headers. Without it the host may send an acknowledgement, and the reply goes to the sender alone.
 
 ## 4. Agent operating modes
 
@@ -141,7 +141,7 @@ The coordinator reads mail and writes to a shared record, so its rules must hold
 
 `groups/global/CLAUDE.md` is the shared playbook: working directory, knowledge-base writes, commit rules, guardrails, outbound authorization, self-evaluation. Each `groups/<channel>/CLAUDE.md` adds what is specific to that channel. These files MUST:
 
-- Name the channel and the bot.
+- Name the channel and the ProgramOS agent.
 - Reference the program repo path.
 - Define the modes for that channel.
 - For email, require the reply to be wrapped so the delivery gate can find it.
@@ -154,7 +154,7 @@ A test (`src/channel-claude-sync.test.ts`) checks that the required phrases are 
 [`AGENTS.md`](./AGENTS.md) is the working guide. In short, before going live:
 
 - [ ] Answer the policy question: which AI service may this team's mail reach.
-- [ ] Replace the bot's name, the program name, the operator, the mail domains.
+- [ ] Replace the ProgramOS agent's name, the program name, the operator, the mail domains.
 - [ ] Create the program repo, the allowlist and the governance file.
 - [ ] Fill in `.env` from [`config/instance.env.example`](./config/instance.env.example).
 - [ ] Create the chat sender allowlist before enabling a chat channel. Without the file, no chat sender can trigger the agent.

@@ -13,7 +13,7 @@ The page that lists every credential, its owner role, where it is stored, how to
 | Who owns an Azure subscription for a unit, and can a Foundry resource and its key belong to the unit rather than to one person ([`../model-providers.md`](../model-providers.md))? Who approves the spend? | Not verified |
 | Can a Claude subscription or an API workspace be held by a unit account at the university, and who pays for it? | Not verified |
 | Which GitHub organisation holds the unit's repos, and must the knowledge-base repo be on the university's own GitHub Enterprise host ([`github-enterprise.md`](./github-enterprise.md))? Can a machine user or an app token be created there, and who approves it? | Not verified |
-| Who holds the DNS zone and registrar account for a domain the unit uses for the bot's address, and can the unit have two administrators on it? | Not verified |
+| Who holds the DNS zone and registrar account for a domain the unit uses for the ProgramOS agent's address, and can the unit have two administrators on it? | Not verified |
 | What does the university require when someone leaves: an access review, a list of accounts to close, a time limit? Does that process know about accounts at outside services? | Not verified |
 | Is Telegram approved for operator alerts, and may a unit's bot be owned by a unit account? | Not verified |
 

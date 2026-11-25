@@ -1,6 +1,6 @@
 # Inbound mail intake
 
-A Cloudflare Email Worker that receives mail for the bot's address and hands it to the ProgramOS host. For each message it:
+A Cloudflare Email Worker that receives mail for the ProgramOS agent's address and hands it to the ProgramOS host. For each message it:
 
 1. refuses the message at SMTP if it is larger than `MAX_MESSAGE_BYTES`;
 2. builds a Markdown copy of the message;
@@ -68,7 +68,7 @@ npx wrangler secret put GITHUB_TOKEN
 npx wrangler secret put WEBHOOK_SECRET
 ```
 
-**The git author.** When the host reads a committed `.eml`, it accepts the file only if the commit that first added it has the author email in the host setting `INTAKE_GIT_AUTHOR_EMAIL` (`.env`; the default is `email-inbox@example.org`). `src/repo-reader.ts` and the bot-author list in `src/channels/github-push-events.ts` both read that setting. Keep the worker's default, or set the host setting and the worker's `GIT_AUTHOR_EMAIL` to the same address. With a different author on one side only, plain questions still work, but routed approvals are held: the host has no copy of the sender's words. `src/channels/webhook-inbound-intake.test.ts` shows both cases.
+**The git author.** When the host reads a committed `.eml`, it accepts the file only if the commit that first added it has the author email in the host setting `INTAKE_GIT_AUTHOR_EMAIL` (`.env`; the default is `email-inbox@example.org`). `src/repo-reader.ts` and the list of automated commit authors in `src/channels/github-push-events.ts` both read that setting. Keep the worker's default, or set the host setting and the worker's `GIT_AUTHOR_EMAIL` to the same address. With a different author on one side only, plain questions still work, but routed approvals are held: the host has no copy of the sender's words. `src/channels/webhook-inbound-intake.test.ts` shows both cases.
 
 ### 5. Deploy and route
 

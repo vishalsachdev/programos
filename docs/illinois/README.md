@@ -9,7 +9,7 @@ For a unit at the University of Illinois that sets up ProgramOS. It uses the sam
 | # | Page | The choice it belongs to (`AGENTS.md`, part 5) |
 |---|---|---|
 | 1 | [`model-foundry.md`](./model-foundry.md): Claude on Microsoft Foundry in a university Azure subscription | Choice 1, model provider; policy question 1 |
-| 2 | [`email-quickstart.md`](./email-quickstart.md): a unit `@illinois.edu` mailbox that redirects to the bot's own domain, the intake worker, and the reply | Choices 5 and 6; policy question 3 |
+| 2 | [`email-quickstart.md`](./email-quickstart.md): a unit `@illinois.edu` mailbox that redirects to the ProgramOS agent's own domain, the intake worker, and the reply | Choices 5 and 6; policy question 3 |
 | 3 | [`institutional-address.md`](./institutional-address.md): what replying as an `@illinois.edu` address needs | Choice 6, option (b) |
 | 4 | [`hosting.md`](./hosting.md): getting a virtual machine in the university's Azure | Choice 8 |
 | 5 | [`data-handling.md`](./data-handling.md): the data questions for the privacy, security and records offices | Choice 14; policy questions 1, 4 and 5 |

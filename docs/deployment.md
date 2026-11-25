@@ -1,6 +1,6 @@
 # Deployment
 
-The code is the source of truth for how the bot runs. This page holds only what the code cannot tell you: what kind of host works, and one recipe that sets it up.
+The code is the source of truth for how the ProgramOS agent runs. This page holds only what the code cannot tell you: what kind of host works, and one recipe that sets it up.
 
 ## What the host must be able to do
 
@@ -13,14 +13,14 @@ The code is the source of truth for how the bot runs. This page holds only what 
 
 | Stage | Host | Channels | Inbound network |
 |---|---|---|---|
-| Trial | A laptop | Telegram only, one chat (the bot polls Telegram) | None |
+| Trial | A laptop | Telegram only, one chat (the ProgramOS agent polls Telegram) | None |
 | Pilot | A virtual machine, always on (the recipe below) | Telegram and email | One HTTPS endpoint behind a reverse proxy |
 
 Email needs two things that Telegram does not: a public HTTPS endpoint and an inbound mail intake service (`AGENTS.md`, "Inbound mail"). `inbound/` holds one, for a domain on Cloudflare Email Routing; it runs at Cloudflare, not on this host, and needs a GitHub token for the knowledge-base repo. It has not been run against live services yet, so plan a real test. With another mail provider you write the service yourself. Plan for that work before you promise email to your team.
 
 ## The supported recipe: one virtual machine
 
-One recipe is supported: Ubuntu LTS, Docker, a dedicated non-root user, and the systemd user unit that `setup/service.ts` writes. Three other files in the repo start or update the bot: `ecosystem.config.cjs`, `start.sh` and `scripts/deploy.sh`. They are examples from the reference deployment, which runs under pm2, and each says so in its first lines. Do not mix them with this recipe.
+One recipe is supported: Ubuntu LTS, Docker, a dedicated non-root user, and the systemd user unit that `setup/service.ts` writes. Three other files in the repo start or update the ProgramOS agent: `ecosystem.config.cjs`, `start.sh` and `scripts/deploy.sh`. They are examples from the reference deployment, which runs under pm2, and each says so in its first lines. Do not mix them with this recipe.
 
 The recipe uses these names. If you change one, change it in every step.
 
@@ -30,7 +30,7 @@ The recipe uses these names. If you change one, change it in every step.
 | Code | `/home/programos/programos` |
 | Program repo checkout | `/srv/program-repo` (the code default, and the path in `seed-db.cjs` and `config-examples/mount-allowlist.json`) |
 | Read mirror | `/srv/repos/program-repo-read.git` (the code default) |
-| Host-owned repository | `/srv/repos/program-repo-host` (the code default; created by the bot) |
+| Host-owned repository | `/srv/repos/program-repo-host` (the code default; created by the agent) |
 | Public name | `bot.example.org`, with a DNS record that points at the machine |
 
 "Checked" under a step says what was run for this page on 2026-11-19, in a container with Ubuntu 24.04, systemd 255 and Node 22. That container had no running systemd and no Docker daemon. A step marked "not run" comes from reading the code and each tool's own documentation.
@@ -46,7 +46,7 @@ sudo loginctl enable-linger programos
 sudo install -d -o programos -g programos /srv/program-repo /srv/repos
 ```
 
-- A member of the `docker` group can become root on that machine. Use the machine for the bot only.
+- A member of the `docker` group can become root on that machine. Use the machine for the ProgramOS agent only.
 - Lingering keeps the user's services running when nobody is logged in. `setup/service.ts` also tries to turn it on.
 - The host must not run as root in this recipe. As a normal user it runs its own git commands, and it starts each container with its own user and group id (`src/container-runner.ts`), so one user owns every file. The settings `CHECKOUT_OWNER_UID`, `CHECKOUT_OWNER_GID` and `CHECKOUT_OWNER_HOME` apply only to a host that runs as root; see `config/instance.env.example`.
 - Open only ports 22, 80 and 443 to the internet, at your provider's firewall. A firewall on the machine itself must still let containers reach the credential proxy on the Docker bridge (`CREDENTIAL_PROXY_PORT`, default 3001). That combination was not tested.
@@ -90,7 +90,7 @@ cp config-examples/mount-allowlist.json ~/.config/nanoclaw/mount-allowlist.json
 
 Fill the PART 1 lines in `.env`. Leave the PART 2 lines commented: `.env` does nothing for them. They go in the unit in step 6.
 
-`.env` holds every secret, so run the `chmod 600 .env` line right after the copy, and again if you ever recreate the file. At each start the host logs one error, with the file and this command, while the group or others can read it. Add `REQUIRE_PRIVATE_ENV_FILE=true` to `.env` to make the host refuse to start in that state (the default is to warn, so that an upgrade does not stop a running bot). Set `DELIVERY_STATE_SIGNING_KEY` to its own random value here too (`openssl rand -hex 32`); without it the host signs saved delivery state with another secret and warns at each start (`AGENTS.md`, choice 18).
+`.env` holds every secret, so run the `chmod 600 .env` line right after the copy, and again if you ever recreate the file. At each start the host logs one error, with the file and this command, while the group or others can read it. Add `REQUIRE_PRIVATE_ENV_FILE=true` to `.env` to make the host refuse to start in that state (the default is to warn, so that an upgrade does not stop a running agent). Set `DELIVERY_STATE_SIGNING_KEY` to its own random value here too (`openssl rand -hex 32`); without it the host signs saved delivery state with another secret and warns at each start (`AGENTS.md`, choice 18).
 
 Checked: the allowlist copy, and that the file names `/srv/program-repo`.
 
@@ -172,7 +172,7 @@ Checked: `systemd-analyze verify` (systemd 255) accepted these lines, and report
 
 ### 7. Reverse proxy with TLS (as an administrator)
 
-The bot now listens on `127.0.0.1:3003` only. Replace the content of `/etc/caddy/Caddyfile` with:
+The ProgramOS agent now listens on `127.0.0.1:3003` only. Replace the content of `/etc/caddy/Caddyfile` with:
 
 ```
 bot.example.org {
@@ -205,12 +205,12 @@ Checked: not run as a sequence.
 
 **Upgrading a host that ran a version from before 2026-11-20** (the host then ran git in `/srv/program-repo`):
 
-1. Stop the bot the normal way (`systemctl --user stop nanoclaw`). A clean stop commits and pushes the pending audit entries with the old code.
+1. Stop the ProgramOS agent the normal way (`systemctl --user stop nanoclaw`). A clean stop commits and pushes the pending audit entries with the old code.
 2. Update as above, and run `./container/build.sh`: the image's runner changed.
 3. Add `Environment=PROGRAM_ORIGIN_URL=...` to `override.conf` (step 6). A host that already has the read mirror works without it, because the mirror's origin is used; set it anyway.
-4. Start the bot. At the first start it creates `/srv/repos/program-repo-host` and `/srv/repos/program-repo-host-export.git`. The history comes from the read mirror on the same disk, so this needs no network. It reads nothing from the old checkout's `.git/config`. The folder `/srv/repos` must be writable by the bot's user (step 1 made it so).
+4. Start the agent. At the first start it creates `/srv/repos/program-repo-host` and `/srv/repos/program-repo-host-export.git`. The history comes from the read mirror on the same disk, so this needs no network. It reads nothing from the old checkout's `.git/config`. The folder `/srv/repos` must be writable by the agent's user (step 1 made it so).
    A host repository or read mirror made by a version from before the fix of issue 53 (2026-11-20) can hold an HTTPS token in its `.git/config`, in a folder every account on the machine could read. The first start with the fixed version repairs it and logs each step as a warning: `/srv/repos/program-repo-host` becomes mode 0700 and its `.git/config` 0600; a stored origin with a token is rewritten without it; the read mirror's stored origin is rewritten too when `PROGRAM_ORIGIN_URL` holds the same address. A mirror cloned by hand with a token, on a host with no `PROGRAM_ORIGIN_URL`, keeps the token (it has no other home): the host makes that config file private and logs how to move the token into `PROGRAM_ORIGIN_URL`. Nothing is deleted. If other people have accounts on the machine, treat the old token as exposed and replace it. Also run `chmod 600 ~/programos/.env ~/.config/systemd/user/nanoclaw.service.d/override.conf`.
-5. Run the check, as the bot's user, with the same PART 2 settings exported in the shell:
+5. Run the check, as the agent's user, with the same PART 2 settings exported in the shell:
 
 ```
 cd ~/programos

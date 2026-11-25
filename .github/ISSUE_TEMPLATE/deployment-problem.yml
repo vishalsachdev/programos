@@ -1,5 +1,5 @@
 name: Deployment problem
-description: You followed AGENTS.md and a step failed or the bot does not behave as described.
+description: You followed AGENTS.md and a step failed or the ProgramOS agent does not behave as described.
 labels: ["deployment"]
 body:
   - type: markdown

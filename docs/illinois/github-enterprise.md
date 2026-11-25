@@ -44,7 +44,7 @@ pattern only, so an open-ended pattern accepts more than you mean.
 - Not covered: a clone, fetch or push against github.illinois.edu; campus login
   (SSO) for a deploy key or token; the push webhook
   (`src/channels/github-push-events.ts`) receiving deliveries from that host;
-  network reach from your bot host to github.illinois.edu.
+  network reach from the machine running the ProgramOS agent to github.illinois.edu.
 
 Before the first test message, run the check in `AGENTS.md` ("First start",
 step 5): `npx tsx scripts/check-host-git-trust.ts --network`. Only the host

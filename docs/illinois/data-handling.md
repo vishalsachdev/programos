@@ -15,10 +15,10 @@ This page is for a team at the University of Illinois that runs ProgramOS. It ad
 | 5 | Has the inbound mail intake service, and the provider it runs at, gone through vendor review? If campus mail is used instead, what does that path store? | Not verified | Same, and the campus mail administrators |
 | 6 | Has Telegram gone through vendor review for operator alerts that carry addresses and subject lines? | Not verified | Same |
 | 7 | Has the git host of the knowledge-base repo gone through vendor review for that class of data? Is the repo in an organization the university controls? | Not verified | Same |
-| 8 | Is the machine that runs the bot an approved place for that class of data? | Not verified | Same, and the unit's IT staff |
+| 8 | Is the machine that runs the ProgramOS agent an approved place for that class of data? | Not verified | Same, and the unit's IT staff |
 | 9 | Who signs off: which role approves this use of data for the unit, and does the sign-off name the vendors and the data class? | Not verified | The unit head, who can say which university office must also sign |
 | 10 | Which records-retention schedule applies to the audit log and the mail copies, and who performs a removal from git history when one is required? | Not verified | The university's records office |
-| 11 | What must senders be told before they write to the bot? | Not verified | The privacy office |
+| 11 | What must senders be told before they write to the agent? | Not verified | The privacy office |
 
 The office names above are roles, not confirmed office titles. Find the current office for each role and write its name in the table when you have it.
 
@@ -26,4 +26,4 @@ The code can send the agent's and the sensor's calls to Claude on Microsoft Foun
 
 ## Until the items are answered
 
-Use the conservative default in [`../data-handling.md`](../data-handling.md), "Decide before go-live": staff senders only, no student records, the reply sensor off. Tell the pilot team in writing that mail naming a student does not go to the bot. That default is a way to limit exposure while the questions are open. It is not a statement that the pilot meets university policy or FERPA; only the offices above can say that.
+Use the conservative default in [`../data-handling.md`](../data-handling.md), "Decide before go-live": staff senders only, no student records, the reply sensor off. Tell the pilot team in writing that mail naming a student does not go to the ProgramOS agent. That default is a way to limit exposure while the questions are open. It is not a statement that the pilot meets university policy or FERPA; only the offices above can say that.

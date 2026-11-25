@@ -50,6 +50,9 @@ OWNED = [
 ]
 
 
+EXCLUDED = ['docs/framework']
+
+
 def owned(rel):
     # casefold: on a case-insensitive disk 'readme.md' is the owned README.md
     r = rel.casefold()
@@ -216,7 +219,8 @@ def main():
             sys.exit(f'hand-edits.patch did not apply; resolve by hand in {tmp}')
 
     # Local patches can change the snapshot too. Drop upstream manuals last.
-    remove(inside(tmp, 'docs/framework'))
+    for rel in EXCLUDED:
+        remove(inside(tmp, rel))
     new = files(tmp)
     bad = sorted(f for f in new if owned(f) or os.path.islink(os.path.join(tmp, f)))
     if bad:

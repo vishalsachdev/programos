@@ -1,9 +1,12 @@
 """Tests for the safety rules of export.py. Run: python3 -m unittest discover scripts/upstream-sync"""
-import os, subprocess, sys, tempfile, unittest
+import io, os, shutil, subprocess, sys, tempfile, unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import repo_patch
 import export  # noqa: E402
 
 
@@ -192,28 +195,48 @@ class ScrubTest(unittest.TestCase):
 
 
 class ExportSnapshotTest(unittest.TestCase):
+    def export_fixture(self, root):
+        source = root / 'source'
+        manuals = source / 'docs/framework'
+        manuals.mkdir(parents=True)
+        (manuals / 'manual.md').write_text('upstream manual')
+        (source / 'docs/other.md').write_text('other guide')
+        subprocess.run(['git', 'init', '-q'], cwd=source, check=True)
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True)
+        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.org',
+                        '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'],
+                       cwd=source, check=True)
+        (root / 'rules.tsv').touch()
+        (root / 'delete.txt').touch()
+        (root / 'deny.txt').write_text('unused-deny-term')
+        subprocess.run([sys.executable, os.path.join(HERE, 'export.py'),
+                        source, 'HEAD', root], check=True, capture_output=True,
+                       text=True, env={**os.environ, 'TMPDIR': str(root)})
+        snapshot, = root.glob('upstream-export-*')
+        return source, snapshot
+
     def test_framework_manuals_are_absent_from_export(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            source = root / 'source'
-            manuals = source / 'docs/framework'
-            manuals.mkdir(parents=True)
-            (manuals / 'manual.md').write_text('upstream manual')
-            (source / 'docs/other.md').write_text('other guide')
-            subprocess.run(['git', 'init', '-q'], cwd=source, check=True)
-            subprocess.run(['git', 'add', '.'], cwd=source, check=True)
-            subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.org',
-                            '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'],
-                           cwd=source, check=True)
-            (root / 'rules.tsv').touch()
-            (root / 'delete.txt').touch()
-            (root / 'deny.txt').write_text('unused-deny-term')
-            subprocess.run([sys.executable, os.path.join(HERE, 'export.py'),
-                            source, 'HEAD', root], check=True, capture_output=True,
-                           text=True, env={**os.environ, 'TMPDIR': folder})
-            snapshot, = root.glob('upstream-export-*')
+            _, snapshot = self.export_fixture(Path(folder))
             self.assertFalse((snapshot / 'docs/framework').exists())
             self.assertEqual((snapshot / 'docs/other.md').read_text(), 'other guide')
+
+    def test_consolidated_patch_applies_to_next_raw_export(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, snapshot = self.export_fixture(root)
+            shutil.rmtree(source / 'docs/framework')
+            (source / 'docs/other.md').write_text('local edit')
+            # Removing the baseline exclusion would add a deletion for the
+            # manual already missing from the next raw export.
+            with patch.multiple(repo_patch, REPO=str(source), HERE=str(root),
+                                BASELINE='HEAD', BEFORE=[]), redirect_stdout(io.StringIO()):
+                self.assertEqual(repo_patch.main([]), 0)
+                patch_file = str(root / repo_patch.PATCH)
+                repo_patch.git(snapshot, 'apply', '--check', patch_file)
+                repo_patch.git(snapshot, 'apply', patch_file)
+                self.assertEqual((snapshot / 'docs/other.md').read_text(), 'local edit')
+                self.assertEqual(repo_patch.main(['--check']), 0)
 
 
 class InputsGuardTest(unittest.TestCase):

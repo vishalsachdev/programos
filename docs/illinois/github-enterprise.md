@@ -23,20 +23,22 @@ in this private repository. Record the office's written answer here.
 
 ## Set the repository address
 
-Set both variables in the host process environment. Replace the organisation
-and repository placeholders with the unit's exact names. In the pattern, write
-any literal dot in a name as `[.]`. Keep both anchors so only that repository matches.
+Set both settings in the host process environment, in the same form as
+`config/instance.env.example`. Replace `your-org` with the unit's Illinois
+organisation and `your-program-repo` with the repository's exact name. In the
+pattern, write any literal dot in a name as `[.]`. Keep both anchors so only
+that repository matches.
 
-```sh
-export PROGRAM_ORIGIN_URL='git@github.com:<illinois-org>/<repo>.git'
-export PROGRAM_ORIGIN_PATTERN='^git@github[.]com:<illinois-org>/<repo>([.]git)?$'
+```
+PROGRAM_ORIGIN_URL=git@github.com:your-org/your-program-repo.git
+PROGRAM_ORIGIN_PATTERN=^git@github[.]com:your-org/your-program-repo([.]git)?$
 ```
 
 For HTTPS, use the repository's HTTPS address and the matching pattern:
 
-```sh
-export PROGRAM_ORIGIN_URL='https://github.com/<illinois-org>/<repo>.git'
-export PROGRAM_ORIGIN_PATTERN='^https://([A-Za-z0-9_.~:-]+@)?github[.]com/<illinois-org>/<repo>([.]git)?$'
+```
+PROGRAM_ORIGIN_URL=https://github.com/your-org/your-program-repo.git
+PROGRAM_ORIGIN_PATTERN=^https://([A-Za-z0-9_.~:-]+@)?github[.]com/your-org/your-program-repo([.]git)?$
 ```
 
 Use github.com for these settings. On 2026-11-25, `dig +short github.illinois.edu`

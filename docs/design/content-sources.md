@@ -2,21 +2,21 @@
 
 > **Design note.** The code supports extra read-only mounts. The patterns below are guidance written 2026-05, before the code was in this repo; check each detail against the code before you rely on it.
 
-Most academic units already keep their content somewhere — Box, SharePoint, a network share, a faculty member's Google Drive. ProgramOS lets you mount that content into the agent container as a **read-only extra source** while keeping the program repo as the system of record for everything the bot *does* (decisions, audit log, skills).
+Most academic units already keep their content somewhere — Box, SharePoint, a network share, a faculty member's Google Drive. ProgramOS lets you mount that content into the agent container as a **read-only extra source** while keeping the program repo as the system of record for everything the ProgramOS agent *does* (decisions, audit log, skills).
 
 This doc covers three patterns for relating an external content store to ProgramOS, the recommended default, and the design components that make the recommended pattern work.
 
 ## The three patterns
 
-| Pattern | Where the team edits content | Source of truth for *content* | Source of truth for *bot ops* (decisions, audit, skills) | When to pick |
+| Pattern | Where the team edits content | Source of truth for *content* | Source of truth for *agent ops* (decisions, audit, skills) | When to pick |
 |---|---|---|---|---|
 | **A. Git-only** | Program repo (web UI / PRs) | Git | Git | Greenfield unit with no legacy content store. Cleanest, but most teams won't migrate from where they already work. |
-| **B. Coexist + bot-as-frontend** *(recommended default)* | The team's existing store (Box, SharePoint, etc.) | The external store | Git | Most academic units. Zero behavior change for the team — they keep editing where they already work and ask the bot through Telegram/email/web. |
-| **C. Mirror** | The team's existing store | Git (synced from the store on a cron) | Git | High-audit units (NSF deliverables, accreditation, IRB review of past document versions). You want a tamper-evident snapshot of *every* doc at every point in time, not just the ones the bot happened to cite. |
+| **B. Coexist + agent-as-frontend** *(recommended default)* | The team's existing store (Box, SharePoint, etc.) | The external store | Git | Most academic units. Zero behavior change for the team — they keep editing where they already work and ask the agent through Telegram/email/web. |
+| **C. Mirror** | The team's existing store | Git (synced from the store on a cron) | Git | High-audit units (NSF deliverables, accreditation, IRB review of past document versions). You want a tamper-evident snapshot of *every* doc at every point in time, not just the ones the agent happened to cite. |
 
-## Recommended default: B (coexist + bot-as-frontend)
+## Recommended default: B (coexist + agent-as-frontend)
 
-The bot becomes the asking surface. Users don't need to know whether a fact lives in Box or git — they just ask. Behind the scenes the agent reads from both stores per a precedence rule, labels every claim with its source, and snapshots cited content into the audit log so the historical record stays answerable even if the source file changes later.
+The agent becomes the asking surface. Users don't need to know whether a fact lives in Box or git — they just ask. Behind the scenes the agent reads from both stores per a precedence rule, labels every claim with its source, and snapshots cited content into the audit log so the historical record stays answerable even if the source file changes later.
 
 This pattern requires four design components. They are non-negotiable for production — skipping any one of them breaks the audit story.
 
@@ -24,10 +24,10 @@ This pattern requires four design components. They are non-negotiable for produc
 
 | Read | Write |
 |---|---|
-| Program repo (`/workspace/extra/<program-repo>`) — git, includes the bot's own captured decisions, audit log, skills | Program repo only |
+| Program repo (`/workspace/extra/<program-repo>`) — git, includes the ProgramOS agent's own captured decisions, audit log, skills | Program repo only |
 | Extra content mount (`/workspace/extra/<source-name>`) — read-only mount of the team's external store | — |
 
-The bot never writes to the external store. The team never has to worry the bot will overwrite their docs.
+The agent never writes to the external store. The team never has to worry the agent will overwrite their docs.
 
 ### 2. Precedence rule (encoded in every per-channel prompt)
 
@@ -37,13 +37,13 @@ The bot never writes to the external store. The team never has to worry the bot 
 
 ### 3. Snapshot-with-cite (the audit fix)
 
-When the bot cites a file from an extra mount, the audit-log entry for that turn MUST embed:
+When the ProgramOS agent cites a file from an extra mount, the audit-log entry for that turn MUST embed:
 
 - the cited excerpt verbatim (not just the file path),
 - the sha256 of the file at read time,
 - the read timestamp.
 
-Why: the file may be edited the next day. Without snapshot-with-cite, "what did the bot tell the dean on Mar 15, and what was it looking at?" is unanswerable. With it, the answer survives any number of edits to the source file.
+Why: the file may be edited the next day. Without snapshot-with-cite, "what did the agent tell the dean on Mar 15, and what was it looking at?" is unanswerable. With it, the answer survives any number of edits to the source file.
 
 For program-repo citations, the git commit SHA already pins the file content — no snapshot needed; the audit entry just records the SHA.
 
@@ -54,25 +54,25 @@ Every claim must be labeled with its source so users and auditors can trace it. 
 - Program repo: `[program:program/policies/admissions.md]` or for decisions, `[git:discussions/DECISIONS.md#2026-04-12-transfer-credit]`
 - Extra mount: `[<source-name>:<path>, read <ISO timestamp>]`, e.g. `[box:syllabi/BADM550-S26.pdf, read 2026-05-02T14:31Z]`
 
-The read timestamp on extra-mount citations is load-bearing — it tells the reader "this is what the file said when the bot read it; it may have changed since."
+The read timestamp on extra-mount citations is load-bearing — it tells the reader "this is what the file said when the ProgramOS agent read it; it may have changed since."
 
 **Web chat exception.** The web chat channel is a public surface — internal storage details (program-repo paths, Box folder names) should not appear in user-visible replies. On web chat, the source-label requirement applies to the **audit-log entry** (so internal reviewers can still trace every claim) but not to the public reply text. The web chat agent prompt enforces this; see `examples/groups/webchat/CLAUDE.md`. All other channels show source labels in both the reply and the audit log.
 
 ### Curated mounts, not whole drives
 
-Whatever you mount is visible to the agent and indexable. Mount **one curated subfolder per bot**, not the whole external store. For Box, this means a single Box folder per unit, owned by a service identity, populated with only the files the bot is allowed to cite. Don't mount someone's full `~/Library/CloudStorage/Box-Box` and hope the prompt keeps the agent in bounds.
+Whatever you mount is visible to the agent and indexable. Mount **one curated subfolder per agent**, not the whole external store. For Box, this means a single Box folder per unit, owned by a service identity, populated with only the files the agent is allowed to cite. Don't mount someone's full `~/Library/CloudStorage/Box-Box` and hope the prompt keeps the agent in bounds.
 
 ## When pattern C is worth the cost
 
 Pick **C (mirror)** instead of B when:
 
-- An external auditor or accreditor will ask "what did the syllabus look like on date X?" for files the bot may not have cited that day.
+- An external auditor or accreditor will ask "what did the syllabus look like on date X?" for files the ProgramOS agent may not have cited that day.
 - Compliance requires that *every* version of every doc is preserved tamper-evidently, not just the ones referenced in audit-log snapshots.
 - You need to diff doc versions across time for analysis ("how did our admissions policy change over two years?").
 
-The cost of C: a sync daemon (`rclone` with the Box backend, or a small Box SDK script under cron) commits any changes from the external store into the program repo as a `box-sync@<unit>.bot` identity. You inherit conflict handling, large-binary git bloat, and minutes of sync lag. The bot then reads from git only, never from a live external mount.
+The cost of C: a sync daemon (`rclone` with the Box backend, or a small Box SDK script under cron) commits any changes from the external store into the program repo as a `box-sync@<unit>.bot` identity. You inherit conflict handling, large-binary git bloat, and minutes of sync lag. The agent then reads from git only, never from a live external mount.
 
-If you adopt C, the precedence rule simplifies (everything is in git) but you lose the "edit live in the store and the bot sees it instantly" property. Most units don't need that loss.
+If you adopt C, the precedence rule simplifies (everything is in git) but you lose the "edit live in the store and the agent sees it instantly" property. Most units don't need that loss.
 
 ## Worked example: Box on Tier 1 (laptop)
 
@@ -81,7 +81,7 @@ The fastest concrete setup, useful for most UIUC units.
 ### Prerequisites
 
 - Box Drive installed on the laptop. On macOS this mounts under `~/Library/CloudStorage/Box-Box/`.
-- A Box folder for this bot, e.g. `Box/<unit>/bot-content/`. Populate it only with files the bot is allowed to cite. Keep the curated set small at first (a dozen policies + the current syllabi).
+- A Box folder for this agent, e.g. `Box/<unit>/bot-content/`. Populate it only with files the agent is allowed to cite. Keep the curated set small at first (a dozen policies + the current syllabi).
 - ProgramOS deployed on a laptop (the "Trial" stage in [`docs/deployment.md`](../deployment.md); this note calls it Tier 1).
 
 ### Mount it
@@ -114,29 +114,29 @@ Either way, the agent prompt and citation rules don't change. Only the mount sou
 
 ### A note on credentials
 
-Box Drive uses the *user's* credentials (whoever logged into the Box Drive client). For Tier 1 that's the laptop owner. For Tier 2/3 the bot needs a **service account** in Box (or an enterprise app with read scope on the curated folder). Don't reuse a personal Box account on a shared VPS.
+Box Drive uses the *user's* credentials (whoever logged into the Box Drive client). For Tier 1 that's the laptop owner. For Tier 2/3 the ProgramOS agent needs a **service account** in Box (or an enterprise app with read scope on the curated folder). Don't reuse a personal Box account on a shared VPS.
 
-## Bot-proposed mount additions
+## Agent-proposed mount additions
 
-Once the bot is running, stakeholders will ask about content the bot can't see — a SharePoint site that wasn't mounted at launch, a new Box folder a partner started using, a shared drive someone forgot to add. The bot can't add a mount itself: that's a host-side change to the container-runner config, deliberately outside the agent's reach (see the "Mounts" safety item in [`AGENTS.md`](../../AGENTS.md)).
+Once the agent is running, stakeholders will ask about content the agent can't see — a SharePoint site that wasn't mounted at launch, a new Box folder a partner started using, a shared drive someone forgot to add. The agent can't add a mount itself: that's a host-side change to the container-runner config, deliberately outside the agent's reach (see the "Mounts" safety item in [`AGENTS.md`](../../AGENTS.md)).
 
-What the bot CAN do is **propose** the addition through the same agent-proposes / human-approves mechanism that backs the learning loop ([`learning-loop.md`](./learning-loop.md)):
+What the agent CAN do is **propose** the addition through the same agent-proposes / human-approves mechanism that backs the learning loop ([`learning-loop.md`](./learning-loop.md)):
 
 - The agent detects the gap ("user asked about the FY27 partnership documents three times this week; I have no source containing them") and, in status-update mode, opens a PR against a `MOUNTS.md` file in the program repo (a file this design proposes; the template does not have it and no code reads it) proposing the new mount: source name, host path, container target path, suggested service identity, and the audit-log entries that motivated the proposal.
 - A human reviewer evaluates the proposal — is this the right folder, who owns it, what's the privacy posture — and either merges or rejects.
 - On merge, the human (or a deploy script) makes the host-side change: install/configure the sync (Box Drive, rclone, etc.), update the container-runner bind mounts, restart the container.
-- The bot picks up the new mount on next invocation and starts citing it per the standard precedence + source-labeling rules.
+- The agent picks up the new mount on next invocation and starts citing it per the standard precedence + source-labeling rules.
 
 What stays out of scope:
 
-- The bot does **not** install software, configure OAuth, or modify the container-runner config. Those are host actions a human takes.
-- The bot does **not** auto-merge its own mount-addition PRs. Same rule as skills.
+- The agent does **not** install software, configure OAuth, or modify the container-runner config. Those are host actions a human takes.
+- The agent does **not** auto-merge its own mount-addition PRs. Same rule as skills.
 - The proposal is a recommendation backed by audit-log evidence; the human still owns the privacy and curation decision (which subfolder, which credentials, what's safe to expose).
 
-In effect: the bot can detect *that* a content gap exists and propose *what* to mount; a human decides *whether* and *how*. Same trust model as everything else in this spec.
+In effect: the agent can detect *that* a content gap exists and propose *what* to mount; a human decides *whether* and *how*. Same trust model as everything else in this spec.
 
 ## What this is NOT
 
-- It is not a sync layer. The bot doesn't write back to Box. If a decision needs to land in a Box document, a human edits the Box doc.
-- It is not a full-text search index. If the bot needs to search across hundreds of Box files quickly, layer an FTS5 index on top of a periodic snapshot of the mount (same pattern as the audit-log search in [`learning-loop.md`](./learning-loop.md)). The mount itself is for reading specific files the agent has decided to cite.
-- It is not a substitute for the program repo. The program repo holds what the team has agreed on, what the bot has captured, and what the audit log records. The external mount holds work-in-progress content. They serve different jobs.
+- It is not a sync layer. The ProgramOS agent doesn't write back to Box. If a decision needs to land in a Box document, a human edits the Box doc.
+- It is not a full-text search index. If the agent needs to search across hundreds of Box files quickly, layer an FTS5 index on top of a periodic snapshot of the mount (same pattern as the audit-log search in [`learning-loop.md`](./learning-loop.md)). The mount itself is for reading specific files the agent has decided to cite.
+- It is not a substitute for the program repo. The program repo holds what the team has agreed on, what the agent has captured, and what the audit log records. The external mount holds work-in-progress content. They serve different jobs.

@@ -19,7 +19,7 @@ The code in this repo as it is shipped:
 - The agent in the container reaching files outside its mounts, the host's credentials, or the model provider without the host proxy.
 - A webhook that accepts a request with a missing or wrong secret or signature (`src/channels/webhook.ts`, `src/channels/resend-events.ts`, `src/channels/github-push-events.ts`).
 - A change to a protected governance file that the guard and the git-author check both miss.
-- A message that makes the bot change roles or access, send mail to an address that is in neither the allowlist nor the inbound mail, or write a false entry to the audit log.
+- A message that makes the ProgramOS agent change roles or access, send mail to an address that is in neither the allowlist nor the inbound mail, or write a false entry to the audit log.
 - A real secret or a real person's data in this repo or its history.
 - A fault in the export tool (`scripts/upstream-sync/`) that would let private content through its scan.
 

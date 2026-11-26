@@ -3,9 +3,9 @@
 [![CI](https://github.com/vishalsachdev/programos/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vishalsachdev/programos/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-A coordinator bot for a project or program team, and the knowledge base it keeps. Clone this repo, adapt it with your coding agent, and run it.
+The ProgramOS agent coordinates work for a project or program team and keeps its knowledge base. Clone this repo, adapt it with your coding agent, and run it.
 
-The bot answers questions from an allowlisted team by email (and Telegram for the admin), with citations into a git repo that is the team's source of truth. It records decisions, action items and open questions in that repo, sends reminders, routes approval requests to the right person, checks its replies before they are sent, and keeps an audit log.
+The ProgramOS agent answers questions from an allowlisted team by email (and Telegram for the admin), with citations into a git repo that is the team's source of truth. It records decisions, action items and open questions in that repo, sends reminders, routes approval requests to the right person, checks its replies before they are sent, and keeps an audit log.
 
 > **Status: first public version (2026-11-14).** The code in this repo is a first export. `AGENTS.md`, the settings example and the governance doc are new. The code is the source of truth; older docs that restated it were removed.
 
@@ -13,7 +13,7 @@ The bot answers questions from an allowlisted team by email (and Telegram for th
 
 | Part | Where |
 |---|---|
-| The bot: host process, channels, delivery gate, audit log, scheduler, approvals | `src/` |
+| The ProgramOS agent: host process, channels, delivery gate, audit log, scheduler, approvals | `src/` |
 | The agent that runs in a container for each message, and its skills | `container/` |
 | The agent's instructions for each channel | `groups/` |
 | Setup wizard and operations script examples | `setup/`, `scripts/` |
@@ -21,7 +21,7 @@ The bot answers questions from an allowlisted team by email (and Telegram for th
 | Instructions for your coding agent | [`AGENTS.md`](./AGENTS.md) |
 | A skeleton for your knowledge-base repo | [`templates/program-repo/`](./templates/program-repo/) |
 | Settings to fill in | [`config/instance.env.example`](./config/instance.env.example) |
-| The rules the bot works under, and why each exists | [`docs/12-governance.md`](./docs/12-governance.md) |
+| The rules the agent works under, and why each exists | [`docs/12-governance.md`](./docs/12-governance.md) |
 | The design, as a spec | [`SPEC.md`](./SPEC.md), [`ARCHITECTURE.md`](./ARCHITECTURE.md), `docs/` |
 
 ## Where the code comes from
@@ -31,7 +31,7 @@ The code is a close copy of **K-ai**, a coordinator for one online master's prog
 Two things follow from that choice:
 
 - **You get what was tested in real use**, not a cleaned-up rewrite that nobody has run.
-- **Some identity values are still written in the code as placeholders** (the bot's name, the operator, the channel group names). Your coding agent replaces them. [`AGENTS.md`](./AGENTS.md) lists each one and where it lives.
+- **Some identity values are still written in the code as placeholders** (the ProgramOS agent's name, the operator, the channel group names). Your coding agent replaces them. [`AGENTS.md`](./AGENTS.md) lists each one and where it lives.
 
 K-ai stays the source. This repo takes its changes through a repeatable export. See [`UPSTREAM.md`](./UPSTREAM.md).
 
@@ -39,17 +39,17 @@ K-ai stays the source. This repo takes its changes through a repeatable export. 
 
 A team that runs a project, a program, a grant, a lab or a unit, and wants one place where questions get answered from the record and decisions get written down. The examples in the prompts come from an academic program (courses, faculty, curriculum), because that is where the code was tested. The mechanisms are not specific to it.
 
-You need: a host that can run Docker, a mail address for the bot, a git host for the knowledge base, and an AI service your organization allows your mail to reach. Check that last point first.
+You need: a host that can run Docker, a mail address for the ProgramOS agent, a git host for the knowledge base, and an AI service your organization allows your mail to reach. Check that last point first.
 
 ## Start
 
-**Not technical? Read [`docs/start-here.md`](./docs/start-here.md) first.** It says in plain words what this is, what you need, and what your agent will ask you.
+**Not technical? Read [`docs/start-here.md`](./docs/start-here.md) first.** It says in plain words what this is, what you need, and what your coding agent will ask you.
 
 1. Clone this repo.
 2. Open it with your coding agent (Claude Code, Codex, Cursor or another) and say: "Read `AGENTS.md` and help me adapt this for my project."
-3. The agent first asks whether you are setting this up at the University of Illinois or somewhere else. That picks the pages it uses with you: the **Illinois track** ([`docs/illinois/`](./docs/illinois/README.md): what the university's public pages say, and the questions only its offices can answer) or the **general track** ([`docs/general/`](./docs/general/README.md): your own domain, a cloud virtual machine, the default mail provider or SMTP, the intake worker, Telegram or email alerts). The code is the same on both.
-4. The agent explains three ways to start and asks which you want: **Try it** (one person, a laptop, Telegram only), **Pilot** (a small always-on machine, email, a handful of allowlisted colleagues; the recommended first version), or **Institutional** (the same on services your institution has approved).
-5. The agent asks you six policy questions before it changes anything: which AI service is allowed, who approves, which address the bot uses, where data lives, what senders are told, and which channels you want. It asks one thing at a time, explains each choice, and writes your answers down.
+3. The coding agent first asks whether you are setting this up at the University of Illinois or somewhere else. That picks the pages it uses with you: the **Illinois track** ([`docs/illinois/`](./docs/illinois/README.md): what the university's public pages say, and the questions only its offices can answer) or the **general track** ([`docs/general/`](./docs/general/README.md): your own domain, a cloud virtual machine, the default mail provider or SMTP, the intake worker, Telegram or email alerts). The code is the same on both.
+4. The coding agent explains three ways to start and asks which you want: **Try it** (one person, a laptop, Telegram only), **Pilot** (a small always-on machine, email, a handful of allowlisted colleagues; the recommended first version), or **Institutional** (the same on services your institution has approved).
+5. The coding agent asks you six policy questions before it changes anything: which AI service is allowed, who approves, which address the ProgramOS agent uses, where data lives, what senders are told, and which channels you want. It asks one thing at a time, explains each choice, and writes your answers down.
 6. It creates your knowledge-base repo, fills in settings, replaces placeholders, and keeps the tests passing.
 7. You review a test exchange. You decide when to deploy.
 
@@ -72,7 +72,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 |------|----------------|-------------------|
 | [`SPEC.md`](./SPEC.md) | The contract: components, channels, modes, knowledge-base layout, audit log, governance | Yes (rewritten 2026-11-14) |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How the parts fit and who owns each | Yes (rewritten 2026-11-14) |
-| [`docs/start-here.md`](./docs/start-here.md) | For the person, in plain words: what this is, what you need, the three ways to start, what your agent will ask | Yes; repeats `AGENTS.md` |
+| [`docs/start-here.md`](./docs/start-here.md) | For the person, in plain words: what this is, what you need, the three ways to start, what your coding agent will ask | Yes; repeats `AGENTS.md` |
 | [`AGENTS.md`](./AGENTS.md) | The guide for your coding agent: how to guide a person who is not technical, the three ways to start, every setup choice, what to replace, safety items, first start | Yes; checked against the code in review. A test checks that it names every setting |
 | [`docs/setup-reference.md`](./docs/setup-reference.md) | Every setting key, the inbound mail contract, the two optional webhooks | Yes; the same test |
 | [`templates/program-repo/`](./templates/program-repo/) | Starter knowledge-base repo, in the formats the code parses | Yes; `src/program-repo-template.test.ts` runs the real parsers over it |
@@ -85,7 +85,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/illinois/data-handling.md`](./docs/illinois/data-handling.md) | One university's open data questions, none verified | Open items only |
 | [`docs/illinois/hosting.md`](./docs/illinois/hosting.md) | Getting a virtual machine in the university's Azure: what its public pages say, and the open questions | Quotes from public pages read 2026-11-20; the rest not verified |
 | [`inbound/README.md`](./inbound/README.md) | The mail intake worker: setup, the files and payload it writes, failure handling, what was not verified | Yes; its output is run through the real webhook handler in a test |
-| [`docs/illinois/email-quickstart.md`](./docs/illinois/email-quickstart.md) | One university: a unit mailbox that redirects to the bot's domain, the intake worker, and the reply by the default provider or SMTP | Yes for the settings and the flow (rewritten 2026-11-20); never run end to end. University claims quoted from public pages or marked not verified |
+| [`docs/illinois/email-quickstart.md`](./docs/illinois/email-quickstart.md) | One university: a unit mailbox that redirects to the ProgramOS agent's domain, the intake worker, and the reply by the default provider or SMTP | Yes for the settings and the flow (rewritten 2026-11-20); never run end to end. University claims quoted from public pages or marked not verified |
 | [`docs/illinois/institutional-address.md`](./docs/illinois/institutional-address.md) | One university: what sending as a campus address needs, and the questions to ask its central IT office | One public page quoted; the rest not verified |
 | [`docs/illinois/mail-authentication.md`](./docs/illinois/mail-authentication.md) | One university: how to read the mail server names for sender authentication off a real forwarded message | Open items only; not verified |
 | [`docs/illinois/github-enterprise.md`](./docs/illinois/github-enterprise.md) | Illinois Shared GitHub Service requests, access, data rules and repository address | Public guidance checked. Unit approval and live access unverified |
@@ -102,7 +102,7 @@ The code is the source of truth. The documents below cover what the code cannot 
 | [`docs/12-governance.md`](./docs/12-governance.md) | The numbered rules and how to change one | Draft |
 | [`site/`](./site/) | The public page and its deploy script | Yes |
 | [`docs/reminder-registry.md`](./docs/reminder-registry.md) | Template for the list of scheduled jobs | Yes |
-| [`docs/evaluation-protocol.md`](./docs/evaluation-protocol.md), [`docs/capability-scenarios.md`](./docs/capability-scenarios.md) | How the bot is evaluated | Yes |
+| [`docs/evaluation-protocol.md`](./docs/evaluation-protocol.md), [`docs/capability-scenarios.md`](./docs/capability-scenarios.md) | How the agent is evaluated | Yes |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | How the repo takes changes: exported code and owned files, the patch-file rule, the checks to run | Yes |
 | [`SECURITY.md`](./SECURITY.md) | How to report a security problem and what is in scope | Yes |
 | [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) | The Contributor Covenant, adopted by reference | Contact address not yet filled in |

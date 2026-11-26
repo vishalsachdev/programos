@@ -50,7 +50,7 @@ How the parts of ProgramOS fit, and who owns each.
 |-------|-------|----------------|
 | Router, queue, container runner, store, credential proxy | The framework, as exported | Rarely. A change here makes each later export harder to take. |
 | Channel handlers, delivery gate, audit log, scheduler, approvals | This repo, as exported from the reference deployment | When your project needs different behavior. Keep the governance rule numbers. |
-| Identity values (bot name, operator, mail domains, group names) | You | Always. `AGENTS.md` lists every site. |
+| Identity values (agent name, operator, mail domains, group names) | You | Always. `AGENTS.md` lists every site. |
 | Agent instructions (`groups/`) and skills (`container/skills/`) | You, starting from the tested text | To fit your project's vocabulary and policy |
 | Program repo | You | Always. It is your record. |
 | Governance rules | You, through the change protocol | When a rule's failure cannot happen in your setting, or a new failure appears |

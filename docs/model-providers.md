@@ -52,7 +52,7 @@ Each deployment has a hosting option. It decides what your unit can say about wh
 
 ## 2. Check the endpoint by hand
 
-Run this on the host, before any setting goes into the bot. It sends one short message.
+Run this on the host, before any setting goes into the ProgramOS agent. It sends one short message.
 
 ```
 curl -sS "https://YOUR-RESOURCE.services.ai.azure.com/anthropic/v1/messages" \

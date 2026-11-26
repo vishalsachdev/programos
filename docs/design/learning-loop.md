@@ -24,7 +24,7 @@ The program repo gains a `skills/` directory. Each skill is a markdown file desc
 
 - Every behavior change is a reviewed, signed-off, reverted-able commit.
 - The full history of "what the agent learned and when" is `git log skills/`.
-- Reviewers see *what* changed and *why* (commit message), not just that the bot's behavior shifted.
+- Reviewers see *what* changed and *why* (commit message), not just that the ProgramOS agent's behavior shifted.
 
 **What this does NOT do:**
 
@@ -87,7 +87,7 @@ That language reads well in a "Responsible AI" or "Human-in-the-loop" section wi
 
 ## Related: agent-proposed mount additions
 
-The same proposes-via-PR / humans-merge mechanism extends to content sources: a running bot that detects "users keep asking about content I can't see" can open a PR against a proposed `MOUNTS.md` file in the program repo (not in the template; no code reads it) proposing a new external mount, backed by the audit-log entries that motivated the proposal. A human reviews, makes the host-side mount change, and redeploys. See [`content-sources.md`](./content-sources.md) → "Bot-proposed mount additions."
+The same proposes-via-PR / humans-merge mechanism extends to content sources: a running agent that detects "users keep asking about content I can't see" can open a PR against a proposed `MOUNTS.md` file in the program repo (not in the template; no code reads it) proposing a new external mount, backed by the audit-log entries that motivated the proposal. A human reviews, makes the host-side mount change, and redeploys. See [`content-sources.md`](./content-sources.md) → "Agent-proposed mount additions."
 
 ## Future work (optional research overlay)
 

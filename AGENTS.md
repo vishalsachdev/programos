@@ -12,7 +12,7 @@ every setting key, the inbound mail contract, and the two optional webhooks.
 
 ## 1. What this repo is
 
-- A working coordinator bot: it answers email (and optionally Telegram or web chat)
+- The ProgramOS agent answers email (and optionally Telegram or web chat)
   from an allowlisted team, reads and writes a knowledge-base repo (the "program
   repo"), sends reminders, routes approval requests, gates its replies,
   and keeps an audit log. `SPEC.md` section 11 lists where each guarantee stops.
@@ -135,7 +135,7 @@ Notes for each way to start, on the Illinois track:
   redirect to an outside domain is accepted is not verified. The same pages say
   password logins are disabled for university accounts, so replying as an
   `@illinois.edu` address with the SMTP provider is not expected to work; start
-  with replies from the bot's own domain.
+  with replies from the ProgramOS agent's own domain.
 - *Institutional:* add `model-foundry.md`, `hosting.md` (the Azure request
   page and its open questions) and `data-handling.md`; the sign-off questions
   there come first.
@@ -150,13 +150,13 @@ move up without starting again. "First start" means part 14.
 
 ### (a) Try it: one person, one laptop
 
-- **What you get:** the bot answers the person's own questions in one private
+- **What you get:** the ProgramOS agent answers the person's own questions in one private
   Telegram chat, from a small knowledge-base repo, with citations.
 - **What you need:** a laptop that can run Docker and Node; an account with the
   model provider and its key (choice 1); a Telegram account and a bot token (ask
   Telegram's BotFather for one); a private repo on a git host for the knowledge
   base, started from `templates/program-repo/`.
-- **Why a git host even for a trial:** the bot reads the list of allowed Telegram
+- **Why a git host even for a trial:** the agent reads the list of allowed Telegram
   handles from a mirror that it clones from the program repo's origin
   (`src/repo-reader.ts`, `src/channels/telegram-allowlist.ts`). With a real
   origin, `PROGRAM_ORIGIN_PATTERN`, `INSTITUTION_DOMAIN` and `ADMIN_AUTHOR_EMAILS`
@@ -178,7 +178,7 @@ move up without starting again. "First start" means part 14.
 ### (b) Pilot: the recommended MVP
 
 - **What you get:** a handful of allowlisted colleagues write to one mail
-  address. The bot answers from the knowledge base with citations, records
+  address. The ProgramOS agent answers from the knowledge base with citations, records
   decisions and action items, routes approval requests, checks each reply at the
   delivery gate, writes the audit log, and alerts the operator when something fails.
 - **What you need:**
@@ -201,7 +201,7 @@ move up without starting again. "First start" means part 14.
     questions).
 - **What it does NOT give you:** no channel for students or the public; no
   single sign-on; no retention or deletion of old mail (the code never deletes
-  from the program repo; the bot's own machine keeps its stores forever unless
+  from the program repo; the agent's own machine keeps its stores forever unless
   you set a period, choice 14); one outbound mail service at a time, with no
   fallback to another; no web search, web fetch or
   browsing for the agent unless you turn them on (choice 17). Sender caps are in
@@ -255,7 +255,7 @@ the person. The pilot is not done until every line is ticked or has a written re
 
 ### (c) Institutional: approved services only
 
-- **What you get:** the same bot and the same code as the pilot, placed on
+- **What you get:** the same agent and the same code as the pilot, placed on
   services the institution has approved.
 - **What you need,** in addition to the pilot:
   - a virtual machine from a host the institution approves for this data. The
@@ -271,7 +271,7 @@ the person. The pilot is not done until every line is ticked or has a written re
     (`docs/setup-reference.md`, "Inbound mail");
   - the knowledge-base repo on the institution's git host if it has one, such as
     a university-managed organisation on github.com (choice 7). If that host gives the agent an HTTPS
-    token and not an SSH key, and other people have accounts on the bot's
+    token and not an SSH key, and other people have accounts on the agent's
     machine, read choice 18 with the person who runs the machine;
   - a written sign-off on data handling from the offices that approve it. Take
     them `docs/data-handling.md`.
@@ -333,13 +333,13 @@ matching choice in part 5.
    chat replies only; `SENSOR_EMAIL_REPLIES=1` makes it check email replies
    too, which sends their text to that destination (choice 2).
 2. **Who may approve records and access changes?** (the admin and any approvers)
-3. **Which address does the bot send from?** And which mail provider delivers it.
+3. **Which address does the ProgramOS agent send from?** And which mail provider delivers it.
    An address on a domain the team controls works today with the default
    provider. An address on the institution's own mail domain needs that
-   institution's mail system to accept a login from the bot (choice 6, option
+   institution's mail system to accept a login from the agent (choice 6, option
    (b)); only the mail administrators can say whether it does. Do not tell the
    user it is allowed. ASK them to get the answer in writing.
-4. **Where does the data live?** The host for the bot, and the git host for the program repo.
+4. **Where does the data live?** The host for the agent, and the git host for the program repo.
 5. **What consent wording do senders see**, if any, and who is on the allowlist.
 6. **Which channels?** Email only is the simplest. Telegram and web chat are optional.
    Ask also where operator alerts should go: Telegram (the default), email to the
@@ -363,7 +363,7 @@ Two places hold settings. Keys marked **(.env)** go in the `.env` file. Keys mar
 does nothing for them. `docs/setup-reference.md` has the full table.
 
 **1. Model provider, and the order of providers**
-- *Plain words:* the bot sends each message, and the files it reads, to an AI
+- *Plain words:* the ProgramOS agent sends each message, and the files it reads, to an AI
   service that writes the reply. You choose which service, and whether a second
   one takes over when the first fails.
 - *Options:* (a) Anthropic directly, with an API key or a Claude subscription
@@ -392,7 +392,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 **2. Reply sensor: on or off, and which provider it uses**
 - *Plain words:* a second check that compares a reply with the facts that must
   not be wrong (the ground-truth files). It makes its own call to an AI service,
-  separate from the bot's.
+  separate from the ProgramOS agent's.
 - *Options:* off; on, following the agent's first provider (the public
   Anthropic API, the endpoint in `ANTHROPIC_BASE_URL`, or Foundry); on with a
   provider chosen on its own.
@@ -404,7 +404,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   it has been sent; it never delays or stops a reply. ASK before turning it on:
   it sends the text of every email reply, the start of the mail it answers and
   knowledge-base excerpts to the sensor's AI service, which is a new place for
-  mail text to go. It does not check mail the bot sends on its own (the
+  mail text to go. It does not check mail the agent sends on its own (the
   `send_email` tool, scheduled mail, operator alerts). `BEHAVIOUR_SENSOR_DISABLED=1`
   turns both off. Tested with the AI service stubbed, not against a live one.
 - *First pilot:* off, and `SENSOR_EMAIL_REPLIES` unset. Turn it on only when
@@ -418,7 +418,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Detail:* policy question 1; part 8; `docs/data-handling.md`.
 
 **3. Channels: email, Telegram, web chat**
-- *Plain words:* the ways people reach the bot.
+- *Plain words:* the ways people reach the ProgramOS agent.
 - *Options and limits:*
   - **Email.** The main channel. Needs choices 5 and 6 and a public HTTPS
     address. Has a per-person allowlist and per-sender daily caps.
@@ -441,7 +441,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 
 **4. Where operator alerts go**
 - *Plain words:* when a reply is refused, a mail bounces or a check fails, the
-  bot tells one person, the operator. You choose how.
+  agent tells one person, the operator. You choose how.
 - *Options:* Telegram; email to the operator's own mailbox; a Microsoft Teams
   channel, through a Workflows webhook; any mix of these, joined by commas.
 - *Code default:* Telegram. With no bot token, alerts are not delivered.
@@ -463,8 +463,8 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   `docs/teams-alerts.md` for Teams.
 
 **5. Inbound mail intake**
-- *Plain words:* the bot does not receive mail itself. A small separate service
-  receives each message, files a copy in the knowledge-base repo, and tells the bot.
+- *Plain words:* the ProgramOS agent does not receive mail itself. A small separate service
+  receives each message, files a copy in the knowledge-base repo, and tells the agent.
 - *Options:* (a) the worker in `inbound/`, which runs at Cloudflare; (b) a
   service you write for your own mail provider.
 - *Code default:* none. Without an intake service there is no email channel.
@@ -477,19 +477,19 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   settings are in `inbound/wrangler.toml`.
 - *Detail:* part 12; `inbound/README.md`; `docs/setup-reference.md`, "Inbound mail".
   Illinois track: `docs/illinois/email-quickstart.md` (a unit mailbox that
-  redirects to the bot's domain).
+  redirects to the agent's domain).
 
 **6. Outbound mail provider and the from-address**
-- *Plain words:* a mail service that delivers the bot's replies, and the address
+- *Plain words:* a mail service that delivers the ProgramOS agent's replies, and the address
   those replies come from.
 - *Options:*
   - (a) **Your own domain, through Resend.** The default, and the only path
     that has run in production. You prove you control the sending domain with
     DNS records. It cannot send as an address on a domain someone else runs:
     an institution's own mail domain is not supported on this path.
-  - (b) **SMTP submission** (`OUTBOUND_MAIL_PROVIDER=smtp`). The bot logs in
+  - (b) **SMTP submission** (`OUTBOUND_MAIL_PROVIDER=smtp`). The agent logs in
     to a mail server you name, as a mailbox there, and hands it each mail.
-    This is how the bot can send as an address on the institution's mail
+    This is how the agent can send as an address on the institution's mail
     domain, if the institution's mail system allows a program to log in with
     a username and a password or app password. ASK the user to ask the mail
     administrators; do not assume it. New in this repo (2026-11-20), tested
@@ -498,9 +498,9 @@ does nothing for them. `docs/setup-reference.md` has the full table.
     implemented (issue 67).
 - *What option (b) loses:* no bounce or complaint reports and no
   "unconfirmed after 12 hours" report. A bounce arrives as mail in the sending
-  mailbox, the bot ignores it, and nobody is alerted: a person must read that
+  mailbox, the agent ignores it, and nobody is alerted: a person must read that
   mailbox. If the connection drops after a mail was handed over and before
-  the server answered, the bot cannot tell whether it was delivered; it
+  the server answered, the agent cannot tell whether it was delivered; it
   reports that to the operator and does not send again. Tell the user both.
 - *Code default:* option (a). Without the key no mail is sent, and each send
   is reported as a shortfall. With option (b) the host does not start until
@@ -524,16 +524,16 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 
 **7. Knowledge-base repo: which git host, and who can push**
 - *Plain words:* the team's record lives in its own private repository (a folder
-  with full history, kept at a hosting service). The bot reads and writes it. It
+  with full history, kept at a hosting service). The ProgramOS agent reads and writes it. It
   also holds every inbound mail and the audit log, so whoever can read it can
-  read all the team's mail to the bot.
+  read all the team's mail to the agent.
 - *Options:* github.com (including the Illinois Shared GitHub Service), or an institution's own git host. Any git
   host works for reading and writing; the push webhook and the `inbound/` worker
   are written for GitHub's API.
 - *Code default:* the placeholder origin `example-org/program-repo`. Any other
   origin is refused until the pattern is set.
 - *First pilot:* a private repo; readers are the pilot team and the operator;
-  push rights for the admin, the bot's machine (a deploy key for that one repo)
+  push rights for the admin, the agent's machine (a deploy key for that one repo)
   and the intake service (a token for that one repo).
 - *Settings:* `PROGRAM_REPO`, `PROGRAM_ORIGIN_URL`, `PROGRAM_ORIGIN_PATTERN`,
   `PROGRAM_READ_MIRROR`, `PROGRAM_HOST_REPO` (process); `GITHUB_PUSH_WEBHOOK_SECRET` (.env or process).
@@ -543,8 +543,8 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Detail:* part 11; First start, step 5; `docs/illinois/github-enterprise.md`;
   `docs/data-handling.md`, "Who can read the audit log and the raw mail".
 
-**8. Hosting: where the bot runs**
-- *Plain words:* the bot is a program that must stay running on a computer that
+**8. Hosting: where the ProgramOS agent runs**
+- *Plain words:* the agent is a program that must stay running on a computer that
   can start containers (small sealed workspaces, one per message).
 - *Options:* (a) a laptop, for "Try it" only; (b) one virtual machine with the
   systemd recipe in `docs/deployment.md`, the one supported recipe; (c) the pm2
@@ -566,7 +566,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   `docs/illinois/hosting.md` (open questions).
 
 **9. Identity: names and domains**
-- *Plain words:* what the bot is called, which mail domain is "yours", and which
+- *Plain words:* what the ProgramOS agent is called, which mail domain is "yours", and which
   people count as the admin.
 - *Required:* `ASSISTANT_NAME` and `SEND_FROM_EMAIL` (marked REQUIRED in the
   settings example). With a real program
@@ -579,21 +579,21 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   do not guess them.
 - *Settings:* all (.env). The placeholders that are still text in code and
   prompts are in part 7.
-- *Accounts and secrets:* every account and key the bot uses belongs to a role
+- *Accounts and secrets:* every account and key the agent uses belongs to a role
   held through a unit or service account, not to one person's own login. ASK who
   holds each, and fill in the table in `docs/service-ownership.md` with the person.
   A model subscription on one person's own account is the weakest item there.
 - *Detail:* part 7; First start, step 7; `docs/service-ownership.md`.
 
-**10. Allowlists: who may write to the bot**
-- *Plain words:* an allowlist is the list of people the bot will answer. Anyone
+**10. Allowlists: who may write to the ProgramOS agent**
+- *Plain words:* an allowlist is the list of people the agent will answer. Anyone
   else gets no answer.
 - *The three lists:*
   - the email allowlist, a table in the program repo
     (`program/EMAIL_ALLOWLIST.md`): address, role, access tier (may this person's
     updates be recorded as fact, or only as a request), and approver;
   - the Telegram handle list, a section of the same file;
-  - the chat sender allowlist, a file on the bot's machine
+  - the chat sender allowlist, a file on the agent's machine
     (`~/.config/nanoclaw/sender-allowlist.json`). **If this file is missing or
     invalid, nobody is allowed on chat.**
 - *Code default:* the template's placeholder rows. Email caps: 30 messages a day
@@ -605,7 +605,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 
 **11. Approvers and routed approvals**
 - *Plain words:* when someone asks for something that another person must
-  approve, the bot records the request and sends it to that approver.
+  approve, the ProgramOS agent records the request and sends it to that approver.
 - *Options:* who the admin is, and who approves for each sender (one column in
   the allowlist).
 - *First pilot:* one admin; one approver per sender. Test one exchange.
@@ -613,7 +613,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Detail:* policy question 2; `SPEC.md` section 4.
 
 **12. Reminders and scheduled outreach**
-- *Plain words:* the bot can send mail on a schedule, such as a weekly list of
+- *Plain words:* the ProgramOS agent can send mail on a schedule, such as a weekly list of
   open action items to their owners.
 - *Options:* none; or jobs you list in a reminder registry.
 - *Code default:* no outreach mail is sent until one approved task id is set.
@@ -638,16 +638,16 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   they are kept.
 - *What the code does:* message text reaches the model provider, the mail
   provider, the intake service, Telegram if used, and the git host. On the
-  bot's own machine, logs and working files are cleared after 3 to 7 days, and
+  agent's own machine, logs and working files are cleared after 3 to 7 days, and
   everything else (the full text of every message and reply, files sent on
   Telegram, old conversation copies) is kept forever unless you set a number
   of days for it.
 - *Options:* eight settings, one per kind of stored data, each a whole number
-  of days. `0` or absent means keep forever. Above `0`, the bot deletes what is
+  of days. `0` or absent means keep forever. Above `0`, the agent deletes what is
   older, once a day. It never deletes something it still has to act on: a
   message it has not answered, an approval still open, a task still scheduled.
   The shortest period is one day; a negative number, a fraction or a word
-  stops the bot at startup with a message naming the setting.
+  stops the agent at startup with a message naming the setting.
 - *What no setting does:* nothing deletes from the program repo or the audit
   log. Mail copies, attachments' text and the log stay until a person removes
   them by hand, and a removed file is still in the repo's history. Mail from a
@@ -663,7 +663,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   people who approve data use, and write each answer in `setup-decisions.md`.
 - *Not tested:* the prune has run only against data made by the tests, never
   on a deployment with real data. Deleting old messages and old conversation
-  copies shortens what the bot can recall; deleting old Telegram files means
+  copies shortens what the agent can recall; deleting old Telegram files means
   it can no longer open them. Closed approvals keep an empty record, so an old
   request is never mailed to an approver twice.
 - *Settings:* `RETENTION_MESSAGES_DAYS`, `RETENTION_ROUTED_APPROVALS_DAYS`,
@@ -682,7 +682,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Detail:* policy question 5; `docs/data-handling.md`.
 
 **16. Vocabulary and the facts that must not be wrong**
-- *Plain words:* the examples in the bot's instructions come from an academic
+- *Plain words:* the examples in the ProgramOS agent's instructions come from an academic
   program. For another kind of project the words, and the list of facts the
   reply sensor checks, need adapting.
 - *First pilot:* adapt the wording; keep the sensor off unless the ground-truth
@@ -740,10 +740,10 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   `docs/data-handling.md`, "The container's network".
 
 **18. Secrets on the host: the `.env` file, the state-signing key, a token in the repo address**
-- *Plain words:* the bot's passwords and keys (its "secrets") sit in files on the
+- *Plain words:* the ProgramOS agent's passwords and keys (its "secrets") sit in files on the
   machine it runs on. Three small choices decide who else on that machine could
-  read or misuse them. None of them changes what the bot does for the team.
-- *(a) The `.env` file.* It holds every secret. Only the account the bot runs as
+  read or misuse them. None of them changes what the agent does for the team.
+- *(a) The `.env` file.* It holds every secret. Only the account the agent runs as
   should be able to read it. **You do this, not the person:** run `chmod 600 .env`
   at the moment you create the file, and again after any tool rewrites it. The
   setup steps that write `.env` create it that way and keep an existing file's
@@ -751,16 +751,16 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   fix it, when anyone else can read the file.
   - *Options:* warn only, or refuse to start (`REQUIRE_PRIVATE_ENV_FILE=true`;
     `1` and `on` mean the same, `false`, `0`, `off` or nothing mean warn only).
-    Any other word stops the bot at start with a message that names the
+    Any other word stops the agent at start with a message that names the
     setting, so a typing mistake is not read as "off".
-  - *Code default:* warn only, so an upgrade never stops a bot that was running.
+  - *Code default:* warn only, so an upgrade never stops an agent that was running.
   - *First pilot:* set `REQUIRE_PRIVATE_ENV_FILE=true` on a new machine. On a
-    machine that already runs the bot, fix the file's mode first, then set it.
+    machine that already runs the agent, fix the file's mode first, then set it.
 - *(b) The state-signing key.* While a reply is being delivered the host saves
   its progress and signs it, so a changed copy is refused.
   - *Options:* a key of its own (`DELIVERY_STATE_SIGNING_KEY`, a long random
     value: `openssl rand -hex 32`), or nothing. With nothing set and none of
-    the three secrets below in `.env` (a bot that only has web chat, for
+    the three secrets below in `.env` (an agent that only has web chat, for
     example), the host makes a key by itself at the first start and keeps it in
     `~/.config/nanoclaw/delivery-state.key`, a file only the host's user can
     read and no container can see. Saved progress is signed in every case. Tell
@@ -784,7 +784,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
     service definition that sets `PROGRAM_ORIGIN_URL`. Make that file readable
     by its owner only (`chmod 600` on the systemd `override.conf`;
     `docs/deployment.md`, step 6). The host keeps its own repository folder
-    private to the bot's account (mode 0700).
+    private to the agent's account (mode 0700).
   - *After an upgrade:* an older version wrote the token into
     `<PROGRAM_HOST_REPO>/.git/config`, readable by every account on the machine.
     The first start after the upgrade rewrites that file without the token,
@@ -810,7 +810,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   anyone can type any name there, the way anyone can write a false return address
   on an envelope. Mail servers can check whether a message really came from the
   domain it names (the checks are called SPF, DKIM and DMARC) and note the result
-  in the message. The bot can read that note, from servers you name, and record
+  in the message. The ProgramOS agent can read that note, from servers you name, and record
   for each message whether the sender was confirmed. It can also refuse mail that
   was not confirmed.
 - *Options:* (a) `flag`: record the result in the audit log and change nothing
@@ -832,7 +832,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   and read the `[EMAIL AUTH]` lines in the audit log for real mail from each
   listed person. Before that, take one real message the worker filed (the
   `.eml` file) and run `npx tsx inbound/scripts/check-message.ts` on it with the
-  platform's name: it prints what the bot read and what `enforce` would do with
+  platform's name: it prints what the agent read and what `enforce` would do with
   that message, and changes nothing. When the lines say `authenticated`, ASK the
   admin whether to change to `enforce`. Recommend it: a forged approval or status update is the most
   damaging thing a stranger could send. Do not set `enforce` before those lines
@@ -841,7 +841,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 - *Naming the servers:* two places must agree. In the intake worker
   (`inbound/wrangler.toml`): `PLATFORM_AUTHSERV_ID` (the name the mail platform
   writes; Cloudflare documents `mx.cloudflare.net`), and, only when a mailbox
-  elsewhere forwards to the bot's address, `FORWARDER_AUTHSERV_IDS` and
+  elsewhere forwards to the agent's address, `FORWARDER_AUTHSERV_IDS` and
   `FORWARDER_DOMAINS`. On the host: `EMAIL_AUTH_TRUSTED_AUTHSERV_IDS`, the same
   names, and always the platform's name among them (a list with only the
   forwarder's name makes every message read as not confirmed). Read the names
@@ -871,34 +871,34 @@ does nothing for them. `docs/setup-reference.md` has the full table.
 
 Use these, or your own words of the same length, the first time each term comes up.
 
-- **Allowlist:** the list of people the bot will answer. A message from anyone
+- **Allowlist:** the list of people the ProgramOS agent will answer. A message from anyone
   else is not answered and never reaches the AI service.
-- **Delivery gate:** a check on the bot's machine that every reply and every
+- **Delivery gate:** a check on the agent's machine that every reply and every
   outgoing mail must pass before it is sent. A reply that fails is not sent, and
   the operator is told.
-- **Audit log:** a dated file in the knowledge-base repo where the bot's machine
+- **Audit log:** a dated file in the knowledge-base repo where the agent's machine
   writes each accepted message and each reply, so a person can review later what
   was asked and what was answered.
 - **Knowledge-base repo (program repo):** a private, versioned folder at a git
   host that holds the team's record: decisions, action items, open questions,
   the allowlist, the mail copies and the audit log. Every change is kept in its history.
-- **Routed approval:** a request that needs another person's yes. The bot
+- **Routed approval:** a request that needs another person's yes. The agent
   records it and sends it to the approver named for that sender; it does not
   decide.
-- **Container:** a sealed workspace that the bot's machine starts for one
+- **Container:** a sealed workspace that the agent's machine starts for one
   message and then removes. The AI agent works inside it and sees only the
   folders it was given.
 - **Webhook:** a message one service sends to another over the internet when
   something happens, such as "a new mail arrived" or "this mail bounced".
-- **Credential proxy:** a small relay on the bot's machine that adds the secret
+- **Credential proxy:** a small relay on the agent's machine that adds the secret
   key to each request to the AI service, so the key is never inside the container.
-- **Model provider:** the company or cloud service that runs the AI model the bot
+- **Model provider:** the company or cloud service that runs the AI model the agent
   sends text to.
 - **API key (or token):** a long secret string that proves to a service that a
   request comes from your account. Treat it like a password.
 - **DNS record:** an entry at the place that manages a domain name, which says
   where mail or web traffic for that name should go.
-- **Operator (admin):** the one person who looks after the bot, receives its
+- **Operator (admin):** the one person who looks after the agent, receives its
   alerts, and is the only one who may change roles and access.
 
 ## 7. Placeholders to replace
@@ -907,21 +907,21 @@ Search for each placeholder (include tests; exclude `node_modules`):
 
 | Placeholder | Meaning | Where it lives |
 |---|---|---|
-| `Coordinator` (also `Co-ordinator`, `co[\s-]?ordinator` in patterns) | The bot's name | `ASSISTANT_NAME` in `.env`, prompts in `groups/`, several `src/` files and patterns that recognise the name |
+| `Coordinator` (also `Co-ordinator`, `co[\s-]?ordinator` in patterns) | The ProgramOS agent's name | `ASSISTANT_NAME` in `.env`, prompts in `groups/`, several `src/` files and patterns that recognise the name |
 | `Program`, `program-email`, `program-telegram`, `web-chat-program`, `tg-program` | The program or project name and its channel group names | `groups/` folder names, `seed-db.cjs`, `src/index.ts`, `src/task-scheduler.ts` and others |
 | `program-repo`, `/workspace/extra/program-repo` | The knowledge-base repo and its mount point in the container | `PROGRAM_REPO` (process environment), `src/program-repo.ts`, prompts, container skills |
 | `example-org/program-repo` | The git origin the host accepts for the program repo. A different origin is refused and the read mirror is not created. | `isExpectedOrigin` in `src/program-origin.ts`; set `PROGRAM_ORIGIN_PATTERN` and `PROGRAM_ORIGIN_URL` (process environment). Any git host works, including a GitHub Enterprise host; `config/instance.env.example` has example patterns |
 | `example.edu` | The institution mail domain. It is used in logic: the "access closed" courtesy reply (`src/channels/webhook.ts`) and approver addresses in `src/routed-approvals.ts` | Setting: `INSTITUTION_DOMAIN` in `.env`. **Required for a real program repo:** the host refuses to start when it is missing, `example.edu` or a subdomain of `example.edu` (`src/identity-settings-check.ts`). The operator's address, the shared mailbox in `src/trusted-body-mailboxes.ts`, prompts and tests still hold `example.edu` as text |
-| `example.org` | The bot's own mail domain: the default bot address, the Message-ID domain, and the bot's git author `program-bot@example.org` | Setting: `BOT_MAIL_DOMAIN` in `.env`. Prompts in `groups/` and skills in `container/skills/` name the git author as text; change them to match. The site address `program-repo.example.org` in `src/behaviour-sensor.ts` is not covered by the setting |
+| `example.org` | The agent's own mail domain: the default agent address, the Message-ID domain, and the agent's git author `program-bot@example.org` | Setting: `BOT_MAIL_DOMAIN` in `.env`. Prompts in `groups/` and skills in `container/skills/` name the git author as text; change them to match. The site address `program-repo.example.org` in `src/behaviour-sensor.ts` is not covered by the setting |
 | `email-inbox@example.org` | The git author of the inbound mail intake service (see "Inbound mail") | Setting: `INTAKE_GIT_AUTHOR_EMAIL` in `.env` |
 | `Avery Morgan`, `avery@example.edu`, `tg-avery@program` | The operator (admin). Outreach, routed approvals and admin checks name this person | `src/config.ts`, `src/outreach-recipient-roster.ts`, `src/routed-approvals.ts`, `src/channels/webhook.ts`, prompts |
 | `ADMIN_AUTHOR_EMAILS` (`avery@example.edu`, `avery.personal@gmail.com`, a `users.noreply.github.com` address) | The git author identities allowed to change protected governance files | Setting: `ADMIN_AUTHOR_EMAILS` in `.env`, separated by commas. **Required for a real program repo.** Use the admin's real commit identities. The setting replaces the placeholder list. With a real program repo the host refuses to start when the setting is missing or names a placeholder address (`src/identity-settings-check.ts`); the placeholders count as admin only with the placeholder repo |
 | `/^greta\b/i` | A one-person exception in the outreach roster (a departed owner whose section is skipped) | `src/outreach-recipient-roster.ts`, near `unmatchedOwners`. Remove it or replace it with your own case. |
 | Other synthetic people (in `OWNER_ALIASES` in `src/outreach-recipient-roster.ts`) | A short-name table for the team | Replace with the user's team or empty it |
-| `PeerAgent`, `averybot@gmail.com` | A second automated agent that also mails the bot | `src/config.ts` (`AGENT_INBOX_ADDRESSES`); empty the list if the user has none |
+| `PeerAgent`, `averybot@gmail.com` | A second automated agent that sends mail to the ProgramOS agent | `src/config.ts` (`AGENT_INBOX_ADDRESSES`); empty the list if the user has none |
 | `CRS`, `ELC`, `LAB` plus three digits | Course-code prefixes | See part 8 |
 
-Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `PROGRAM_HOST_REPO`, `PROGRAM_ORIGIN_URL`, `PROGRAM_ORIGIN_PATTERN`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. The supported way to run the bot is the systemd recipe in `docs/deployment.md`; `start.sh` and `ecosystem.config.cjs` are pm2 examples from the reference deployment.
+Settings that already exist are in `config/instance.env.example`. **Read its header first.** Some keys are read from the `.env` file; others are read only from the process environment, and a line in `.env` does nothing for them (this includes `PROGRAM_REPO`, `PROGRAM_HOST_REPO`, `PROGRAM_ORIGIN_URL`, `PROGRAM_ORIGIN_PATTERN`, `WEBHOOK_HOST` and `BEHAVIOUR_SENSOR_DISABLED`). The parser does not strip inline comments. The supported way to run the agent is the systemd recipe in `docs/deployment.md`; `start.sh` and `ecosystem.config.cjs` are pm2 examples from the reference deployment.
 
 ## 8. Academic examples
 
@@ -1012,7 +1012,7 @@ and say so.
     logged and dropped.
   - Alert mail waits in its own queue (about 30 seconds between mails), and at most
     a few can wait at once; more are refused and logged.
-  - The operator's reply to an alert mail goes to the bot's address and is handled
+  - The operator's reply to an alert mail goes to the ProgramOS agent's address and is handled
     as ordinary mail from the operator.
   - Weekly outreach summaries (`OUTREACH_SUMMARY_JID`) do not follow this setting.
   The Teams route (`docs/teams-alerts.md`) is **not verified against a live Teams
@@ -1026,7 +1026,7 @@ and say so.
   - Delivered means the workflow accepted the request (HTTP 2xx), not that the card
     appeared. A long alert is cut with a marker; one request per alert, 10-second
     timeout, no retry inside the route.
-  The bot logs an error at startup for each setting an enabled route lacks. Send a
+  The agent logs an error at startup for each setting an enabled route lacks. Send a
   test alert on each enabled route before go-live ("First start", step 8).
 - **Model endpoint with a path prefix.** The credential proxy
   (`src/credential-proxy.ts`) joins a path in `ANTHROPIC_BASE_URL` to the request
@@ -1097,7 +1097,7 @@ and say so.
 
 ## 11. The program repo
 
-The bot needs a separate git repo for the team's knowledge base. Start from
+The ProgramOS agent needs a separate git repo for the team's knowledge base. Start from
 `templates/program-repo/`: it has the file names and table formats this code reads.
 ASK where the repo will be hosted
 and who can push.
@@ -1202,7 +1202,7 @@ Do these once, in this order, before the first test message:
    and `CHECKOUT_OWNER_HOME` say otherwise (`src/checkout-fs.ts`,
    `src/program-repo.ts`), so a root-owned clone fails. Use a deploy key or token
    limited to the program repo, held by that host user. Then run
-   `npx tsx scripts/check-host-git-trust.ts --network` as that user with the bot's
+   `npx tsx scripts/check-host-git-trust.ts --network` as that user with the ProgramOS agent's
    environment: every line must say PASS or NOTE. It checks that this host's git
    runs nothing a repository names while serving it, that the host repo is outside
    the checkout, that the origin comes from host settings, and that the credential
@@ -1216,7 +1216,7 @@ Do these once, in this order, before the first test message:
    origin of the checkout or the read mirror is not `example-org/program-repo`.
    The error names each setting to fix.
 8. Test the operator alert routes. This sends real messages, so do it only when the
-   user says so. Start the bot once with `ADMIN_ALERT_TEST=1` in the process
+   user says so. Start the agent once with `ADMIN_ALERT_TEST=1` in the process
    environment (for example `ADMIN_ALERT_TEST=1 npm start`). It sends one test alert on
    each route enabled by `ADMIN_ALERT_ROUTE` and logs `Admin alert test delivered` or
    `Admin alert test NOT delivered` for each. Check that the user received each one,

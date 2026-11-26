@@ -70,7 +70,7 @@ The URL is never written to a log line, an error or the audit log. The response 
    read -rs TEAMS_URL && curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' --data '{"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,"content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.2","body":[{"type":"TextBlock","text":"ProgramOS test alert","wrap":true}]}}]}' "$TEAMS_URL"
    ```
 
-   Expect `202` (or another 2xx) and a card in the channel. Then start the bot once with `ADMIN_ALERT_TEST=1` (`AGENTS.md`, "First start"): the log says `Admin alert test delivered` with `route: "teams"`, and the card arrives.
+   Expect `202` (or another 2xx) and a card in the channel. Then start the ProgramOS agent once with `ADMIN_ALERT_TEST=1` (`AGENTS.md`, "First start"): the log says `Admin alert test delivered` with `route: "teams"`, and the card arrives.
 
 ## If your workflow expects a different body
 
@@ -87,6 +87,6 @@ Anyone holding the URL can post to the channel. If it leaks, or its owner leaves
 
 ## Not covered
 
-- Staff asking the bot questions in Teams. That would be a new channel with its own sender identity checks; [`design/microsoft-path.md`](./design/microsoft-path.md), section 4, explains why it is not built.
+- Staff asking the ProgramOS agent questions in Teams. That would be a new channel with its own sender identity checks; [`design/microsoft-path.md`](./design/microsoft-path.md), section 4, explains why it is not built.
 - Trigger options that need a token ("any user in my tenant", "specific users"). Not supported.
 - Government clouds: Microsoft says Flow bot is not supported in GCC, GCC High or DoD tenants ([Teams connector reference](https://learn.microsoft.com/en-us/connectors/teams/)).

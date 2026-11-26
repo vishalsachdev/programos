@@ -14,8 +14,8 @@ This page is for a team at the University of Illinois that runs ProgramOS. It ad
 | 4 | Has the outbound mail provider gone through vendor review? | Not verified | Same |
 | 5 | Has the inbound mail intake service, and the provider it runs at, gone through vendor review? If campus mail is used instead, what does that path store? | Not verified | Same, and the campus mail administrators |
 | 6 | Has Telegram gone through vendor review for operator alerts that carry addresses and subject lines? | Not verified | Same |
-| 7 | Has the git host of the knowledge-base repo gone through vendor review for that class of data? Is the repo in an organization the university controls? | Not verified | Same |
-| 8 | Is the machine that runs the ProgramOS agent an approved place for that class of data? | Not verified | Same, and the unit's IT staff |
+| 7 | Has the git host of the knowledge-base repo gone through vendor review for that class of data? May the unit store its mail and audit log in its private [Shared GitHub Service repository](./github-enterprise.md) on github.com? | Not verified | Same |
+| 8 | Is the machine that runs the agent an approved place for that class of data? | Not verified | Same, and the unit's IT staff |
 | 9 | Who signs off: which role approves this use of data for the unit, and does the sign-off name the vendors and the data class? | Not verified | The unit head, who can say which university office must also sign |
 | 10 | Which records-retention schedule applies to the audit log and the mail copies, and who performs a removal from git history when one is required? | Not verified | The university's records office |
 | 11 | What must senders be told before they write to the agent? | Not verified | The privacy office |

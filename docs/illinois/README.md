@@ -14,7 +14,7 @@ For a unit at the University of Illinois that sets up ProgramOS. It uses the sam
 | 4 | [`hosting.md`](./hosting.md): getting a virtual machine in the university's Azure | Choice 8 |
 | 5 | [`data-handling.md`](./data-handling.md): the data questions for the privacy, security and records offices | Choice 14; policy questions 1, 4 and 5 |
 | 6 | [`service-ownership.md`](./service-ownership.md): unit accounts, secrets and handover | Choice 9, "Accounts and secrets" |
-| 7 | [`github-enterprise.md`](./github-enterprise.md): the knowledge-base repo on the university's GitHub Enterprise host | Choice 7 |
+| 7 | [`github-enterprise.md`](./github-enterprise.md): the knowledge-base repo on github.com in the unit's Shared GitHub Service organisation | Choice 7 |
 | 8 | [`teams-alerts.md`](./teams-alerts.md): whether the university's tenant allows a Workflows webhook for operator alerts (route not verified against a live tenant) | Choice 4 |
 | 9 | [`microsoft-path.md`](./microsoft-path.md): the open questions for a Microsoft-first setup (Foundry, Graph mail, Teams) | A later step, after a pilot |
 

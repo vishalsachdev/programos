@@ -31,7 +31,7 @@ Two parts of this flow have **never run against live services**: the intake work
 | A unit mailbox with an `@illinois.edu` address, not one person's own mailbox | The unit's IT staff and the campus mail service | See step 1 |
 | A domain or subdomain the unit controls, used only for the ProgramOS agent's mail | The unit (or its IT staff) | For example `bot.example.org`. Cloudflare Email Routing takes over its MX records (`inbound/README.md`, step 1) |
 | A Cloudflare account, held by a unit account | The unit | [`../service-ownership.md`](../service-ownership.md) |
-| The knowledge-base repo, and a token for it limited to that repo | The unit | `AGENTS.md`, choice 7; [`github-enterprise.md`](./github-enterprise.md) |
+| A private knowledge-base repo in the unit's github.com organisation, and a token for it limited to that repo | The unit | `AGENTS.md`, choice 7; [`github-enterprise.md`](./github-enterprise.md) |
 | A running host with a public HTTPS name | The unit | [`../deployment.md`](../deployment.md), [`hosting.md`](./hosting.md) |
 | An outbound mail account for the agent's domain (the default provider) | The unit | `AGENTS.md`, choice 6, option (a) |
 | Written answers on data handling | The offices in [`data-handling.md`](./data-handling.md) | Before any colleague writes to the agent |

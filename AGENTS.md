@@ -270,7 +270,7 @@ the person. The pilot is not done until every line is ticked or has a written re
     institution's own mail system, you must write the intake service
     (`docs/setup-reference.md`, "Inbound mail");
   - the knowledge-base repo on the institution's git host if it has one, such as
-    a GitHub Enterprise host (choice 7). If that host gives the agent an HTTPS
+    a university-managed organisation on github.com (choice 7). If that host gives the agent an HTTPS
     token and not an SSH key, and other people have accounts on the agent's
     machine, read choice 18 with the person who runs the machine;
   - a written sign-off on data handling from the offices that approve it. Take
@@ -527,7 +527,7 @@ does nothing for them. `docs/setup-reference.md` has the full table.
   with full history, kept at a hosting service). The ProgramOS agent reads and writes it. It
   also holds every inbound mail and the audit log, so whoever can read it can
   read all the team's mail to the agent.
-- *Options:* github.com, or a GitHub Enterprise host at your institution. Any git
+- *Options:* github.com (including the Illinois Shared GitHub Service), or an institution's own git host. Any git
   host works for reading and writing; the push webhook and the `inbound/` worker
   are written for GitHub's API.
 - *Code default:* the placeholder origin `example-org/program-repo`. Any other

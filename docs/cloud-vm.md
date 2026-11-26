@@ -8,10 +8,12 @@ This page says what kind of cloud machine the host needs and what to ask for, wi
 
 The host starts a new Docker container for each message (`src/container-runner.ts`) and keeps a git checkout on its own disk ([`deployment.md`](./deployment.md), "What the host must be able to do"). So it needs a machine where it controls a Docker daemon. A service that runs your app inside a container it manages, without letting the app start containers of its own, does not work.
 
-On Azure that rules out the two app-hosting services:
+This rules out the following Azure services for the current Docker runner:
 
 - **Azure Container Apps.** Microsoft's page [Containers in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/containers), "Limitations": "Azure Container Apps doesn't allow privileged containers mode with host-level access."
 - **Azure App Service.** No Microsoft page read for this one says whether an app can reach a Docker daemon and start containers; none documents a way to do it. Treat it as unsuitable unless Microsoft documents one. The [App Service on Linux FAQ](https://learn.microsoft.com/en-us/troubleshoot/azure/app-service/faqs-app-service-linux-new) also says, of exposing more than one port from a custom container: "This isn't supported."
+
+A host that starts one [Azure Container Apps Job](https://learn.microsoft.com/en-us/azure/container-apps/jobs) per message would need a different runner. That option has neither been built nor tested here.
 
 The same reasoning applies at other cloud providers: choose their plain virtual machine product.
 
